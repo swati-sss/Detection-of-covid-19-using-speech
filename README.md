@@ -3,7 +3,7 @@
 ## Overview
 This project leverages deep learning techniques to classify COVID-19 positive and negative cases based on spectrogram images of voice samples. I utilized the convolutional neural Network and ResNet architecture, a well-known convolutional neural network (CNN), to perform this binary classification task. By fine-tuning a pre-trained model on our dataset, this project aims at providing an accurate and automated tool for COVID-19 diagnosis.
 
-![Image of the project ](https://github.com/swati-sss/Detection-of-Covid-19-using-Speech-Analysis/blob/main/Screenshot%202023-09-19%20at%2012.26.53%20AM.png?raw=true)
+![Image of the project ]([https://github.com/swati-sss/Detection-of-Covid-19-using-Speech-Analysis/blob/main/Screenshot%202023-09-19%20at%2012.26.53%20AM.png?raw=true](https://github.com/swati-sss/Detection-of-covid-19-using-speech/blob/main/covid-19%20project%20image.png?raw=true))
 
 ## Dataset
 The dataset was downloaded from the "IISC Coswara Database" https://github.com/iiscleap/Coswara-Data. The Dataset consists of 9 type of voice samples of people who tested covid-positive and who tested covid negative. The voice samples consist sounds of "shallow breathing", "deep breathing", "light cough", "Heavy cough", "counting 1 to 10 fast", "counting 1 to 10 slow", "pronounciation of a", "pronounciation of o" and "pronounciation of e". This data is processed to generate MEL spectrograms of each voice sample and categorised as "positive" for COVID-19 positive cases and "negative" for COVID-19 negative cases. These images were obtained from voice samples, making it a non-invasive and accessible method for screening potential cases.
