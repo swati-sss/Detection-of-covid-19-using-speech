@@ -1,1 +1,603 @@
+import UIKit
+@_implementationOnly import LivingDesign
+@_implementationOnly import Bogle
 
+final class ReviewSectionBottomSheet: LDRootViewController {
+    weak var bottomSheetableActionDelegate: LDBottomSheetableActionDelegate?
+    
+    struct Model {
+        let title = "Review section"
+        let missingItems: [Item]
+        let misplacedItems: [Item]
+        let unknownItems: [Item]
+        let correctItems: [Item]
+        let tryAgainText = "Try again"
+        let doneButtonText = "Done"
+        
+        var missingCount: Int { missingItems.count }
+        var misplacedCount: Int { misplacedItems.count }
+        var unknownCount: Int { unknownItems.count }
+        var correctCount: Int { correctItems.count }
+        
+        init(missingItems: [Item] = [], misplacedItems: [Item] = [], unknownItems: [Item] = [], correctItems: [Item] = []) {
+            self.missingItems = missingItems
+            self.misplacedItems = misplacedItems
+            self.unknownItems = unknownItems
+            self.correctItems = correctItems
+        }
+    }
+    
+    var model: Model {
+        didSet {
+            applyModel()
+        }
+    }
+    
+    // UI Elements
+    private let scrollView = UIScrollView()
+    private let contentView = UIView()
+    private let expandButton = UIButton()
+    private let collapseButton = UIButton()
+    private let titleLabel = LDLabel(style: .headingMedium)
+    private let statsContainer = UIView()
+    private let statsLabel = UILabel()
+    
+    // Expanded state elements
+    private let filterByLabel = LDLabel(style: .bodyMedium)
+    private let filterContainer = UIStackView()
+    
+    // Checkboxes and item containers
+    private let missingCheckbox = UIButton()
+    private let missingLabel = UILabel()
+    private let missingItemsContainer = UIStackView()
+    
+    private let misplacedCheckbox = UIButton()
+    private let misplacedLabel = UILabel()
+    private let misplacedItemsContainer = UIStackView()
+    
+    private let unknownCheckbox = UIButton()
+    private let unknownLabel = UILabel()
+    private let unknownItemsContainer = UIStackView()
+    
+    private let correctCheckbox = UIButton()
+    private let correctLabel = UILabel()
+    private let correctItemsContainer = UIStackView()
+    
+    private let divider = LDDivider(style: .horizontal)
+    private let buttonStackView = UIStackView()
+    private let tryAgainButton = UIButton()
+    private let doneButton = LDButton(variant: .primary, size: .large)
+    
+    // State
+    private var isExpanded = false
+    private var checkedCategories = Set<String>()
+    
+    // Callbacks
+    private let onTryAgain: () -> Void
+    private let onDone: () -> Void
+    
+    init(model: Model, onTryAgain: @escaping () -> Void, onDone: @escaping () -> Void) {
+        self.model = model
+        self.onTryAgain = onTryAgain
+        self.onDone = onDone
+        super.init(nibName: nil, bundle: nil)
+        applyModel()
+    }
+    
+    override func constructView() {
+        super.constructView()
+        
+        scrollView.showsVerticalScrollIndicator = true
+        scrollView.alwaysBounceVertical = false
+        
+        expandButton.addTarget(self, action: #selector(handleExpandTapped), for: .primaryActionTriggered)
+        collapseButton.addTarget(self, action: #selector(handleCollapseTapped), for: .primaryActionTriggered)
+        tryAgainButton.addTarget(self, action: #selector(handleTryAgainTapped), for: .primaryActionTriggered)
+        doneButton.addTarget(self, action: #selector(handleDoneTapped), for: .primaryActionTriggered)
+        
+        // Setup checkboxes
+        missingCheckbox.addTarget(self, action: #selector(missingCheckboxTapped), for: .primaryActionTriggered)
+        misplacedCheckbox.addTarget(self, action: #selector(misplacedCheckboxTapped), for: .primaryActionTriggered)
+        unknownCheckbox.addTarget(self, action: #selector(unknownCheckboxTapped), for: .primaryActionTriggered)
+        correctCheckbox.addTarget(self, action: #selector(correctCheckboxTapped), for: .primaryActionTriggered)
+        
+        // Configure button stack view
+        buttonStackView.axis = .horizontal
+        buttonStackView.spacing = LDSpacing.space16
+        buttonStackView.distribution = .fill
+        buttonStackView.alignment = .fill
+        
+        // Configure filter container
+        filterContainer.axis = .vertical
+        filterContainer.spacing = LDSpacing.space16
+        filterContainer.alignment = .fill
+        
+        // Configure item containers
+        missingItemsContainer.axis = .vertical
+        missingItemsContainer.spacing = LDSpacing.space8
+        missingItemsContainer.isHidden = true
+        
+        misplacedItemsContainer.axis = .vertical
+        misplacedItemsContainer.spacing = LDSpacing.space8
+        misplacedItemsContainer.isHidden = true
+        
+        unknownItemsContainer.axis = .vertical
+        unknownItemsContainer.spacing = LDSpacing.space8
+        unknownItemsContainer.isHidden = true
+        
+        correctItemsContainer.axis = .vertical
+        correctItemsContainer.spacing = LDSpacing.space8
+        correctItemsContainer.isHidden = true
+        
+        // Initially hide expanded content
+        filterByLabel.isHidden = true
+        filterContainer.isHidden = true
+    }
+    
+    override func constructSubviewHierarchy() {
+        super.constructSubviewHierarchy()
+        
+        view.addAutoLayoutSubview(scrollView)
+        scrollView.addAutoLayoutSubview(contentView)
+        
+        contentView.addAutoLayoutSubview(expandButton)
+        contentView.addAutoLayoutSubview(collapseButton)
+        contentView.addAutoLayoutSubview(titleLabel)
+        contentView.addAutoLayoutSubview(statsContainer)
+        statsContainer.addAutoLayoutSubview(statsLabel)
+        
+        // Filter section
+        contentView.addAutoLayoutSubview(filterByLabel)
+        contentView.addAutoLayoutSubview(filterContainer)
+        
+        // Add filter rows
+        let missingRow = createFilterRow(checkbox: missingCheckbox, label: missingLabel, itemsContainer: missingItemsContainer)
+        let misplacedRow = createFilterRow(checkbox: misplacedCheckbox, label: misplacedLabel, itemsContainer: misplacedItemsContainer)
+        let unknownRow = createFilterRow(checkbox: unknownCheckbox, label: unknownLabel, itemsContainer: unknownItemsContainer)
+        let correctRow = createFilterRow(checkbox: correctCheckbox, label: correctLabel, itemsContainer: correctItemsContainer)
+        
+        filterContainer.addArrangedSubview(missingRow)
+        filterContainer.addArrangedSubview(misplacedRow)
+        filterContainer.addArrangedSubview(unknownRow)
+        filterContainer.addArrangedSubview(correctRow)
+        
+        contentView.addAutoLayoutSubview(divider)
+        contentView.addAutoLayoutSubview(buttonStackView)
+        buttonStackView.addArrangedSubview(tryAgainButton)
+        buttonStackView.addArrangedSubview(doneButton)
+    }
+    
+    override func constructSubviewLayoutConstraints() {
+        super.constructSubviewLayoutConstraints()
+        
+        NSLayoutConstraint.activate([
+            // ScrollView
+            scrollView.topAnchor.constraint(equalTo: view.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            
+            // Content view
+            contentView.topAnchor.constraint(equalTo: scrollView.topAnchor),
+            contentView.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
+            contentView.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
+            contentView.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
+            contentView.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+            
+            // Expand/Collapse buttons
+            expandButton.topAnchor.constraint(equalTo: contentView.topAnchor, constant: LDSpacing.space8),
+            expandButton.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: LDSpacing.space16),
+            expandButton.widthAnchor.constraint(equalToConstant: LDSpacing.space24),
+            expandButton.heightAnchor.constraint(equalToConstant: LDSpacing.space24),
+            
+            collapseButton.topAnchor.constraint(equalTo: contentView.topAnchor, constant: LDSpacing.space8),
+            collapseButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -LDSpacing.space16),
+            collapseButton.widthAnchor.constraint(equalToConstant: LDSpacing.space24),
+            collapseButton.heightAnchor.constraint(equalToConstant: LDSpacing.space24),
+            
+            // Title
+            titleLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: LDSpacing.space8),
+            titleLabel.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            
+            // Stats container
+            statsContainer.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: LDSpacing.space16),
+            statsContainer.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: LDSpacing.space16),
+            statsContainer.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -LDSpacing.space16),
+            statsContainer.heightAnchor.constraint(equalToConstant: LDSpacing.space32),
+            
+            statsLabel.centerXAnchor.constraint(equalTo: statsContainer.centerXAnchor),
+            statsLabel.centerYAnchor.constraint(equalTo: statsContainer.centerYAnchor),
+            
+            // Filter by label
+            filterByLabel.topAnchor.constraint(equalTo: statsContainer.bottomAnchor, constant: LDSpacing.space24),
+            filterByLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: LDSpacing.space16),
+            
+            // Filter container
+            filterContainer.topAnchor.constraint(equalTo: filterByLabel.bottomAnchor, constant: LDSpacing.space16),
+            filterContainer.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: LDSpacing.space16),
+            filterContainer.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -LDSpacing.space16),
+            
+            // Divider
+            divider.topAnchor.constraint(equalTo: isExpanded ? filterContainer.bottomAnchor : statsContainer.bottomAnchor, constant: LDSpacing.space16),
+            divider.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            divider.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            divider.heightAnchor.constraint(equalToConstant: 1),
+            
+            // Button stack
+            buttonStackView.topAnchor.constraint(equalTo: divider.bottomAnchor, constant: LDSpacing.space16),
+            buttonStackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: LDSpacing.space16),
+            buttonStackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -LDSpacing.space16),
+            buttonStackView.heightAnchor.constraint(equalToConstant: LDSpacing.space40),
+            buttonStackView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -LDSpacing.space16),
+            
+            // Button widths
+            tryAgainButton.widthAnchor.constraint(equalToConstant: 100),
+            doneButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 200)
+        ])
+    }
+    
+    private func createFilterRow(checkbox: UIButton, label: UILabel, itemsContainer: UIStackView) -> UIView {
+        let container = UIView()
+        let rowStack = UIStackView()
+        rowStack.axis = .horizontal
+        rowStack.spacing = LDSpacing.space8
+        rowStack.alignment = .center
+        
+        container.addAutoLayoutSubview(rowStack)
+        container.addAutoLayoutSubview(itemsContainer)
+        
+        rowStack.addArrangedSubview(checkbox)
+        rowStack.addArrangedSubview(label)
+        
+        NSLayoutConstraint.activate([
+            checkbox.widthAnchor.constraint(equalToConstant: 20),
+            checkbox.heightAnchor.constraint(equalToConstant: 20),
+            
+            rowStack.topAnchor.constraint(equalTo: container.topAnchor),
+            rowStack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            rowStack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            
+            itemsContainer.topAnchor.constraint(equalTo: rowStack.bottomAnchor, constant: LDSpacing.space12),
+            itemsContainer.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: LDSpacing.space28),
+            itemsContainer.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            itemsContainer.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+        
+        return container
+    }
+    
+    private func applyModel() {
+        // Buttons
+        expandButton.setImage(LDIcon.chevronDown.image, for: .normal)
+        collapseButton.setImage(LDIcon.close.image, for: .normal)
+        
+        // Title
+        titleLabel.font = UIFont.bogle(ofSize: LDSpacing.space20, weight: .bold)
+        titleLabel.textAlignment = .center
+        titleLabel.text = model.title
+        
+        // Stats
+        updateStatsLabel()
+        
+        // Filter by label
+        filterByLabel.text = "Filter By"
+        filterByLabel.font = UIFont.bogle(ofSize: 14, weight: .regular)
+        filterByLabel.textColor = .gray
+        
+        // Setup checkboxes and labels
+        setupCheckbox(missingCheckbox)
+        setupCheckbox(misplacedCheckbox)
+        setupCheckbox(unknownCheckbox)
+        setupCheckbox(correctCheckbox)
+        
+        missingLabel.attributedText = createCheckboxLabel(text: "Missing items", count: model.missingCount)
+        misplacedLabel.attributedText = createCheckboxLabel(text: "Misplaced items", count: model.misplacedCount)
+        unknownLabel.attributedText = createCheckboxLabel(text: "Unknown items", count: model.unknownCount)
+        correctLabel.attributedText = createCheckboxLabel(text: "Correct items", count: model.correctCount)
+        
+        // Populate items
+        populateItems(model.missingItems, in: missingItemsContainer)
+        populateItems(model.misplacedItems, in: misplacedItemsContainer)
+        populateItems(model.unknownItems, in: unknownItemsContainer)
+        populateItems(model.correctItems, in: correctItemsContainer)
+        
+        // Buttons
+        let tryAgainAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.bogle(ofSize: LDSpacing.space16, weight: .regular),
+            .foregroundColor: UIColor.black,
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ]
+        tryAgainButton.setAttributedTitle(NSAttributedString(string: model.tryAgainText, attributes: tryAgainAttributes), for: .normal)
+        
+        doneButton.dataModel = LDButton.Model(
+            variant: .primary,
+            size: .large,
+            text: model.doneButtonText
+        )
+    }
+    
+    private func updateStatsLabel() {
+        let attributedString = NSMutableAttributedString()
+        
+        // Missing
+        let missingAttachment = NSTextAttachment()
+        missingAttachment.image = UIImage(systemName: "exclamationmark.circle.fill")?.withTintColor(.red, renderingMode: .alwaysOriginal)
+        missingAttachment.bounds = CGRect(x: 0, y: -2, width: 16, height: 16)
+        attributedString.append(NSAttributedString(attachment: missingAttachment))
+        attributedString.append(NSAttributedString(string: " Missing (\(model.missingCount))  ", attributes: [
+            .font: UIFont.bogle(ofSize: 14, weight: .regular),
+            .foregroundColor: UIColor.black
+        ]))
+        
+        // Misplaced
+        let misplacedAttachment = NSTextAttachment()
+        misplacedAttachment.image = UIImage(systemName: "exclamationmark.triangle.fill")?.withTintColor(.systemYellow, renderingMode: .alwaysOriginal)
+        misplacedAttachment.bounds = CGRect(x: 0, y: -2, width: 16, height: 16)
+        attributedString.append(NSAttributedString(attachment: misplacedAttachment))
+        attributedString.append(NSAttributedString(string: " Misplaced (\(model.misplacedCount))  ", attributes: [
+            .font: UIFont.bogle(ofSize: 14, weight: .regular),
+            .foregroundColor: UIColor.black
+        ]))
+        
+        // Unknown
+        let unknownAttachment = NSTextAttachment()
+        unknownAttachment.image = UIImage(systemName: "circle.fill")?.withTintColor(.orange, renderingMode: .alwaysOriginal)
+        unknownAttachment.bounds = CGRect(x: 0, y: -2, width: 16, height: 16)
+        attributedString.append(NSAttributedString(attachment: unknownAttachment))
+        attributedString.append(NSAttributedString(string: " Unknown (\(model.unknownCount))", attributes: [
+            .font: UIFont.bogle(ofSize: 14, weight: .regular),
+            .foregroundColor: UIColor.black
+        ]))
+        
+        statsLabel.attributedText = attributedString
+    }
+    
+    private func setupCheckbox(_ checkbox: UIButton) {
+        checkbox.layer.borderWidth = 1
+        checkbox.layer.borderColor = UIColor.gray.cgColor
+        checkbox.layer.cornerRadius = 4
+        checkbox.backgroundColor = .white
+    }
+    
+    private func createCheckboxLabel(text: String, count: Int) -> NSAttributedString {
+        let attributedString = NSMutableAttributedString()
+        attributedString.append(NSAttributedString(string: text, attributes: [
+            .font: UIFont.bogle(ofSize: 14, weight: .regular),
+            .foregroundColor: UIColor.black
+        ]))
+        attributedString.append(NSAttributedString(string: " (\(count))", attributes: [
+            .font: UIFont.bogle(ofSize: 14, weight: .regular),
+            .foregroundColor: UIColor.black
+        ]))
+        return attributedString
+    }
+    
+    private func populateItems(_ items: [Item], in container: UIStackView) {
+        container.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        
+        for item in items {
+            let itemView = createItemView(item)
+            container.addArrangedSubview(itemView)
+        }
+    }
+    
+    private func createItemView(_ item: Item) -> UIView {
+        let container = UIView()
+        container.backgroundColor = UIColor(white: 0.97, alpha: 1.0)
+        container.layer.cornerRadius = 8
+        
+        let nameLabel = UILabel()
+        nameLabel.font = UIFont.bogle(ofSize: 12, weight: .bold)
+        nameLabel.text = item.name
+        nameLabel.numberOfLines = 2
+        
+        let upcLabel = UILabel()
+        upcLabel.font = UIFont.bogle(ofSize: 12, weight: .regular)
+        upcLabel.text = "UPC: \(item.upc)"
+        upcLabel.textColor = .gray
+        
+        let positionLabel = UILabel()
+        positionLabel.font = UIFont.bogle(ofSize: 12, weight: .regular)
+        positionLabel.text = "Expected: Position \(item.position)"
+        positionLabel.textColor = .gray
+        
+        container.addAutoLayoutSubview(nameLabel)
+        container.addAutoLayoutSubview(upcLabel)
+        container.addAutoLayoutSubview(positionLabel)
+        
+        NSLayoutConstraint.activate([
+            nameLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
+            nameLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
+            nameLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+            
+            upcLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 4),
+            upcLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
+            
+            positionLabel.topAnchor.constraint(equalTo: upcLabel.bottomAnchor, constant: 2),
+            positionLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
+            positionLabel.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8)
+        ])
+        
+        return container
+    }
+    
+    @objc private func handleExpandTapped() {
+        isExpanded = true
+        filterByLabel.isHidden = false
+        filterContainer.isHidden = false
+        expandButton.setImage(LDIcon.chevronUp.image, for: .normal)
+        updateConstraints()
+        bottomSheetableActionDelegate?.bottomSheetableDidChangeDesiredHeight(self)
+    }
+    
+    @objc private func handleCollapseTapped() {
+        if isExpanded {
+            isExpanded = false
+            filterByLabel.isHidden = true
+            filterContainer.isHidden = true
+            expandButton.setImage(LDIcon.chevronDown.image, for: .normal)
+            
+            // Hide all item containers
+            missingItemsContainer.isHidden = true
+            misplacedItemsContainer.isHidden = true
+            unknownItemsContainer.isHidden = true
+            correctItemsContainer.isHidden = true
+            
+            // Clear checkboxes
+            checkedCategories.removeAll()
+            updateCheckbox(missingCheckbox, isChecked: false)
+            updateCheckbox(misplacedCheckbox, isChecked: false)
+            updateCheckbox(unknownCheckbox, isChecked: false)
+            updateCheckbox(correctCheckbox, isChecked: false)
+            
+            updateConstraints()
+            bottomSheetableActionDelegate?.bottomSheetableDidChangeDesiredHeight(self)
+        } else {
+            self.dismiss(animated: true)
+        }
+    }
+    
+    @objc private func handleTryAgainTapped() {
+        self.dismiss(animated: true) {
+            self.onTryAgain()
+        }
+    }
+    
+    @objc private func handleDoneTapped() {
+        self.dismiss(animated: true) {
+            self.onDone()
+        }
+    }
+    
+    @objc private func missingCheckboxTapped() {
+        toggleCategory("missing", checkbox: missingCheckbox, container: missingItemsContainer)
+    }
+    
+    @objc private func misplacedCheckboxTapped() {
+        toggleCategory("misplaced", checkbox: misplacedCheckbox, container: misplacedItemsContainer)
+    }
+    
+    @objc private func unknownCheckboxTapped() {
+        toggleCategory("unknown", checkbox: unknownCheckbox, container: unknownItemsContainer)
+    }
+    
+    @objc private func correctCheckboxTapped() {
+        toggleCategory("correct", checkbox: correctCheckbox, container: correctItemsContainer)
+    }
+    
+    private func toggleCategory(_ category: String, checkbox: UIButton, container: UIStackView) {
+        if checkedCategories.contains(category) {
+            checkedCategories.remove(category)
+            updateCheckbox(checkbox, isChecked: false)
+            container.isHidden = true
+        } else {
+            checkedCategories.insert(category)
+            updateCheckbox(checkbox, isChecked: true)
+            container.isHidden = false
+        }
+        bottomSheetableActionDelegate?.bottomSheetableDidChangeDesiredHeight(self)
+    }
+    
+    private func updateCheckbox(_ checkbox: UIButton, isChecked: Bool) {
+        if isChecked {
+            checkbox.backgroundColor = UIColor(red: 0/255, green: 113/255, blue: 220/255, alpha: 1.0)
+            checkbox.setImage(UIImage(systemName: "checkmark")?.withTintColor(.white, renderingMode: .alwaysOriginal), for: .normal)
+        } else {
+            checkbox.backgroundColor = .white
+            checkbox.setImage(nil, for: .normal)
+        }
+    }
+    
+    private func updateConstraints() {
+        NSLayoutConstraint.activate([
+            divider.topAnchor.constraint(equalTo: isExpanded ? filterContainer.bottomAnchor : statsContainer.bottomAnchor, constant: LDSpacing.space16)
+        ])
+        view.layoutIfNeeded()
+    }
+}
+
+// MARK: - LDBottomSheetable
+extension ReviewSectionBottomSheet: LDBottomSheetable {
+    var contentView: UIView { view }
+    var tiersType: LDBottomSheetTierType { 
+        if isExpanded {
+            return .scrollable(allowsPullToDismiss: false, showsGrabber: false)
+        } else {
+            return .oneTierAutomatic
+        }
+    }
+    var isDismissable: Bool { true }
+    var shouldHideGrabber: Bool { true }
+    var shouldIgnoreTabBar: Bool { true }
+}
+
+
+
+
+
+import SwiftUI
+@_implementationOnly import LivingDesign
+
+struct ReviewSectionBottomSheetPresenter: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
+    let modHealthResponse: ModHealthResponse?
+    let onTryAgain: () -> Void
+    let onDone: () -> Void
+    
+    func makeUIViewController(context: Context) -> UIViewController {
+        let viewController = UIViewController()
+        viewController.view.backgroundColor = .clear
+        return viewController
+    }
+    
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+        if isPresented && uiViewController.presentedViewController == nil {
+            let model = ReviewSectionBottomSheet.Model(
+                missingItems: modHealthResponse?.missingItems ?? [],
+                misplacedItems: modHealthResponse?.misplacedItems ?? [],
+                unknownItems: modHealthResponse?.unknownItems ?? [],
+                correctItems: modHealthResponse?.correctItems ?? []
+            )
+            
+            let bottomSheet = ReviewSectionBottomSheet(
+                model: model,
+                onTryAgain: {
+                    isPresented = false
+                    onTryAgain()
+                },
+                onDone: {
+                    isPresented = false
+                    onDone()
+                }
+            )
+            
+            if let navigationController = uiViewController.navigationController {
+                navigationController.presentBottomSheet(bottomSheet, as: .modal)
+            } else {
+                uiViewController.presentBottomSheet(bottomSheet, as: .modal)
+            }
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                if let presented = uiViewController.presentedViewController {
+                    presented.presentationController?.delegate = context.coordinator
+                }
+            }
+        }
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isPresented: $isPresented)
+    }
+    
+    class Coordinator: NSObject, UIAdaptivePresentationControllerDelegate {
+        @Binding var isPresented: Bool
+        
+        init(isPresented: Binding<Bool>) {
+            _isPresented = isPresented
+        }
+        
+        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+            isPresented = false
+        }
+    }
+}
