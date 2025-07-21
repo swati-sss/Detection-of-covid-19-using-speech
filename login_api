@@ -30,13 +30,7 @@ final class ReviewSectionBottomSheet: LDRootViewController {
     }
     
     // State
-    @Published private var isExpanded = false
-    @Published private var filterStates = [
-        "missing": false,
-        "misplaced": false,
-        "unknown": false,
-        "correct": false
-    ]
+    private var isExpanded = false
     
     // UI Elements
     private let expandButton = UIButton()
@@ -44,21 +38,18 @@ final class ReviewSectionBottomSheet: LDRootViewController {
     private let titleLabel = LDLabel(style: .headingMedium)
     private let statsContainer = UIView()
     private let statsLabel = UILabel()
+    
+    // Filter section
+    private let filterByLabel = LDLabel(style: .bodySmall)
+    private let missingCheckbox = FilterItemView()
+    private let misplacedCheckbox = FilterItemView()
+    private let unknownCheckbox = FilterItemView()
+    private let correctCheckbox = FilterItemView()
+    
     private let divider = LDDivider(style: .horizontal)
     private let buttonStackView = UIStackView()
     private let tryAgainButton = UIButton()
     private let doneButton = LDButton(variant: .primary, size: .large)
-    
-    // Expanded state UI elements
-    private let filterContainer = UIView()
-    private let filterByLabel = LDLabel(style: .bodyMedium)
-    private let filterStackView = UIStackView()
-    
-    // Filter item views
-    private let missingFilterItem = FilterItemView()
-    private let misplacedFilterItem = FilterItemView()
-    private let unknownFilterItem = FilterItemView()
-    private let correctFilterItem = FilterItemView()
     
     // Callbacks
     private let onTryAgain: () -> Void
@@ -86,18 +77,12 @@ final class ReviewSectionBottomSheet: LDRootViewController {
         buttonStackView.distribution = .fill
         buttonStackView.alignment = .fill
         
-        // Configure filter stack view
-        filterStackView.axis = .vertical
-        filterStackView.spacing = LDSpacing.space12
-        filterStackView.distribution = .fill
-        filterStackView.alignment = .fill
-        
-        // Initially hide filter container
-        filterContainer.isHidden = true
-        filterContainer.alpha = 0
-        
-        // Setup filter item callbacks
-        setupFilterItemCallbacks()
+        // Initially hide filter items
+        filterByLabel.isHidden = true
+        missingCheckbox.isHidden = true
+        misplacedCheckbox.isHidden = true
+        unknownCheckbox.isHidden = true
+        correctCheckbox.isHidden = true
     }
     
     override func constructSubviewHierarchy() {
@@ -109,15 +94,12 @@ final class ReviewSectionBottomSheet: LDRootViewController {
         view.addAutoLayoutSubview(statsContainer)
         statsContainer.addAutoLayoutSubview(statsLabel)
         
-        // Filter container
-        view.addAutoLayoutSubview(filterContainer)
-        filterContainer.addAutoLayoutSubview(filterByLabel)
-        filterContainer.addAutoLayoutSubview(filterStackView)
-        
-        filterStackView.addArrangedSubview(missingFilterItem)
-        filterStackView.addArrangedSubview(misplacedFilterItem)
-        filterStackView.addArrangedSubview(unknownFilterItem)
-        filterStackView.addArrangedSubview(correctFilterItem)
+        // Add filter items
+        view.addAutoLayoutSubview(filterByLabel)
+        view.addAutoLayoutSubview(missingCheckbox)
+        view.addAutoLayoutSubview(misplacedCheckbox)
+        view.addAutoLayoutSubview(unknownCheckbox)
+        view.addAutoLayoutSubview(correctCheckbox)
         
         view.addAutoLayoutSubview(divider)
         view.addAutoLayoutSubview(buttonStackView)
@@ -129,7 +111,7 @@ final class ReviewSectionBottomSheet: LDRootViewController {
         super.constructSubviewLayoutConstraints()
         
         NSLayoutConstraint.activate([
-            // Expand/Collapse buttons
+            // Expand/Collapse buttons - moved up
             expandButton.topAnchor.constraint(equalTo: view.topAnchor, constant: LDSpacing.space8),
             expandButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
             expandButton.widthAnchor.constraint(equalToConstant: LDSpacing.space24),
@@ -140,7 +122,7 @@ final class ReviewSectionBottomSheet: LDRootViewController {
             collapseButton.widthAnchor.constraint(equalToConstant: LDSpacing.space24),
             collapseButton.heightAnchor.constraint(equalToConstant: LDSpacing.space24),
             
-            // Title
+            // Title - moved up
             titleLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: LDSpacing.space8),
             titleLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             
@@ -153,80 +135,46 @@ final class ReviewSectionBottomSheet: LDRootViewController {
             statsLabel.centerXAnchor.constraint(equalTo: statsContainer.centerXAnchor),
             statsLabel.centerYAnchor.constraint(equalTo: statsContainer.centerYAnchor),
             
-            // Filter container
-            filterContainer.topAnchor.constraint(equalTo: statsContainer.bottomAnchor, constant: LDSpacing.space16),
-            filterContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
-            filterContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
+            // Filter By label
+            filterByLabel.topAnchor.constraint(equalTo: statsContainer.bottomAnchor, constant: LDSpacing.space16),
+            filterByLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
             
-            filterByLabel.topAnchor.constraint(equalTo: filterContainer.topAnchor),
-            filterByLabel.leadingAnchor.constraint(equalTo: filterContainer.leadingAnchor),
-            filterByLabel.heightAnchor.constraint(equalToConstant: LDSpacing.space24),
+            // Checkboxes
+            missingCheckbox.topAnchor.constraint(equalTo: filterByLabel.bottomAnchor, constant: LDSpacing.space12),
+            missingCheckbox.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
+            missingCheckbox.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
             
-            filterStackView.topAnchor.constraint(equalTo: filterByLabel.bottomAnchor, constant: LDSpacing.space12),
-            filterStackView.leadingAnchor.constraint(equalTo: filterContainer.leadingAnchor),
-            filterStackView.trailingAnchor.constraint(equalTo: filterContainer.trailingAnchor),
-            filterStackView.bottomAnchor.constraint(equalTo: filterContainer.bottomAnchor),
+            misplacedCheckbox.topAnchor.constraint(equalTo: missingCheckbox.bottomAnchor, constant: LDSpacing.space12),
+            misplacedCheckbox.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
+            misplacedCheckbox.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
+            
+            unknownCheckbox.topAnchor.constraint(equalTo: misplacedCheckbox.bottomAnchor, constant: LDSpacing.space12),
+            unknownCheckbox.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
+            unknownCheckbox.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
+            
+            correctCheckbox.topAnchor.constraint(equalTo: unknownCheckbox.bottomAnchor, constant: LDSpacing.space12),
+            correctCheckbox.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
+            correctCheckbox.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
             
             // Divider
-            divider.topAnchor.constraint(equalTo: filterContainer.bottomAnchor, constant: LDSpacing.space16),
+            divider.topAnchor.constraint(equalTo: isExpanded ? correctCheckbox.bottomAnchor : statsContainer.bottomAnchor, constant: LDSpacing.space16),
             divider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             divider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             divider.heightAnchor.constraint(equalToConstant: 1),
             
-            // Button stack
+            // Button stack (horizontal)
             buttonStackView.topAnchor.constraint(equalTo: divider.bottomAnchor, constant: LDSpacing.space16),
             buttonStackView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
             buttonStackView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
             buttonStackView.heightAnchor.constraint(equalToConstant: LDSpacing.space40),
             buttonStackView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -LDSpacing.space16),
             
-            // Button widths
+            // Try again button width
             tryAgainButton.widthAnchor.constraint(equalToConstant: 100),
+            
+            // Done button takes remaining space
             doneButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 200)
         ])
-        
-        // Update divider constraint when not expanded
-        updateDividerConstraint()
-    }
-    
-    private func updateDividerConstraint() {
-        divider.removeFromSuperview()
-        view.addSubview(divider)
-        divider.translatesAutoresizingMaskIntoConstraints = false
-        
-        if isExpanded {
-            NSLayoutConstraint.activate([
-                divider.topAnchor.constraint(equalTo: filterContainer.bottomAnchor, constant: LDSpacing.space16),
-                divider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                divider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                divider.heightAnchor.constraint(equalToConstant: 1)
-            ])
-        } else {
-            NSLayoutConstraint.activate([
-                divider.topAnchor.constraint(equalTo: statsContainer.bottomAnchor, constant: LDSpacing.space16),
-                divider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                divider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                divider.heightAnchor.constraint(equalToConstant: 1)
-            ])
-        }
-    }
-    
-    private func setupFilterItemCallbacks() {
-        missingFilterItem.onToggle = { [weak self] isChecked in
-            self?.filterStates["missing"] = isChecked
-        }
-        
-        misplacedFilterItem.onToggle = { [weak self] isChecked in
-            self?.filterStates["misplaced"] = isChecked
-        }
-        
-        unknownFilterItem.onToggle = { [weak self] isChecked in
-            self?.filterStates["unknown"] = isChecked
-        }
-        
-        correctFilterItem.onToggle = { [weak self] isChecked in
-            self?.filterStates["correct"] = isChecked
-        }
     }
     
     private func applyModel() {
@@ -279,11 +227,11 @@ final class ReviewSectionBottomSheet: LDRootViewController {
         filterByLabel.font = UIFont.bogle(ofSize: 14, weight: .regular)
         filterByLabel.textColor = UIColor.gray
         
-        // Configure filter items
-        missingFilterItem.configure(title: "Missing items (\(model.missingCount))")
-        misplacedFilterItem.configure(title: "Misplaced items (\(model.misplacedCount))")
-        unknownFilterItem.configure(title: "Unknown items (\(model.unknownCount))")
-        correctFilterItem.configure(title: "Correct items (\(model.correctCount))")
+        // Configure checkboxes
+        missingCheckbox.configure(title: "Missing items (\(model.missingCount))")
+        misplacedCheckbox.configure(title: "Misplaced items (\(model.misplacedCount))")
+        unknownCheckbox.configure(title: "Unknown items (\(model.unknownCount))")
+        correctCheckbox.configure(title: "Correct items (\(model.correctCount))")
         
         // Try again button
         let tryAgainAttributes: [NSAttributedString.Key: Any] = [
@@ -304,21 +252,19 @@ final class ReviewSectionBottomSheet: LDRootViewController {
     @objc private func handleExpandTapped() {
         isExpanded = true
         
-        // Update expand button to up chevron
+        // Update button icon
         expandButton.setImage(LDIcon.chevronUp.image, for: .normal)
         
-        // Show filter container with animation
-        filterContainer.isHidden = false
-        UIView.animate(withDuration: 0.3) { [weak self] in
-            self?.filterContainer.alpha = 1
-            self?.updateDividerConstraint()
-            self?.view.layoutIfNeeded()
-        }
+        // Show filter items
+        filterByLabel.isHidden = false
+        missingCheckbox.isHidden = false
+        misplacedCheckbox.isHidden = false
+        unknownCheckbox.isHidden = false
+        correctCheckbox.isHidden = false
         
-        // Notify delegate to update tier height if needed
-        if let bottomSheetable = self as? LDBottomSheetable {
-            bottomSheetableActionDelegate?.bottomSheetable(bottomSheetable, didUpdateHeight: 400)
-        }
+        // Re-layout
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
     }
     
     @objc private func handleCollapseTapped() {
@@ -341,9 +287,7 @@ final class ReviewSectionBottomSheet: LDRootViewController {
 // MARK: - LDBottomSheetable
 extension ReviewSectionBottomSheet: LDBottomSheetable {
     var contentView: UIView { view }
-    var tiersType: LDBottomSheetTierType { 
-        isExpanded ? .oneHeight(400) : .oneHeight(237)
-    }
+    var tiersType: LDBottomSheetTierType { .oneTierAutomatic }
     var isDismissable: Bool { true }
     var shouldHideGrabber: Bool { true }
     var shouldIgnoreTabBar: Bool { true }
@@ -355,8 +299,6 @@ class FilterItemView: UIView {
     private let titleLabel = UILabel()
     private var isChecked = false
     
-    var onToggle: ((Bool) -> Void)?
-    
     override init(frame: CGRect) {
         super.init(frame: frame)
         setupView()
@@ -367,21 +309,17 @@ class FilterItemView: UIView {
     }
     
     private func setupView() {
-        // Configure checkbox
         checkbox.setImage(UIImage(systemName: "square"), for: .normal)
         checkbox.setImage(UIImage(systemName: "checkmark.square.fill"), for: .selected)
         checkbox.tintColor = .black
         checkbox.addTarget(self, action: #selector(checkboxTapped), for: .touchUpInside)
         
-        // Configure title label
         titleLabel.font = UIFont.bogle(ofSize: 14, weight: .regular)
         titleLabel.textColor = .black
         
-        // Add subviews
         addSubview(checkbox)
         addSubview(titleLabel)
         
-        // Setup constraints
         checkbox.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         
@@ -406,75 +344,5 @@ class FilterItemView: UIView {
     @objc private func checkboxTapped() {
         isChecked.toggle()
         checkbox.isSelected = isChecked
-        onToggle?(isChecked)
-    }
-}
-
-
-
-
-
-
-struct ReviewSectionBottomSheetPresenter: UIViewControllerRepresentable {
-    @Binding var isPresented: Bool
-    let modHealthResponse: ModHealthResponse?
-    let onTryAgain: () -> Void
-    let onDone: () -> Void
-    
-    func makeUIViewController(context: Context) -> UIViewController {
-        let viewController = UIViewController()
-        viewController.view.backgroundColor = .clear
-        return viewController
-    }
-    
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        if isPresented && uiViewController.presentedViewController == nil {
-            let model = ReviewSectionBottomSheet.Model(
-                missingCount: modHealthResponse?.missingItems.count ?? 0,
-                misplacedCount: modHealthResponse?.misplacedItems.count ?? 0,
-                unknownCount: modHealthResponse?.unknownItems.count ?? 0,
-                correctCount: modHealthResponse?.correctItems.count ?? 0
-            )
-            
-            let bottomSheet = ReviewSectionBottomSheet(
-                model: model,
-                onTryAgain: {
-                    isPresented = false
-                    onTryAgain()
-                },
-                onDone: {
-                    isPresented = false
-                    onDone()
-                }
-            )
-            
-            if let navigationController = uiViewController.navigationController {
-                navigationController.presentBottomSheet(bottomSheet, as: .modal)
-            } else {
-                uiViewController.presentBottomSheet(bottomSheet, as: .modal)
-            }
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                if let presented = uiViewController.presentedViewController {
-                    presented.presentationController?.delegate = context.coordinator
-                }
-            }
-        }
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(isPresented: $isPresented)
-    }
-    
-    class Coordinator: NSObject, UIAdaptivePresentationControllerDelegate {
-        @Binding var isPresented: Bool
-        
-        init(isPresented: Binding<Bool>) {
-            _isPresented = isPresented
-        }
-        
-        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-            isPresented = false
-        }
     }
 }
