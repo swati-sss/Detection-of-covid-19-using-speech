@@ -1,274 +1,301 @@
-import UIKit
-@_implementationOnly import LivingDesign
-@_implementationOnly import Bogle
+import SwiftUI
 
-final class ReviewSectionBottomSheet: LDRootViewController {
-    weak var bottomSheetableActionDelegate: LDBottomSheetableActionDelegate?
+// MARK: - SwiftUI Bottom Sheet View
+struct ReviewSectionBottomSheet: View {
+    let modHealthResponse: ModHealthResponse?
+    let onTryAgain: () -> Void
+    let onDone: () -> Void
+    @Binding var isPresented: Bool
     
-    struct Model {
-        let title = "Review section"
-        let missingCount: Int
-        let misplacedCount: Int
-        let unknownCount: Int
-        let tryAgainText = "Try again"
-        let doneButtonText = "Done"
-        
-        init(missingCount: Int = 0, misplacedCount: Int = 0, unknownCount: Int = 0) {
-            self.missingCount = missingCount
-            self.misplacedCount = misplacedCount
-            self.unknownCount = unknownCount
-        }
+    // Computed properties for easier access to counts
+    private var missingCount: Int {
+        modHealthResponse?.missingItems.count ?? 0
     }
     
-    var model: Model {
-        didSet {
-            applyModel()
-        }
+    private var misplacedCount: Int {
+        modHealthResponse?.misplacedItems.count ?? 0
     }
     
-    // Add state tracking property for expansion
-    private var isExpanded: Bool = false
-    
-    private let expandButton = UIButton()
-    private let collapseButton = UIButton()
-    private let titleLabel = LDLabel(style: .headingMedium)
-    private let statsContainer = UIView()
-    private let statsLabel = UILabel()
-    private let divider = LDDivider(style: .horizontal)
-    private let buttonStackView = UIStackView()
-    private let tryAgainButton = UIButton()
-    private let doneButton = LDButton(variant: .primary, size: .large)
-    
-    // Add new views for expanded content
-    private let expandedContentView = UIView()
-    private let expandedLabel = UILabel()
-    
-    // Callbacks
-    private let onTryAgain: () -> Void
-    private let onDone: () -> Void
-    
-    init(model: Model, onTryAgain: @escaping () -> Void, onDone: @escaping () -> Void) {
-        self.model = model
-        self.onTryAgain = onTryAgain
-        self.onDone = onDone
-        super.init(nibName: nil, bundle: nil)
-        applyModel()
+    private var unknownCount: Int {
+        modHealthResponse?.unknownItems.count ?? 0
     }
     
-    override func constructView() {
-        super.constructView()
-        
-        expandButton.addTarget(self, action: #selector(handleExpandTapped), for: .primaryActionTriggered)
-        collapseButton.addTarget(self, action: #selector(handleCollapseTapped), for: .primaryActionTriggered)
-        tryAgainButton.addTarget(self, action: #selector(handleTryAgainTapped), for: .primaryActionTriggered)
-        doneButton.addTarget(self, action: #selector(handleDoneTapped), for: .primaryActionTriggered)
-        
-        // Configure button stack view
-        buttonStackView.axis = .horizontal
-        buttonStackView.spacing = LDSpacing.space16
-        buttonStackView.distribution = .fill
-        buttonStackView.alignment = .fill
-    }
-    
-    override func constructSubviewHierarchy() {
-        super.constructSubviewHierarchy()
-        
-        view.addAutoLayoutSubview(expandButton)
-        view.addAutoLayoutSubview(collapseButton)
-        view.addAutoLayoutSubview(titleLabel)
-        view.addAutoLayoutSubview(statsContainer)
-        statsContainer.addAutoLayoutSubview(statsLabel)
-        view.addAutoLayoutSubview(divider)
-        view.addAutoLayoutSubview(buttonStackView)
-        buttonStackView.addArrangedSubview(tryAgainButton)
-        buttonStackView.addArrangedSubview(doneButton)
-        
-        // Add expanded content views
-        view.addAutoLayoutSubview(expandedContentView)
-        expandedContentView.addAutoLayoutSubview(expandedLabel)
-        
-        // Initially hide the expanded content
-        expandedContentView.isHidden = true
-    }
-    
-    override func constructSubviewLayoutConstraints() {
-        super.constructSubviewLayoutConstraints()
-        
-        NSLayoutConstraint.activate([
-            // Expand/Collapse buttons - moved up
-            expandButton.topAnchor.constraint(equalTo: view.topAnchor, constant: LDSpacing.space8),
-            expandButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
-            expandButton.widthAnchor.constraint(equalToConstant: LDSpacing.space24),
-            expandButton.heightAnchor.constraint(equalToConstant: LDSpacing.space24),
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header with expand/collapse buttons and title
+            headerView
             
-            collapseButton.topAnchor.constraint(equalTo: view.topAnchor, constant: LDSpacing.space8),
-            collapseButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
-            collapseButton.widthAnchor.constraint(equalToConstant: LDSpacing.space24),
-            collapseButton.heightAnchor.constraint(equalToConstant: LDSpacing.space24),
-            
-            // Title - moved up
-            titleLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: LDSpacing.space8),
-            titleLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            
-            // Stats container
-            statsContainer.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: LDSpacing.space16),
-            statsContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
-            statsContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
-            statsContainer.heightAnchor.constraint(equalToConstant: LDSpacing.space32),
-            
-            statsLabel.centerXAnchor.constraint(equalTo: statsContainer.centerXAnchor),
-            statsLabel.centerYAnchor.constraint(equalTo: statsContainer.centerYAnchor),
+            // Stats section showing counts with icons
+            statsView
+                .padding(.top, 16)
             
             // Divider
-            divider.topAnchor.constraint(equalTo: statsContainer.bottomAnchor, constant: LDSpacing.space16),
-            divider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            divider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            divider.heightAnchor.constraint(equalToConstant: 1),
+            Rectangle()
+                .fill(Color.gray.opacity(0.3))
+                .frame(height: 1)
+                .padding(.top, 16)
             
-            // Expanded content view constraints
-            expandedContentView.topAnchor.constraint(equalTo: divider.bottomAnchor, constant: LDSpacing.space8),
-            expandedContentView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
-            expandedContentView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
-            expandedContentView.heightAnchor.constraint(equalToConstant: 200),
-            
-            expandedLabel.topAnchor.constraint(equalTo: expandedContentView.topAnchor),
-            expandedLabel.leadingAnchor.constraint(equalTo: expandedContentView.leadingAnchor),
-            expandedLabel.trailingAnchor.constraint(equalTo: expandedContentView.trailingAnchor),
-            expandedLabel.bottomAnchor.constraint(equalTo: expandedContentView.bottomAnchor),
-            
-            // Button stack (horizontal) - updated to connect to expandedContentView
-            buttonStackView.topAnchor.constraint(equalTo: expandedContentView.bottomAnchor, constant: LDSpacing.space16),
-            buttonStackView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
-            buttonStackView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
-            buttonStackView.heightAnchor.constraint(equalToConstant: LDSpacing.space40),
-            buttonStackView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -LDSpacing.space16),
-            
-            // Try again button width
-            tryAgainButton.widthAnchor.constraint(equalToConstant: 100),
-            
-            // Done button takes remaining space
-            doneButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 200)
-        ])
-    }
-    
-    private func applyModel() {
-        // Expand/Collapse buttons
-        expandButton.setImage(LDIcon.chevronUp.image, for: .normal)
-        collapseButton.setImage(LDIcon.close.image, for: .normal)
-        
-        // Title
-        titleLabel.font = UIFont.bogle(ofSize: LDSpacing.space20, weight: .bold)
-        titleLabel.textAlignment = .center
-        titleLabel.text = model.title
-        
-        // Stats
-        let attributedString = NSMutableAttributedString()
-        
-        // Missing
-        let missingAttachment = NSTextAttachment()
-        missingAttachment.image = UIImage(systemName: "exclamationmark.circle.fill")?.withTintColor(.red, renderingMode: .alwaysOriginal)
-        missingAttachment.bounds = CGRect(x: 0, y: -2, width: 16, height: 16)
-        attributedString.append(NSAttributedString(attachment: missingAttachment))
-        attributedString.append(NSAttributedString(string: " Missing (\(model.missingCount))  ", attributes: [
-            .font: UIFont.bogle(ofSize: 14, weight: .regular),
-            .foregroundColor: UIColor.black
-        ]))
-        
-        // Misplaced
-        let misplacedAttachment = NSTextAttachment()
-        misplacedAttachment.image = UIImage(systemName: "exclamationmark.triangle.fill")?.withTintColor(.systemYellow, renderingMode: .alwaysOriginal)
-        misplacedAttachment.bounds = CGRect(x: 0, y: -2, width: 16, height: 16)
-        attributedString.append(NSAttributedString(attachment: misplacedAttachment))
-        attributedString.append(NSAttributedString(string: " Misplaced (\(model.misplacedCount))  ", attributes: [
-            .font: UIFont.bogle(ofSize: 14, weight: .regular),
-            .foregroundColor: UIColor.black
-        ]))
-        
-        // Unknown
-        let unknownAttachment = NSTextAttachment()
-        unknownAttachment.image = UIImage(systemName: "circle.fill")?.withTintColor(.orange, renderingMode: .alwaysOriginal)
-        unknownAttachment.bounds = CGRect(x: 0, y: -2, width: 16, height: 16)
-        attributedString.append(NSAttributedString(attachment: unknownAttachment))
-        attributedString.append(NSAttributedString(string: " Unknown (\(model.unknownCount))", attributes: [
-            .font: UIFont.bogle(ofSize: 14, weight: .regular),
-            .foregroundColor: UIColor.black
-        ]))
-        
-        statsLabel.attributedText = attributedString
-        
-        // Try again button
-        let tryAgainAttributes: [NSAttributedString.Key: Any] = [
-            .font: UIFont.bogle(ofSize: LDSpacing.space16, weight: .regular),
-            .foregroundColor: UIColor.black,
-            .underlineStyle: NSUnderlineStyle.single.rawValue
-        ]
-        tryAgainButton.setAttributedTitle(NSAttributedString(string: model.tryAgainText, attributes: tryAgainAttributes), for: .normal)
-        
-        // Done button
-        doneButton.dataModel = LDButton.Model(
-            variant: .primary,
-            size: .large,
-            text: model.doneButtonText
-        )
-        
-        // Configure the expanded content
-        expandedLabel.text = """
-        This is the expanded content that appears when you press the expand button! 
-
-        Here's some additional information about the section:
-        • Total items scanned: 25
-        • Accuracy rate: 87%
-        • Last updated: 2 minutes ago
-        • Issues detected: \(model.missingCount + model.misplacedCount + model.unknownCount)
-
-        This content demonstrates how the bottom sheet can expand to show more detailed information while maintaining a clean, organized layout.
-        """
-        expandedLabel.font = UIFont.bogle(ofSize: 14, weight: .regular)
-        expandedLabel.textColor = .black
-        expandedLabel.numberOfLines = 0
-        expandedLabel.textAlignment = .left
-    }
-    
-    @objc private func handleExpandTapped() {
-        isExpanded.toggle()
-        
-        // Show/hide the expanded content with animation
-        UIView.animate(withDuration: 0.3) {
-            self.expandedContentView.isHidden = !self.isExpanded
-            
-            // Update button icon
-            let iconImage = self.isExpanded ? LDIcon.chevronDown.image : LDIcon.chevronUp.image
-            self.expandButton.setImage(iconImage, for: .normal)
+            // Bottom buttons (Try Again and Done)
+            buttonSection
+                .padding(.top, 16)
         }
-        
-        // Animate to the appropriate tier
-        bottomSheetableActionDelegate?.expandBottomSheet(to: isExpanded ? .second : .first)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+        .background(Color.white)
+        .cornerRadius(16, corners: [.topLeft, .topRight])
     }
     
-    @objc private func handleCollapseTapped() {
-        self.dismiss(animated: true)
+    // MARK: - Header Section
+    private var headerView: some View {
+        HStack {
+            // Expand button (chevron up)
+            Button(action: {
+                // Handle expand action - you can add functionality here
+            }) {
+                Image(systemName: "chevron.up")
+                    .foregroundColor(.black)
+                    .frame(width: 24, height: 24)
+            }
+            
+            Spacer()
+            
+            // Title
+            Text("Review section")
+                .font(.system(size: 20, weight: .bold))
+                .foregroundColor(.black)
+            
+            Spacer()
+            
+            // Close button
+            Button(action: {
+                isPresented = false
+            }) {
+                Image(systemName: "xmark")
+                    .foregroundColor(.black)
+                    .frame(width: 24, height: 24)
+            }
+        }
+        .padding(.top, 8)
     }
     
-    @objc private func handleTryAgainTapped() {
-        self.dismiss(animated: true) {
-            self.onTryAgain()
+    // MARK: - Stats Section
+    private var statsView: some View {
+        HStack(spacing: 20) {
+            // Missing items
+            statsItem(
+                icon: "exclamationmark.circle.fill",
+                iconColor: .red,
+                text: "Missing",
+                count: missingCount
+            )
+            
+            // Misplaced items
+            statsItem(
+                icon: "exclamationmark.triangle.fill",
+                iconColor: .yellow,
+                text: "Misplaced",
+                count: misplacedCount
+            )
+            
+            // Unknown items
+            statsItem(
+                icon: "circle.fill",
+                iconColor: .orange,
+                text: "Unknown",
+                count: unknownCount
+            )
+        }
+        .frame(height: 32)
+    }
+    
+    // Helper function to create individual stat items
+    private func statsItem(icon: String, iconColor: Color, text: String, count: Int) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .foregroundColor(iconColor)
+                .font(.system(size: 16))
+            
+            Text("\(text) (\(count))")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundColor(.black)
         }
     }
     
-    @objc private func handleDoneTapped() {
-        self.dismiss(animated: true) {
-            self.onDone()
+    // MARK: - Button Section
+    private var buttonSection: some View {
+        HStack(spacing: 16) {
+            // Try Again button (underlined text)
+            Button(action: {
+                isPresented = false
+                onTryAgain()
+            }) {
+                Text("Try again")
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundColor(.black)
+                    .underline()
+            }
+            .frame(width: 100, height: 40)
+            
+            // Done button (primary blue button)
+            Button(action: {
+                isPresented = false
+                onDone()
+            }) {
+                Text("Done")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity, minHeight: 40)
+                    .background(Color(red: 0/255, green: 113/255, blue: 220/255))
+                    .cornerRadius(20)
+            }
         }
     }
 }
 
-// MARK: - LDBottomSheetable
-extension ReviewSectionBottomSheet: LDBottomSheetable {
-    var contentView: UIView { view }
-    var tiersType: LDBottomSheetTierType { 
-        .twoTier(first: 180, second: 400) // Collapsed: 180pts, Expanded: 400pts
+// MARK: - Corner Radius Extension
+// This extension allows us to apply corner radius to specific corners
+extension View {
+    func cornerRadius(_ radius: CGFloat, corners: UIRectCorner) -> some View {
+        clipShape(RoundedCorner(radius: radius, corners: corners))
     }
-    var isDismissable: Bool { true }
-    var shouldHideGrabber: Bool { true }
-    var shouldIgnoreTabBar: Bool { true }
+}
+
+struct RoundedCorner: Shape {
+    var radius: CGFloat = .infinity
+    var corners: UIRectCorner = .allCorners
+
+    func path(in rect: CGRect) -> Path {
+        let path = UIBezierPath(
+            roundedRect: rect,
+            byRoundingCorners: corners,
+            cornerRadii: CGSize(width: radius, height: radius)
+        )
+        return Path(path.cgPath)
+    }
+}
+
+
+
+import SwiftUI
+
+struct ContentView: View {
+    @Environment(\.presentationMode) var presentationMode
+    @StateObject private var viewModel = ModHealthViewModel()
+    @State private var showReviewBottomSheet = false
+    
+    var body: some View {
+        ZStack {
+            Color.black.edgesIgnoringSafeArea(.all)
+            
+            if viewModel.isLoading {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+            } else if let error = viewModel.error {
+                Text("Error: \(error.localizedDescription)")
+                    .foregroundColor(.white)
+                    .padding()
+            } else {
+                VStack(spacing: 0) {
+                    // Navigation Header
+                    navigationHeader
+                    
+                    // Main Image Content
+                    mainImageContent
+                    
+                    Spacer()
+                }
+            }
+        }
+        .navigationBarHidden(true)
+        .onAppear {
+            // Delay the bottom sheet presentation slightly to ensure smooth UI
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                showReviewBottomSheet = true
+            }
+        }
+        // SwiftUI's built-in sheet modifier for bottom sheet presentation
+        .sheet(isPresented: $showReviewBottomSheet) {
+            ReviewSectionBottomSheet(
+                modHealthResponse: viewModel.modHealthResponse,
+                onTryAgain: {
+                    // Handle try again action
+                    print("Try again tapped")
+                    // You can add your retry logic here
+                },
+                onDone: {
+                    // Handle done action  
+                    print("Done tapped")
+                    // You can add navigation or completion logic here
+                },
+                isPresented: $showReviewBottomSheet
+            )
+            // This modifier makes the sheet appear from the bottom and allows partial coverage
+            .presentationDetents([.height(200)]) // Adjust height as needed
+            .presentationDragIndicator(.hidden) // Hide the drag indicator since we have custom buttons
+        }
+    }
+    
+    // MARK: - Navigation Header (unchanged)
+    private var navigationHeader: some View {
+        ZStack {
+            // Blue background matching your app's theme
+            Color(red: 0/255, green: 113/255, blue: 220/255)
+                .frame(height: 56)
+            
+            HStack {
+                // Back button
+                Button(action: {
+                    presentationMode.wrappedValue.dismiss()
+                }) {
+                    Image(systemName: "chevron.left")
+                        .foregroundColor(.white)
+                        .frame(width: 24, height: 24)
+                }
+                .padding(.leading, 16)
+                
+                Spacer()
+                
+                // Title from JSON data - using the computed property from ModHealthResponse
+                Text(viewModel.modHealthResponse?.sectionTitle ?? "Loading...")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.white)
+                
+                Spacer()
+                
+                // Help button
+                Button(action: {
+                    // Handle help action
+                }) {
+                    Image(systemName: "questionmark.circle")
+                        .foregroundColor(.white)
+                        .frame(width: 24, height: 24)
+                }
+                .padding(.trailing, 16)
+            }
+        }
+    }
+    
+    // MARK: - Main Image Content (unchanged)
+    private var mainImageContent: some View {
+        GeometryReader { geometry in
+            // Placeholder for the shelf image - you can replace this with AsyncImage
+            Rectangle()
+                .fill(Color.gray.opacity(0.3))
+                .overlay(
+                    VStack {
+                        Text("Shelf Image")
+                            .foregroundColor(.white)
+                            .font(.title)
+                        
+                        // Display image URI from JSON data if available
+                        if let imageUri = viewModel.modHealthResponse?.enhanceImageURI {
+                            Text("Image: \(imageUri)")
+                                .foregroundColor(.white.opacity(0.7))
+                                .font(.caption)
+                        }
+                    }
+                )
+                .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+    }
 }
