@@ -1,538 +1,132 @@
-// Create a new file: ModHealthResponse.swift
-import Foundation
-
-struct ModHealthResponse: Codable {
-    let capturedAt: String
-    let store: Int
-    let zone: String
-    let aisle: String
-    let section: Int
-    let modCategory: String
-    let imageId: Int
-    let planogram: String?
-    let taskID: String
-    let wuID: String
-    let enhanceImageURI: String
-    let originalImageURI: String
-    let imageIssue: [String]
-    let missingItems: [Item]
-    let misplacedItems: [Item]
-    let unknownItems: [Item]
-    let correctItems: [Item]
-    
-    enum CodingKeys: String, CodingKey {
-        case capturedAt = "captured_at"
-        case store, zone, aisle, section
-        case modCategory = "mod_category"
-        case imageId = "image_id"
-        case planogram, taskID, wuID
-        case enhanceImageURI, originalImageURI
-        case imageIssue = "image_issue"
-        case missingItems = "missing_items"
-        case misplacedItems = "misplaced_items"
-        case unknownItems = "unknown_items"
-        case correctItems = "correct_items"
+{
+  "captured_at": "2023-12-20T14:16:29Z",
+  "store": 5987,
+  "zone": "A",
+  "aisle": "15",
+  "section": 3,
+  "mod_category": "BOX AND BAG COLD CEREAL",
+  "image_id": 200471,
+  "planogram": null,
+  "taskID": "abv34fd",
+  "wuID": "e1fed90aedd3c01b2bf1a4e643f98c6629b8a8fef2c77f3724980b97f1763b7e",
+  "enhanceImageURI": "walmart.com/image_456",
+  "originalImageURI": "walmart.com/image_568",
+  "image_issue": [
+    "Satisfactory"
+  ],
+  "missing_items": [
+    {
+      "name": "FROSTED FLAKES 12OZ",
+      "upc": 4119210043,
+      "item_id": "5014113090",
+      "status": "Defined",
+      "shelf": 1,
+      "position": "1",
+      "confidence": "0.9876725751597414",
+      "price_tag": true,
+      "price_tag_details": {
+        "shelf": 1,
+        "titles": [],
+        "prices": ""
+      }
     }
-    
-    // Computed property for formatted section title
-    var sectionTitle: String {
-        return "\(zone)\(aisle) Section \(section)"
+  ],
+  "misplaced_items": [
+    {
+      "name": "FROSTED FLAKES 12OZ",
+      "upc": 4119210043,
+      "item_id": "5014113090",
+      "status": "Defined",
+      "shelf": 1,
+      "position": "1",
+      "confidence": "0.9876725751597414",
+      "x_min": 135,
+      "x_max": 602,
+      "y_min": 198,
+      "y_max": 892,
+      "price_tag": true,
+      "price_tag_details": {
+        "shelf": 1,
+        "x_min": 184,
+        "x_max": 308,
+        "y_min": 906,
+        "y_max": 980,
+        "titles": [],
+        "prices": ""
+      }
     }
+  ],
+  "unknown_items": [
+    {
+      "name": "FROSTED FLAKES 12OZ",
+      "upc": 4119210043,
+      "item_id": "5014113090",
+      "status": "Defined",
+      "shelf": 1,
+      "position": "1",
+      "confidence": "0.9876725751597414",
+      "x_min": 135,
+      "x_max": 602,
+      "y_min": 198,
+      "y_max": 892,
+      "price_tag": true,
+      "price_tag_details": {
+        "shelf": 1,
+        "x_min": 184,
+        "x_max": 308,
+        "y_min": 906,
+        "y_max": 980,
+        "titles": [],
+        "prices": ""
+      }
+    }
+  ],
+  "correct_items": [
+    {
+      "name": "FROSTED FLAKES 12OZ",
+      "upc": 4119210043,
+      "item_id": "5014113090",
+      "status": "Defined",
+      "shelf": 1,
+      "position": "1",
+      "confidence": "0.9876725751597414",
+      "x_min": 135,
+      "x_max": 602,
+      "y_min": 198,
+      "y_max": 892,
+      "price_tag": true,
+      "price_tag_details": {
+        "shelf": 1,
+        "x_min": 184,
+        "x_max": 308,
+        "y_min": 906,
+        "y_max": 980,
+        "titles": [],
+        "prices": ""
+      }
+    },
+    {
+      "name": "FROSTED FLAKES 12OZ",
+      "upc": 4119210043,
+      "item_id": "5014113090",
+      "status": "Defined",
+      "shelf": 1,
+      "position": "1",
+      "confidence": "0.990588701280475",
+      "x_min": 604,
+      "x_max": 1062,
+      "y_min": 203,
+      "y_max": 891,
+      "price_tag": true,
+      "price_tag_details": {
+        "shelf": 1,
+        "x_min": 184,
+        "x_max": 308,
+        "y_min": 906,
+        "y_max": 980,
+        "titles": [],
+        "prices": ""
+      }
+    }
+  ]
 }
-
-struct Item: Codable {
-    let name: String
-    let upc: Int64
-    let itemId: String
-    let status: String
-    let shelf: Int
-    let position: String
-    let confidence: String
-    let xMin: Int?
-    let xMax: Int?
-    let yMin: Int?
-    let yMax: Int?
-    let priceTag: Bool
-    let priceTagDetails: PriceTagDetails
-    
-    enum CodingKeys: String, CodingKey {
-        case name, upc, status, shelf, position, confidence
-        case itemId = "item_id"
-        case xMin = "x_min"
-        case xMax = "x_max"
-        case yMin = "y_min"
-        case yMax = "y_max"
-        case priceTag = "price_tag"
-        case priceTagDetails = "price_tag_details"
-    }
-}
-
-struct PriceTagDetails: Codable {
-    let shelf: Int
-    let xMin: Int?
-    let xMax: Int?
-    let yMin: Int?
-    let yMax: Int?
-    let titles: [String]
-    let prices: String
-    
-    enum CodingKeys: String, CodingKey {
-        case shelf, titles, prices
-        case xMin = "x_min"
-        case xMax = "x_max"
-        case yMin = "y_min"
-        case yMax = "y_max"
-    }
-}
-
-
-
-
-// Create a new file: ModHealthViewModel.swift
-import Foundation
-import Combine
-
-class ModHealthViewModel: ObservableObject {
-    @Published var modHealthResponse: ModHealthResponse?
-    @Published var isLoading = true
-    @Published var error: Error?
-    
-    init() {
-        loadResponseData()
-    }
-    
-    func loadResponseData() {
-        guard let url = Bundle.main.url(forResource: "response", withExtension: "json") else {
-            self.error = NSError(domain: "ModHealth", code: 404, userInfo: [NSLocalizedDescriptionKey: "response.json file not found"])
-            self.isLoading = false
-            return
-        }
-        
-        do {
-            let data = try Data(contentsOf: url)
-            let decoder = JSONDecoder()
-            self.modHealthResponse = try decoder.decode(ModHealthResponse.self, from: data)
-            self.isLoading = false
-        } catch {
-            self.error = error
-            self.isLoading = false
-            print("Error loading JSON: \(error)")
-        }
-    }
-}
-
-
-
-
-import UIKit
-@_implementationOnly import LivingDesign
-@_implementationOnly import Bogle
-
-final class ReviewSectionBottomSheet: LDRootViewController {
-    weak var bottomSheetableActionDelegate: LDBottomSheetableActionDelegate?
-    
-    struct Model {
-        let title = "Review section"
-        let missingCount: Int
-        let misplacedCount: Int
-        let unknownCount: Int
-        let tryAgainText = "Try again"
-        let doneButtonText = "Done"
-        
-        init(missingCount: Int = 0, misplacedCount: Int = 0, unknownCount: Int = 0) {
-            self.missingCount = missingCount
-            self.misplacedCount = misplacedCount
-            self.unknownCount = unknownCount
-        }
-    }
-    
-    var model: Model {
-        didSet {
-            applyModel()
-        }
-    }
-    
-    private let expandButton = UIButton()
-    private let collapseButton = UIButton()
-    private let titleLabel = LDLabel(style: .headingMedium)
-    private let statsContainer = UIView()
-    private let statsLabel = UILabel()
-    private let divider = LDDivider(style: .horizontal)
-    private let buttonStackView = UIStackView()
-    private let tryAgainButton = UIButton()
-    private let doneButton = LDButton(variant: .primary, size: .large)
-    
-    // Callbacks
-    private let onTryAgain: () -> Void
-    private let onDone: () -> Void
-    
-    init(model: Model, onTryAgain: @escaping () -> Void, onDone: @escaping () -> Void) {
-        self.model = model
-        self.onTryAgain = onTryAgain
-        self.onDone = onDone
-        super.init(nibName: nil, bundle: nil)
-        applyModel()
-    }
-    
-    override func constructView() {
-        super.constructView()
-        
-        expandButton.addTarget(self, action: #selector(handleExpandTapped), for: .primaryActionTriggered)
-        collapseButton.addTarget(self, action: #selector(handleCollapseTapped), for: .primaryActionTriggered)
-        tryAgainButton.addTarget(self, action: #selector(handleTryAgainTapped), for: .primaryActionTriggered)
-        doneButton.addTarget(self, action: #selector(handleDoneTapped), for: .primaryActionTriggered)
-        
-        // Configure button stack view
-        buttonStackView.axis = .horizontal
-        buttonStackView.spacing = LDSpacing.space16
-        buttonStackView.distribution = .fill
-        buttonStackView.alignment = .fill
-    }
-    
-    override func constructSubviewHierarchy() {
-        super.constructSubviewHierarchy()
-        
-        view.addAutoLayoutSubview(expandButton)
-        view.addAutoLayoutSubview(collapseButton)
-        view.addAutoLayoutSubview(titleLabel)
-        view.addAutoLayoutSubview(statsContainer)
-        statsContainer.addAutoLayoutSubview(statsLabel)
-        view.addAutoLayoutSubview(divider)
-        view.addAutoLayoutSubview(buttonStackView)
-        buttonStackView.addArrangedSubview(tryAgainButton)
-        buttonStackView.addArrangedSubview(doneButton)
-    }
-    
-    override func constructSubviewLayoutConstraints() {
-        super.constructSubviewLayoutConstraints()
-        
-        NSLayoutConstraint.activate([
-            // Expand/Collapse buttons - moved up
-            expandButton.topAnchor.constraint(equalTo: view.topAnchor, constant: LDSpacing.space8),
-            expandButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
-            expandButton.widthAnchor.constraint(equalToConstant: LDSpacing.space24),
-            expandButton.heightAnchor.constraint(equalToConstant: LDSpacing.space24),
-            
-            collapseButton.topAnchor.constraint(equalTo: view.topAnchor, constant: LDSpacing.space8),
-            collapseButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
-            collapseButton.widthAnchor.constraint(equalToConstant: LDSpacing.space24),
-            collapseButton.heightAnchor.constraint(equalToConstant: LDSpacing.space24),
-            
-            // Title - moved up
-            titleLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: LDSpacing.space8),
-            titleLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            
-            // Stats container
-            statsContainer.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: LDSpacing.space16),
-            statsContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
-            statsContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
-            statsContainer.heightAnchor.constraint(equalToConstant: LDSpacing.space32),
-            
-            statsLabel.centerXAnchor.constraint(equalTo: statsContainer.centerXAnchor),
-            statsLabel.centerYAnchor.constraint(equalTo: statsContainer.centerYAnchor),
-            
-            // Divider
-            divider.topAnchor.constraint(equalTo: statsContainer.bottomAnchor, constant: LDSpacing.space16),
-            divider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            divider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            divider.heightAnchor.constraint(equalToConstant: 1),
-            
-            // Button stack (horizontal)
-            buttonStackView.topAnchor.constraint(equalTo: divider.bottomAnchor, constant: LDSpacing.space16),
-            buttonStackView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
-            buttonStackView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
-            buttonStackView.heightAnchor.constraint(equalToConstant: LDSpacing.space40),
-            buttonStackView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -LDSpacing.space16),
-            
-            // Try again button width
-            tryAgainButton.widthAnchor.constraint(equalToConstant: 100),
-            
-            // Done button takes remaining space
-            doneButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 200)
-        ])
-    }
-    
-    private func applyModel() {
-        // Expand/Collapse buttons
-        expandButton.setImage(LDIcon.chevronUp.image, for: .normal)
-        collapseButton.setImage(LDIcon.close.image, for: .normal)
-        
-        // Title
-        titleLabel.font = UIFont.bogle(ofSize: LDSpacing.space20, weight: .bold)
-        titleLabel.textAlignment = .center
-        titleLabel.text = model.title
-        
-        // Stats
-        let attributedString = NSMutableAttributedString()
-        
-        // Missing
-        let missingAttachment = NSTextAttachment()
-        missingAttachment.image = UIImage(systemName: "exclamationmark.circle.fill")?.withTintColor(.red, renderingMode: .alwaysOriginal)
-        missingAttachment.bounds = CGRect(x: 0, y: -2, width: 16, height: 16)
-        attributedString.append(NSAttributedString(attachment: missingAttachment))
-        attributedString.append(NSAttributedString(string: " Missing (\(model.missingCount))  ", attributes: [
-            .font: UIFont.bogle(ofSize: 14, weight: .regular),
-            .foregroundColor: UIColor.black
-        ]))
-        
-        // Misplaced
-        let misplacedAttachment = NSTextAttachment()
-        misplacedAttachment.image = UIImage(systemName: "exclamationmark.triangle.fill")?.withTintColor(.systemYellow, renderingMode: .alwaysOriginal)
-        misplacedAttachment.bounds = CGRect(x: 0, y: -2, width: 16, height: 16)
-        attributedString.append(NSAttributedString(attachment: misplacedAttachment))
-        attributedString.append(NSAttributedString(string: " Misplaced (\(model.misplacedCount))  ", attributes: [
-            .font: UIFont.bogle(ofSize: 14, weight: .regular),
-            .foregroundColor: UIColor.black
-        ]))
-        
-        // Unknown
-        let unknownAttachment = NSTextAttachment()
-        unknownAttachment.image = UIImage(systemName: "circle.fill")?.withTintColor(.orange, renderingMode: .alwaysOriginal)
-        unknownAttachment.bounds = CGRect(x: 0, y: -2, width: 16, height: 16)
-        attributedString.append(NSAttributedString(attachment: unknownAttachment))
-        attributedString.append(NSAttributedString(string: " Unknown (\(model.unknownCount))", attributes: [
-            .font: UIFont.bogle(ofSize: 14, weight: .regular),
-            .foregroundColor: UIColor.black
-        ]))
-        
-        statsLabel.attributedText = attributedString
-        
-        // Try again button
-        let tryAgainAttributes: [NSAttributedString.Key: Any] = [
-            .font: UIFont.bogle(ofSize: LDSpacing.space16, weight: .regular),
-            .foregroundColor: UIColor.black,
-            .underlineStyle: NSUnderlineStyle.single.rawValue
-        ]
-        tryAgainButton.setAttributedTitle(NSAttributedString(string: model.tryAgainText, attributes: tryAgainAttributes), for: .normal)
-        
-        // Done button
-        doneButton.dataModel = LDButton.Model(
-            variant: .primary,
-            size: .large,
-            text: model.doneButtonText
-        )
-    }
-    
-    @objc private func handleExpandTapped() {
-        // Handle expand
-    }
-    
-    @objc private func handleCollapseTapped() {
-        self.dismiss(animated: true)
-    }
-    
-    @objc private func handleTryAgainTapped() {
-        self.dismiss(animated: true) {
-            self.onTryAgain()
-        }
-    }
-    
-    @objc private func handleDoneTapped() {
-        self.dismiss(animated: true) {
-            self.onDone()
-        }
-    }
-}
-
-// MARK: - LDBottomSheetable
-extension ReviewSectionBottomSheet: LDBottomSheetable {
-    var contentView: UIView { view }
-    var tiersType: LDBottomSheetTierType { .oneTierAutomatic }
-    var isDismissable: Bool { true }
-    var shouldHideGrabber: Bool { true }
-    var shouldIgnoreTabBar: Bool { true }
-}
-
-
-
-
-
-import SwiftUI
-@_implementationOnly import LivingDesign
-
-struct ReviewSectionBottomSheetPresenter: UIViewControllerRepresentable {
-    @Binding var isPresented: Bool
-    let modHealthResponse: ModHealthResponse?
-    let onTryAgain: () -> Void
-    let onDone: () -> Void
-    
-    func makeUIViewController(context: Context) -> UIViewController {
-        let viewController = UIViewController()
-        viewController.view.backgroundColor = .clear
-        return viewController
-    }
-    
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        if isPresented && uiViewController.presentedViewController == nil {
-            let model = ReviewSectionBottomSheet.Model(
-                missingCount: modHealthResponse?.missingItems.count ?? 0,
-                misplacedCount: modHealthResponse?.misplacedItems.count ?? 0,
-                unknownCount: modHealthResponse?.unknownItems.count ?? 0
-            )
-            
-            let bottomSheet = ReviewSectionBottomSheet(
-                model: model,
-                onTryAgain: {
-                    isPresented = false
-                    onTryAgain()
-                },
-                onDone: {
-                    isPresented = false
-                    onDone()
-                }
-            )
-            
-            if let navigationController = uiViewController.navigationController {
-                navigationController.presentBottomSheet(bottomSheet, as: .modal)
-            } else {
-                uiViewController.presentBottomSheet(bottomSheet, as: .modal)
-            }
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                if let presented = uiViewController.presentedViewController {
-                    presented.presentationController?.delegate = context.coordinator
-                }
-            }
-        }
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(isPresented: $isPresented)
-    }
-    
-    class Coordinator: NSObject, UIAdaptivePresentationControllerDelegate {
-        @Binding var isPresented: Bool
-        
-        init(isPresented: Binding<Bool>) {
-            _isPresented = isPresented
-        }
-        
-        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-            isPresented = false
-        }
-    }
-}
-
-
-
-
-
-import SwiftUI
-@_implementationOnly import LivingDesign
-@_implementationOnly import Bogle
-
-struct ContentView: View {
-    @Environment(\.presentationMode) var presentationMode
-    @StateObject private var viewModel = ModHealthViewModel()
-    @State private var showReviewBottomSheet = false
-    
-    var body: some View {
-        ZStack {
-            Color.black.edgesIgnoringSafeArea(.all)
-            
-            if viewModel.isLoading {
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-            } else if let error = viewModel.error {
-                Text("Error: \(error.localizedDescription)")
-                    .foregroundColor(.white)
-                    .padding()
-            } else {
-                VStack(spacing: 0) {
-                    // Navigation Header
-                    navigationHeader
-                    
-                    // Main Image Content
-                    mainImageContent
-                    
-                    Spacer()
-                }
-                
-                // Bottom sheet presenter
-                ReviewSectionBottomSheetPresenter(
-                    isPresented: $showReviewBottomSheet,
-                    modHealthResponse: viewModel.modHealthResponse,
-                    onTryAgain: {
-                        // Handle try again action
-                        print("Try again tapped")
-                    },
-                    onDone: {
-                        // Handle done action
-                        print("Done tapped")
-                    }
-                )
-                .frame(width: 0, height: 0)
-            }
-        }
-        .navigationBarHidden(true)
-        .onAppear {
-            // Delay the bottom sheet presentation
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                showReviewBottomSheet = true
-            }
-        }
-    }
-    
-    private var navigationHeader: some View {
-        ZStack {
-            // Blue background
-            Color(red: 0/255, green: 113/255, blue: 220/255)
-                .frame(height: 56)
-            
-            HStack {
-                // Back button
-                Button(action: {
-                    presentationMode.wrappedValue.dismiss()
-                }) {
-                    Image(systemName: "chevron.left")
-                        .foregroundColor(.white)
-                        .frame(width: 24, height: 24)
-                }
-                .padding(.leading, 16)
-                
-                Spacer()
-                
-                // Title from JSON data
-                Text(viewModel.modHealthResponse?.sectionTitle ?? "Loading...")
-                    .font(Font(UIFont.bogle(ofSize: 16, weight: .bold)))
-                    .foregroundColor(.white)
-                
-                Spacer()
-                
-                // Help button
-                Button(action: {
-                    // Handle help action
-                }) {
-                    Image(systemName: "questionmark.circle")
-                        .foregroundColor(.white)
-                        .frame(width: 24, height: 24)
-                }
-                .padding(.trailing, 16)
-            }
-        }
-    }
-    
-    private var mainImageContent: some View {
-        GeometryReader { geometry in
-            // Placeholder rectangle for now
-            Rectangle()
-                .fill(Color.gray.opacity(0.3))
-                .overlay(
-                    VStack {
-                        Text("Shelf Image")
-                            .foregroundColor(.white)
-                            .font(.title)
-                        
-                        // You can also load the actual image from the JSON if needed
-                        if let imageUri = viewModel.modHealthResponse?.enhanceImageURI {
-                            Text("Image: \(imageUri)")
-                                .foregroundColor(.white.opacity(0.7))
-                                .font(.caption)
-                        }
-                    }
-                )
-                .frame(width: geometry.size.width, height: geometry.size.height)
-        }
-    }
-}
-
