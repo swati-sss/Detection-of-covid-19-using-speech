@@ -1,89 +1,109 @@
 import SwiftUI
 
-// MARK: - Bottom Sheet State Management
-enum BottomSheetState {
+// MARK: - View State Management
+// This enum represents the three different states of our bottom sheet
+enum BottomSheetViewState {
     case collapsed          // Initial summary view
-    case filterSelection    // Filter checkboxes view  
-    case detailedList      // Full item details view
+    case filterSelection    // Expanded view with filter checkboxes
+    case detailedView      // Fully expanded with item details
 }
 
-// MARK: - Item Category for Filtering
-enum ItemCategory: String, CaseIterable {
-    case missing = "Missing Items"
-    case misplaced = "Misplaced Items" 
-    case unknown = "Unknown Items"
-    case correct = "Correct Items"
-}
-
-// MARK: - Enhanced SwiftUI Bottom Sheet
+// MARK: - Progressive Disclosure Bottom Sheet
 struct ReviewSectionBottomSheet: View {
     let modHealthResponse: ModHealthResponse?
     let onTryAgain: () -> Void
     let onDone: () -> Void
     @Binding var isPresented: Bool
     
-    // State management for the three different views
-    @State private var currentState: BottomSheetState = .collapsed
-    @State private var selectedFilters: Set<ItemCategory> = []
+    // State management for the progressive disclosure
+    @State private var viewState: BottomSheetViewState = .collapsed
+    @State private var selectedFilters: Set<String> = []
     
-    // Computed properties for accessing item counts from the JSON data
-    private var missingCount: Int {
-        modHealthResponse?.missingItems.count ?? 0
-    }
+    // Computed properties for easier access to data
+    private var missingCount: Int { modHealthResponse?.missingItems.count ?? 0 }
+    private var misplacedCount: Int { modHealthResponse?.misplacedItems.count ?? 0 }
+    private var unknownCount: Int { modHealthResponse?.unknownItems.count ?? 0 }
+    private var correctCount: Int { modHealthResponse?.correctItems.count ?? 0 }
     
-    private var misplacedCount: Int {
-        modHealthResponse?.misplacedItems.count ?? 0
-    }
-    
-    private var unknownCount: Int {
-        modHealthResponse?.unknownItems.count ?? 0
-    }
-    
-    private var correctCount: Int {
-        modHealthResponse?.correctItems.count ?? 0
+    // Available filter options with their counts
+    private var filterOptions: [(key: String, label: String, count: Int)] {
+        [
+            ("missing", "Missing Items", missingCount),
+            ("misplaced", "Misplaced Items", misplacedCount),
+            ("unknown", "Unknown Items", unknownCount),
+            ("correct", "Correct Items", correctCount)
+        ]
     }
     
     var body: some View {
         VStack(spacing: 0) {
-            // Header section that adapts based on current state
+            // Dynamic header that changes based on current state
             headerView
             
-            // Main content area that changes based on state
-            mainContentView
+            // Stats summary - always visible for context
+            statsView
+                .padding(.top, 16)
             
-            // Footer with action buttons
-            footerView
+            // Filter section - appears when expanded beyond collapsed state
+            if viewState != .collapsed {
+                filterSection
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+            
+            // Detailed items section - appears when filters are selected
+            if viewState == .detailedView && !selectedFilters.isEmpty {
+                detailedItemsSection
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+            
+            // Divider before buttons
+            Rectangle()
+                .fill(Color.gray.opacity(0.3))
+                .frame(height: 1)
+                .padding(.top, 16)
+            
+            // Action buttons - always at the bottom
+            buttonSection
+                .padding(.top, 16)
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 16)
         .background(Color.white)
         .cornerRadius(16, corners: [.topLeft, .topRight])
-        .animation(.easeInOut(duration: 0.3), value: currentState) // Smooth transitions between states
+        .animation(.easeInOut(duration: 0.3), value: viewState)
+        .animation(.easeInOut(duration: 0.3), value: selectedFilters)
+        // Watch for filter changes to automatically transition to detailed view
+        .onChange(of: selectedFilters) { newFilters in
+            if !newFilters.isEmpty && viewState == .filterSelection {
+                viewState = .detailedView
+            } else if newFilters.isEmpty && viewState == .detailedView {
+                viewState = .filterSelection
+            }
+        }
     }
     
-    // MARK: - Header Section
+    // MARK: - Header Section with Dynamic Button Logic
     private var headerView: some View {
         HStack {
-            // Expand/Collapse button - changes behavior based on state
+            // Dynamic expand/collapse button based on current state
             Button(action: handleExpandCollapseAction) {
                 Image(systemName: expandCollapseIconName)
                     .foregroundColor(.black)
                     .frame(width: 24, height: 24)
+                    .rotationEffect(.degrees(viewState == .collapsed ? 0 : 180))
+                    .animation(.easeInOut(duration: 0.3), value: viewState)
             }
             
             Spacer()
             
-            // Title remains consistent across all states
             Text("Review section")
                 .font(.system(size: 20, weight: .bold))
                 .foregroundColor(.black)
             
             Spacer()
             
-            // Close button always dismisses the entire bottom sheet
-            Button(action: {
-                isPresented = false
-            }) {
+            // Close button - always closes the entire bottom sheet
+            Button(action: { isPresented = false }) {
                 Image(systemName: "xmark")
                     .foregroundColor(.black)
                     .frame(width: 24, height: 24)
@@ -92,144 +112,158 @@ struct ReviewSectionBottomSheet: View {
         .padding(.top, 8)
     }
     
-    // MARK: - Dynamic Main Content Based on State
-    @ViewBuilder
-    private var mainContentView: some View {
-        switch currentState {
-        case .collapsed:
-            collapsedContentView
-        case .filterSelection:
-            filterSelectionContentView
-        case .detailedList:
-            detailedListContentView
-        }
-    }
-    
-    // MARK: - Collapsed State Content (Initial Summary View)
-    private var collapsedContentView: some View {
-        VStack(spacing: 16) {
-            // Stats summary that shows overall section health
-            statsView
-                .padding(.top, 16)
-            
-            // Information message about loading time
-            VStack {
-                HStack {
-                    Image(systemName: "info.circle")
-                        .foregroundColor(.blue)
-                    Text("Display found/missing items")
-                        .font(.system(size: 14, weight: .medium))
-                    Spacer()
-                }
-                Text("This will take ~2 mins to appear")
-                    .font(.system(size: 12))
-                    .foregroundColor(.gray)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(12)
-            .background(Color.blue.opacity(0.1))
-            .cornerRadius(8)
-        }
-    }
-    
-    // MARK: - Filter Selection State Content  
-    private var filterSelectionContentView: some View {
-        VStack(spacing: 16) {
-            // Keep stats visible for context
-            statsView
-                .padding(.top, 16)
-            
-            // Divider to separate summary from filters
-            Rectangle()
-                .fill(Color.gray.opacity(0.3))
-                .frame(height: 1)
-            
-            // Filter section where users choose what to examine
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Filter By")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                
-                // Checkbox options for each item category
-                filterCheckbox(for: .missing, count: missingCount)
-                filterCheckbox(for: .misplaced, count: misplacedCount)  
-                filterCheckbox(for: .unknown, count: unknownCount)
-                filterCheckbox(for: .correct, count: correctCount)
-            }
-        }
-    }
-    
-    // MARK: - Detailed List State Content
-    private var detailedListContentView: some View {
-        VStack(spacing: 16) {
-            // Stats and filter section remain visible at top
-            statsView
-                .padding(.top, 16)
-            
-            Rectangle()
-                .fill(Color.gray.opacity(0.3))
-                .frame(height: 1)
-            
-            // Filter section - now shows selected filters
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Filter By")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                
-                filterCheckbox(for: .missing, count: missingCount)
-                filterCheckbox(for: .misplaced, count: misplacedCount)
-                filterCheckbox(for: .unknown, count: unknownCount) 
-                filterCheckbox(for: .correct, count: correctCount)
-            }
-            
-            Rectangle()
-                .fill(Color.gray.opacity(0.3))
-                .frame(height: 1)
-            
-            // Scrollable list of actual product details from JSON
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    // Show items for each selected filter category
-                    if selectedFilters.contains(.missing) {
-                        itemCategorySection(title: "Missing Items (\(missingCount))", 
-                                          items: modHealthResponse?.missingItems ?? [], 
-                                          iconColor: .red)
-                    }
-                    
-                    if selectedFilters.contains(.misplaced) {
-                        itemCategorySection(title: "Misplaced Items (\(misplacedCount))", 
-                                          items: modHealthResponse?.misplacedItems ?? [], 
-                                          iconColor: .yellow)
-                    }
-                    
-                    if selectedFilters.contains(.unknown) {
-                        itemCategorySection(title: "Unknown Items (\(unknownCount))", 
-                                          items: modHealthResponse?.unknownItems ?? [], 
-                                          iconColor: .orange)
-                    }
-                    
-                    if selectedFilters.contains(.correct) {
-                        itemCategorySection(title: "Correct Items (\(correctCount))", 
-                                          items: modHealthResponse?.correctItems ?? [], 
-                                          iconColor: .green)
-                    }
-                }
-            }
-            .frame(maxHeight: 300) // Limit height so bottom sheet doesn't become too large
-        }
-    }
-    
-    // MARK: - Stats Summary View (Used Across All States)
+    // MARK: - Stats Summary Section
     private var statsView: some View {
         HStack(spacing: 20) {
             statsItem(icon: "exclamationmark.circle.fill", iconColor: .red, text: "Missing", count: missingCount)
-            statsItem(icon: "exclamationmark.triangle.fill", iconColor: .yellow, text: "Misplaced", count: misplacedCount)
+            statsItem(icon: "exclamationmark.triangle.fill", iconColor: .yellow, text: "Misplaced", count: misplacedCount)  
             statsItem(icon: "circle.fill", iconColor: .orange, text: "Unknown", count: unknownCount)
         }
         .frame(height: 32)
     }
     
-    // MARK: - Individual Stat Item Helper
+    // MARK: - Filter Selection Section
+    private var filterSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Filter By")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(.black)
+                .padding(.top, 16)
+            
+            // Dynamic list of filter checkboxes based on available data
+            ForEach(filterOptions, id: \.key) { option in
+                FilterCheckboxRow(
+                    isSelected: selectedFilters.contains(option.key),
+                    label: option.label,
+                    count: option.count,
+                    onToggle: { toggleFilter(option.key) }
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    
+    // MARK: - Detailed Items Section
+    private var detailedItemsSection: some View {
+        ScrollView {
+            LazyVStack(spacing: 16) {
+                // Show items for each selected filter category
+                ForEach(selectedFilters.sorted(), id: \.self) { filterKey in
+                    if let items = getItemsForFilter(filterKey), !items.isEmpty {
+                        ItemCategorySection(
+                            title: getCategoryTitle(for: filterKey),
+                            items: items,
+                            iconColor: getCategoryColor(for: filterKey)
+                        )
+                    }
+                }
+            }
+            .padding(.top, 16)
+        }
+        .frame(maxHeight: 300) // Limit height to prevent excessive growth
+    }
+    
+    // MARK: - Action Buttons Section
+    private var buttonSection: some View {
+        HStack(spacing: 16) {
+            Button(action: {
+                isPresented = false
+                onTryAgain()
+            }) {
+                Text("Try again")
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundColor(.black)
+                    .underline()
+            }
+            .frame(width: 100, height: 40)
+            
+            Button(action: {
+                isPresented = false
+                onDone()
+            }) {
+                Text("Done")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity, minHeight: 40)
+                    .background(Color(red: 0/255, green: 113/255, blue: 220/255))
+                    .cornerRadius(20)
+            }
+        }
+    }
+    
+    // MARK: - Helper Functions
+    
+    // Determines the correct icon for expand/collapse based on current state
+    private var expandCollapseIconName: String {
+        switch viewState {
+        case .collapsed:
+            return "chevron.up"
+        case .filterSelection, .detailedView:
+            return "chevron.down"
+        }
+    }
+    
+    // Handles the expand/collapse button logic for state transitions
+    private func handleExpandCollapseAction() {
+        switch viewState {
+        case .collapsed:
+            viewState = .filterSelection
+        case .filterSelection, .detailedView:
+            viewState = .collapsed
+            selectedFilters.removeAll() // Clear selections when collapsing
+        }
+    }
+    
+    // Manages filter selection state
+    private func toggleFilter(_ filterKey: String) {
+        if selectedFilters.contains(filterKey) {
+            selectedFilters.remove(filterKey)
+        } else {
+            selectedFilters.insert(filterKey)
+        }
+    }
+    
+    // Retrieves items from JSON data based on filter selection
+    private func getItemsForFilter(_ filterKey: String) -> [Item]? {
+        guard let response = modHealthResponse else { return nil }
+        
+        switch filterKey {
+        case "missing":
+            return response.missingItems
+        case "misplaced":
+            return response.misplacedItems
+        case "unknown":
+            return response.unknownItems
+        case "correct":
+            return response.correctItems
+        default:
+            return nil
+        }
+    }
+    
+    // Gets display title for each category
+    private func getCategoryTitle(for filterKey: String) -> String {
+        switch filterKey {
+        case "missing": return "Missing Items"
+        case "misplaced": return "Misplaced Items"
+        case "unknown": return "Unknown Items"
+        case "correct": return "Correct Items"
+        default: return ""
+        }
+    }
+    
+    // Gets appropriate color for each category
+    private func getCategoryColor(for filterKey: String) -> Color {
+        switch filterKey {
+        case "missing": return .red
+        case "misplaced": return .yellow
+        case "unknown": return .orange
+        case "correct": return .green
+        default: return .gray
+        }
+    }
+    
+    // Helper function for creating consistent stat items
     private func statsItem(icon: String, iconColor: Color, text: String, count: Int) -> some View {
         HStack(spacing: 4) {
             Image(systemName: icon)
@@ -241,73 +275,81 @@ struct ReviewSectionBottomSheet: View {
                 .foregroundColor(.black)
         }
     }
+}
+
+// MARK: - Filter Checkbox Row Component
+struct FilterCheckboxRow: View {
+    let isSelected: Bool
+    let label: String
+    let count: Int
+    let onToggle: () -> Void
     
-    // MARK: - Filter Checkbox Component
-    private func filterCheckbox(for category: ItemCategory, count: Int) -> some View {
-        Button(action: {
-            toggleFilter(category)
-        }) {
-            HStack {
-                // Checkbox visual state
-                Image(systemName: selectedFilters.contains(category) ? "checkmark.square.fill" : "square")
-                    .foregroundColor(selectedFilters.contains(category) ? .blue : .gray)
-                    .font(.system(size: 18))
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 12) {
+                // Custom checkbox using SF Symbols
+                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                    .foregroundColor(isSelected ? .blue : .gray)
+                    .font(.system(size: 20))
                 
-                Text("\(category.rawValue) (\(count))")
-                    .font(.system(size: 14))
+                Text("\(label) (\(count))")
+                    .font(.system(size: 16, weight: .regular))
                     .foregroundColor(.black)
                 
                 Spacer()
             }
         }
-        .buttonStyle(PlainButtonStyle()) // Remove default button styling
+        .buttonStyle(PlainButtonStyle()) // Prevents default button styling
     }
+}
+
+// MARK: - Item Category Section Component
+struct ItemCategorySection: View {
+    let title: String
+    let items: [Item]
+    let iconColor: Color
     
-    // MARK: - Item Category Section (For Detailed View)
-    private func itemCategorySection(title: String, items: [Item], iconColor: Color) -> some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Section header with colored dot indicator
+            // Section header with colored indicator
             HStack {
-                Image(systemName: "circle.fill")
-                    .foregroundColor(iconColor)
-                    .font(.system(size: 8))
+                Circle()
+                    .fill(iconColor)
+                    .frame(width: 8, height: 8)
                 
                 Text(title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundColor(.black)
-            }
-            .padding(.vertical, 8)
-            
-            // List individual items from the JSON data
-            ForEach(items.indices, id: \.self) { index in
-                itemDetailRow(item: items[index])
                 
-                // Add divider between items except for the last one
-                if index < items.count - 1 {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.2))
-                        .frame(height: 1)
-                        .padding(.leading, 16)
-                }
+                Spacer()
+            }
+            
+            // List of items in this category
+            ForEach(items, id: \.upc) { item in
+                ItemDetailRow(item: item)
+                    .padding(.leading, 16) // Indent items under category header
             }
         }
-        .padding(.vertical, 8)
     }
+}
+
+// MARK: - Individual Item Detail Row Component
+struct ItemDetailRow: View {
+    let item: Item
     
-    // MARK: - Individual Item Detail Row
-    private func itemDetailRow(item: Item) -> some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Product name from JSON
+            // Product name (truncated if too long)
             Text(item.name)
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(.black)
                 .lineLimit(2)
             
-            // Product details in a grid-like layout
+            // UPC and position information from JSON data
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("UPC:")
-                        .font(.system(size: 12))
+                        .font(.system(size: 12, weight: .regular))
                         .foregroundColor(.gray)
                     Text("\(item.upc)")
                         .font(.system(size: 12, weight: .medium))
@@ -316,9 +358,9 @@ struct ReviewSectionBottomSheet: View {
                 
                 Spacer()
                 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .trailing, spacing: 2) {
                     Text("Expected:")
-                        .font(.system(size: 12))
+                        .font(.system(size: 12, weight: .regular))
                         .foregroundColor(.gray)
                     Text("Position \(item.position)")
                         .font(.system(size: 12, weight: .medium))
@@ -326,86 +368,14 @@ struct ReviewSectionBottomSheet: View {
                 }
             }
         }
-        .padding(.horizontal, 16)
         .padding(.vertical, 8)
-    }
-    
-    // MARK: - Footer Action Buttons
-    private var footerView: some View {
-        VStack(spacing: 16) {
-            Rectangle()
-                .fill(Color.gray.opacity(0.3))
-                .frame(height: 1)
-            
-            HStack(spacing: 16) {
-                // Try Again button (consistent across all states)
-                Button(action: {
-                    isPresented = false
-                    onTryAgain()
-                }) {
-                    Text("Try again")
-                        .font(.system(size: 16, weight: .regular))
-                        .foregroundColor(.black)
-                        .underline()
-                }
-                .frame(width: 100, height: 40)
-                
-                // Done button (consistent across all states)
-                Button(action: {
-                    isPresented = false
-                    onDone()
-                }) {
-                    Text("Done")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity, minHeight: 40)
-                        .background(Color(red: 0/255, green: 113/255, blue: 220/255))
-                        .cornerRadius(20)
-                }
-            }
-        }
-    }
-    
-    // MARK: - Helper Functions for State Management
-    
-    private var expandCollapseIconName: String {
-        switch currentState {
-        case .collapsed:
-            return "chevron.up"      // Show expand icon when collapsed
-        case .filterSelection, .detailedList:
-            return "chevron.down"    // Show collapse icon when expanded
-        }
-    }
-    
-    private func handleExpandCollapseAction() {
-        switch currentState {
-        case .collapsed:
-            // First tap expands to show filters
-            currentState = .filterSelection
-        case .filterSelection, .detailedList:
-            // Subsequent taps collapse back to summary
-            currentState = .collapsed
-            selectedFilters.removeAll() // Clear selections when collapsing
-        }
-    }
-    
-    private func toggleFilter(_ category: ItemCategory) {
-        if selectedFilters.contains(category) {
-            selectedFilters.remove(category)
-        } else {
-            selectedFilters.insert(category)
-        }
-        
-        // Automatically transition to detailed view when filters are selected
-        if !selectedFilters.isEmpty && currentState == .filterSelection {
-            currentState = .detailedList
-        } else if selectedFilters.isEmpty && currentState == .detailedList {
-            currentState = .filterSelection
-        }
+        .padding(.horizontal, 12)
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(8)
     }
 }
 
-// MARK: - Corner Radius Extension (Same as before)
+// MARK: - Corner Radius Extension (unchanged)
 extension View {
     func cornerRadius(_ radius: CGFloat, corners: UIRectCorner) -> some View {
         clipShape(RoundedCorner(radius: radius, corners: corners))
@@ -423,5 +393,251 @@ struct RoundedCorner: Shape {
             cornerRadii: CGSize(width: radius, height: radius)
         )
         return Path(path.cgPath)
+    }
+}
+
+
+
+
+
+
+import SwiftUI
+
+struct ContentView: View {
+    @Environment(\.presentationMode) var presentationMode
+    @StateObject private var viewModel = ModHealthViewModel()
+    @State private var showReviewBottomSheet = false
+    
+    var body: some View {
+        ZStack {
+            Color.black.edgesIgnoringSafeArea(.all)
+            
+            if viewModel.isLoading {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+            } else if let error = viewModel.error {
+                Text("Error: \(error.localizedDescription)")
+                    .foregroundColor(.white)
+                    .padding()
+            } else {
+                VStack(spacing: 0) {
+                    // Navigation Header
+                    navigationHeader
+                    
+                    // Main Image Content with overlay for interaction hints
+                    ZStack {
+                        mainImageContent
+                        
+                        // Optional: Add a subtle overlay hint when bottom sheet appears
+                        if showReviewBottomSheet {
+                            VStack {
+                                Spacer()
+                                Text("Display found/missing items")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(Color.black.opacity(0.7))
+                                    .cornerRadius(8)
+                                Text("This will take ~2 mins to appear")
+                                    .font(.system(size: 12, weight: .regular))
+                                    .foregroundColor(.white.opacity(0.8))
+                                    .padding(.top, 4)
+                            }
+                            .padding(.bottom, 250) // Account for bottom sheet space
+                            .transition(.opacity)
+                        }
+                    }
+                    
+                    Spacer()
+                }
+            }
+        }
+        .navigationBarHidden(true)
+        .onAppear {
+            // Delay the bottom sheet presentation to ensure smooth initial load
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                showReviewBottomSheet = true
+            }
+        }
+        // Dynamic bottom sheet with intelligent sizing
+        .sheet(isPresented: $showReviewBottomSheet) {
+            DynamicBottomSheetWrapper(
+                modHealthResponse: viewModel.modHealthResponse,
+                onTryAgain: {
+                    print("Try again tapped - implementing retry logic")
+                    // Here you can add logic to:
+                    // - Retake the photo
+                    // - Re-run the analysis
+                    // - Navigate back to camera view
+                },
+                onDone: {
+                    print("Done tapped - completing the workflow")
+                    // Here you can add logic to:
+                    // - Save results to backend
+                    // - Navigate to next section
+                    // - Return to main menu
+                    // - Mark task as complete
+                },
+                isPresented: $showReviewBottomSheet
+            )
+        }
+    }
+    
+    // MARK: - Navigation Header (consistent with your app theme)
+    private var navigationHeader: some View {
+        ZStack {
+            // Blue background matching the Compass Vision app theme
+            Color(red: 0/255, green: 113/255, blue: 220/255)
+                .frame(height: 56)
+            
+            HStack {
+                // Back button
+                Button(action: {
+                    presentationMode.wrappedValue.dismiss()
+                }) {
+                    Image(systemName: "chevron.left")
+                        .foregroundColor(.white)
+                        .frame(width: 24, height: 24)
+                }
+                .padding(.leading, 16)
+                
+                Spacer()
+                
+                // Dynamic title from JSON data using computed property
+                Text(viewModel.modHealthResponse?.sectionTitle ?? "Loading...")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.white)
+                
+                Spacer()
+                
+                // Help button for user guidance
+                Button(action: {
+                    // Could show help overlay or bottom sheet explaining the mod health process
+                    print("Help button tapped")
+                }) {
+                    Image(systemName: "questionmark.circle")
+                        .foregroundColor(.white)
+                        .frame(width: 24, height: 24)
+                }
+                .padding(.trailing, 16)
+            }
+        }
+    }
+    
+    // MARK: - Main Image Content Area
+    private var mainImageContent: some View {
+        GeometryReader { geometry in
+            // In a real implementation, you'd use AsyncImage to load from enhanceImageURI
+            // For now, using a placeholder that represents the shelf image
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        gradient: Gradient(colors: [Color.gray.opacity(0.3), Color.gray.opacity(0.1)]),
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .overlay(
+                    VStack(spacing: 16) {
+                        // Shelf image placeholder with realistic context
+                        Image(systemName: "photo")
+                            .font(.system(size: 48))
+                            .foregroundColor(.white.opacity(0.7))
+                        
+                        VStack(spacing: 4) {
+                            Text("Enhanced Shelf Image")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundColor(.white)
+                            
+                            // Display actual image URI from JSON when available
+                            if let imageUri = viewModel.modHealthResponse?.enhanceImageURI {
+                                Text("Source: \(imageUri)")
+                                    .font(.system(size: 12, weight: .regular))
+                                    .foregroundColor(.white.opacity(0.7))
+                                    .lineLimit(1)
+                            }
+                            
+                            // Show analysis metadata
+                            if let response = viewModel.modHealthResponse {
+                                VStack(spacing: 2) {
+                                    Text("Analysis ID: \(response.imageId)")
+                                        .font(.system(size: 10, weight: .regular))
+                                        .foregroundColor(.white.opacity(0.5))
+                                    
+                                    Text("Captured: \(response.capturedAt)")
+                                        .font(.system(size: 10, weight: .regular))
+                                        .foregroundColor(.white.opacity(0.5))
+                                }
+                            }
+                        }
+                    }
+                )
+                .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+    }
+}
+
+// MARK: - Dynamic Bottom Sheet Wrapper
+// This wrapper handles the complex sizing logic and state management
+struct DynamicBottomSheetWrapper: View {
+    let modHealthResponse: ModHealthResponse?
+    let onTryAgain: () -> Void
+    let onDone: () -> Void
+    @Binding var isPresented: Bool
+    
+    // Track the internal state of the bottom sheet for dynamic sizing
+    @State private var currentViewState: BottomSheetViewState = .collapsed
+    @State private var selectedFiltersCount = 0
+    
+    var body: some View {
+        ReviewSectionBottomSheet(
+            modHealthResponse: modHealthResponse,
+            onTryAgain: onTryAgain,
+            onDone: onDone,
+            isPresented: $isPresented
+        )
+        // This is where the magic happens - dynamic sizing based on content and state
+        .presentationDetents(dynamicDetents)
+        .presentationDragIndicator(.hidden) // Hide default indicator since we have custom UI
+        .presentationCornerRadius(16)
+        .presentationBackground(Color.clear) // Let our custom background handle the styling
+        .animation(.easeInOut(duration: 0.3), value: currentViewState)
+    }
+    
+    // Calculate appropriate sizing for each state
+    private var dynamicDetents: Set<PresentationDetent> {
+        switch currentViewState {
+        case .collapsed:
+            // Compact initial view - just summary stats and buttons
+            return [.height(200)]
+            
+        case .filterSelection:
+            // Medium height to accommodate filter checkboxes
+            // Height depends on number of available filter options
+            let filterCount = getAvailableFilterCount()
+            let baseHeight: CGFloat = 200 // Base height from collapsed state
+            let filterSectionHeight: CGFloat = 120 + (CGFloat(filterCount) * 35) // Dynamic based on filters
+            return [.height(baseHeight + filterSectionHeight)]
+            
+        case .detailedView:
+            // Large height for detailed item listings
+            // Could be .large for maximum space or calculated based on item count
+            let hasItems = selectedFiltersCount > 0
+            return hasItems ? [.large] : [.height(350)]
+        }
+    }
+    
+    // Helper to calculate number of available filters (non-zero counts)
+    private func getAvailableFilterCount() -> Int {
+        guard let response = modHealthResponse else { return 4 }
+        
+        var count = 0
+        if response.missingItems.count > 0 { count += 1 }
+        if response.misplacedItems.count > 0 { count += 1 }
+        if response.unknownItems.count > 0 { count += 1 }
+        if response.correctItems.count > 0 { count += 1 }
+        
+        return max(count, 4) // Always show all options, even if some are empty
     }
 }
