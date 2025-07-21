@@ -1,1 +1,274 @@
+import UIKit
+@_implementationOnly import LivingDesign
+@_implementationOnly import Bogle
 
+final class ReviewSectionBottomSheet: LDRootViewController {
+    weak var bottomSheetableActionDelegate: LDBottomSheetableActionDelegate?
+    
+    struct Model {
+        let title = "Review section"
+        let missingCount: Int
+        let misplacedCount: Int
+        let unknownCount: Int
+        let tryAgainText = "Try again"
+        let doneButtonText = "Done"
+        
+        init(missingCount: Int = 0, misplacedCount: Int = 0, unknownCount: Int = 0) {
+            self.missingCount = missingCount
+            self.misplacedCount = misplacedCount
+            self.unknownCount = unknownCount
+        }
+    }
+    
+    var model: Model {
+        didSet {
+            applyModel()
+        }
+    }
+    
+    // Add state tracking property for expansion
+    private var isExpanded: Bool = false
+    
+    private let expandButton = UIButton()
+    private let collapseButton = UIButton()
+    private let titleLabel = LDLabel(style: .headingMedium)
+    private let statsContainer = UIView()
+    private let statsLabel = UILabel()
+    private let divider = LDDivider(style: .horizontal)
+    private let buttonStackView = UIStackView()
+    private let tryAgainButton = UIButton()
+    private let doneButton = LDButton(variant: .primary, size: .large)
+    
+    // Add new views for expanded content
+    private let expandedContentView = UIView()
+    private let expandedLabel = UILabel()
+    
+    // Callbacks
+    private let onTryAgain: () -> Void
+    private let onDone: () -> Void
+    
+    init(model: Model, onTryAgain: @escaping () -> Void, onDone: @escaping () -> Void) {
+        self.model = model
+        self.onTryAgain = onTryAgain
+        self.onDone = onDone
+        super.init(nibName: nil, bundle: nil)
+        applyModel()
+    }
+    
+    override func constructView() {
+        super.constructView()
+        
+        expandButton.addTarget(self, action: #selector(handleExpandTapped), for: .primaryActionTriggered)
+        collapseButton.addTarget(self, action: #selector(handleCollapseTapped), for: .primaryActionTriggered)
+        tryAgainButton.addTarget(self, action: #selector(handleTryAgainTapped), for: .primaryActionTriggered)
+        doneButton.addTarget(self, action: #selector(handleDoneTapped), for: .primaryActionTriggered)
+        
+        // Configure button stack view
+        buttonStackView.axis = .horizontal
+        buttonStackView.spacing = LDSpacing.space16
+        buttonStackView.distribution = .fill
+        buttonStackView.alignment = .fill
+    }
+    
+    override func constructSubviewHierarchy() {
+        super.constructSubviewHierarchy()
+        
+        view.addAutoLayoutSubview(expandButton)
+        view.addAutoLayoutSubview(collapseButton)
+        view.addAutoLayoutSubview(titleLabel)
+        view.addAutoLayoutSubview(statsContainer)
+        statsContainer.addAutoLayoutSubview(statsLabel)
+        view.addAutoLayoutSubview(divider)
+        view.addAutoLayoutSubview(buttonStackView)
+        buttonStackView.addArrangedSubview(tryAgainButton)
+        buttonStackView.addArrangedSubview(doneButton)
+        
+        // Add expanded content views
+        view.addAutoLayoutSubview(expandedContentView)
+        expandedContentView.addAutoLayoutSubview(expandedLabel)
+        
+        // Initially hide the expanded content
+        expandedContentView.isHidden = true
+    }
+    
+    override func constructSubviewLayoutConstraints() {
+        super.constructSubviewLayoutConstraints()
+        
+        NSLayoutConstraint.activate([
+            // Expand/Collapse buttons - moved up
+            expandButton.topAnchor.constraint(equalTo: view.topAnchor, constant: LDSpacing.space8),
+            expandButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
+            expandButton.widthAnchor.constraint(equalToConstant: LDSpacing.space24),
+            expandButton.heightAnchor.constraint(equalToConstant: LDSpacing.space24),
+            
+            collapseButton.topAnchor.constraint(equalTo: view.topAnchor, constant: LDSpacing.space8),
+            collapseButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
+            collapseButton.widthAnchor.constraint(equalToConstant: LDSpacing.space24),
+            collapseButton.heightAnchor.constraint(equalToConstant: LDSpacing.space24),
+            
+            // Title - moved up
+            titleLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: LDSpacing.space8),
+            titleLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            
+            // Stats container
+            statsContainer.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: LDSpacing.space16),
+            statsContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
+            statsContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
+            statsContainer.heightAnchor.constraint(equalToConstant: LDSpacing.space32),
+            
+            statsLabel.centerXAnchor.constraint(equalTo: statsContainer.centerXAnchor),
+            statsLabel.centerYAnchor.constraint(equalTo: statsContainer.centerYAnchor),
+            
+            // Divider
+            divider.topAnchor.constraint(equalTo: statsContainer.bottomAnchor, constant: LDSpacing.space16),
+            divider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            divider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            divider.heightAnchor.constraint(equalToConstant: 1),
+            
+            // Expanded content view constraints
+            expandedContentView.topAnchor.constraint(equalTo: divider.bottomAnchor, constant: LDSpacing.space8),
+            expandedContentView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
+            expandedContentView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
+            expandedContentView.heightAnchor.constraint(equalToConstant: 200),
+            
+            expandedLabel.topAnchor.constraint(equalTo: expandedContentView.topAnchor),
+            expandedLabel.leadingAnchor.constraint(equalTo: expandedContentView.leadingAnchor),
+            expandedLabel.trailingAnchor.constraint(equalTo: expandedContentView.trailingAnchor),
+            expandedLabel.bottomAnchor.constraint(equalTo: expandedContentView.bottomAnchor),
+            
+            // Button stack (horizontal) - updated to connect to expandedContentView
+            buttonStackView.topAnchor.constraint(equalTo: expandedContentView.bottomAnchor, constant: LDSpacing.space16),
+            buttonStackView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space16),
+            buttonStackView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space16),
+            buttonStackView.heightAnchor.constraint(equalToConstant: LDSpacing.space40),
+            buttonStackView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -LDSpacing.space16),
+            
+            // Try again button width
+            tryAgainButton.widthAnchor.constraint(equalToConstant: 100),
+            
+            // Done button takes remaining space
+            doneButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 200)
+        ])
+    }
+    
+    private func applyModel() {
+        // Expand/Collapse buttons
+        expandButton.setImage(LDIcon.chevronUp.image, for: .normal)
+        collapseButton.setImage(LDIcon.close.image, for: .normal)
+        
+        // Title
+        titleLabel.font = UIFont.bogle(ofSize: LDSpacing.space20, weight: .bold)
+        titleLabel.textAlignment = .center
+        titleLabel.text = model.title
+        
+        // Stats
+        let attributedString = NSMutableAttributedString()
+        
+        // Missing
+        let missingAttachment = NSTextAttachment()
+        missingAttachment.image = UIImage(systemName: "exclamationmark.circle.fill")?.withTintColor(.red, renderingMode: .alwaysOriginal)
+        missingAttachment.bounds = CGRect(x: 0, y: -2, width: 16, height: 16)
+        attributedString.append(NSAttributedString(attachment: missingAttachment))
+        attributedString.append(NSAttributedString(string: " Missing (\(model.missingCount))  ", attributes: [
+            .font: UIFont.bogle(ofSize: 14, weight: .regular),
+            .foregroundColor: UIColor.black
+        ]))
+        
+        // Misplaced
+        let misplacedAttachment = NSTextAttachment()
+        misplacedAttachment.image = UIImage(systemName: "exclamationmark.triangle.fill")?.withTintColor(.systemYellow, renderingMode: .alwaysOriginal)
+        misplacedAttachment.bounds = CGRect(x: 0, y: -2, width: 16, height: 16)
+        attributedString.append(NSAttributedString(attachment: misplacedAttachment))
+        attributedString.append(NSAttributedString(string: " Misplaced (\(model.misplacedCount))  ", attributes: [
+            .font: UIFont.bogle(ofSize: 14, weight: .regular),
+            .foregroundColor: UIColor.black
+        ]))
+        
+        // Unknown
+        let unknownAttachment = NSTextAttachment()
+        unknownAttachment.image = UIImage(systemName: "circle.fill")?.withTintColor(.orange, renderingMode: .alwaysOriginal)
+        unknownAttachment.bounds = CGRect(x: 0, y: -2, width: 16, height: 16)
+        attributedString.append(NSAttributedString(attachment: unknownAttachment))
+        attributedString.append(NSAttributedString(string: " Unknown (\(model.unknownCount))", attributes: [
+            .font: UIFont.bogle(ofSize: 14, weight: .regular),
+            .foregroundColor: UIColor.black
+        ]))
+        
+        statsLabel.attributedText = attributedString
+        
+        // Try again button
+        let tryAgainAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.bogle(ofSize: LDSpacing.space16, weight: .regular),
+            .foregroundColor: UIColor.black,
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ]
+        tryAgainButton.setAttributedTitle(NSAttributedString(string: model.tryAgainText, attributes: tryAgainAttributes), for: .normal)
+        
+        // Done button
+        doneButton.dataModel = LDButton.Model(
+            variant: .primary,
+            size: .large,
+            text: model.doneButtonText
+        )
+        
+        // Configure the expanded content
+        expandedLabel.text = """
+        This is the expanded content that appears when you press the expand button! 
+
+        Here's some additional information about the section:
+        • Total items scanned: 25
+        • Accuracy rate: 87%
+        • Last updated: 2 minutes ago
+        • Issues detected: \(model.missingCount + model.misplacedCount + model.unknownCount)
+
+        This content demonstrates how the bottom sheet can expand to show more detailed information while maintaining a clean, organized layout.
+        """
+        expandedLabel.font = UIFont.bogle(ofSize: 14, weight: .regular)
+        expandedLabel.textColor = .black
+        expandedLabel.numberOfLines = 0
+        expandedLabel.textAlignment = .left
+    }
+    
+    @objc private func handleExpandTapped() {
+        isExpanded.toggle()
+        
+        // Show/hide the expanded content with animation
+        UIView.animate(withDuration: 0.3) {
+            self.expandedContentView.isHidden = !self.isExpanded
+            
+            // Update button icon
+            let iconImage = self.isExpanded ? LDIcon.chevronDown.image : LDIcon.chevronUp.image
+            self.expandButton.setImage(iconImage, for: .normal)
+        }
+        
+        // Animate to the appropriate tier
+        bottomSheetableActionDelegate?.expandBottomSheet(to: isExpanded ? .second : .first)
+    }
+    
+    @objc private func handleCollapseTapped() {
+        self.dismiss(animated: true)
+    }
+    
+    @objc private func handleTryAgainTapped() {
+        self.dismiss(animated: true) {
+            self.onTryAgain()
+        }
+    }
+    
+    @objc private func handleDoneTapped() {
+        self.dismiss(animated: true) {
+            self.onDone()
+        }
+    }
+}
+
+// MARK: - LDBottomSheetable
+extension ReviewSectionBottomSheet: LDBottomSheetable {
+    var contentView: UIView { view }
+    var tiersType: LDBottomSheetTierType { 
+        .twoTier(first: 180, second: 400) // Collapsed: 180pts, Expanded: 400pts
+    }
+    var isDismissable: Bool { true }
+    var shouldHideGrabber: Bool { true }
+    var shouldIgnoreTabBar: Bool { true }
+}
