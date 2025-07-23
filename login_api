@@ -1,29 +1,34 @@
 import SwiftUI
 
-// MARK: - Bottom Sheet States
-enum BottomSheetState {
-    case hidden      // Completely below screen
-    case collapsed   // Half visible (current design)
-    case expanded    // Almost fully visible
-}
-
-// MARK: - Custom Expandable Bottom Sheet
-struct CustomExpandableBottomSheet: View {
+// MARK: - Custom Bottom Sheet with Expand/Collapse Functionality
+struct ReviewSectionBottomSheet: View {
     let modHealthResponse: ModHealthResponse?
     let onTryAgain: () -> Void
     let onDone: () -> Void
     
-    @State private var currentState: BottomSheetState = .collapsed
+    // State for controlling sheet position
+    @State private var sheetPosition: SheetPosition = .halfVisible
     
-    // Define the heights for different states
-    private let hiddenOffset: CGFloat = 300      // How much to push down when hidden
-    private let collapsedOffset: CGFloat = 100   // Partial visibility offset
-    private let expandedOffset: CGFloat = -400   // How much to pull up when expanded
+    // Define the different positions the sheet can be in
+    enum SheetPosition {
+        case hidden      // Completely below screen
+        case halfVisible // Default state - partially visible
+        case expanded    // Almost fully visible
+        
+        // Calculate the offset for each position
+        var offset: CGFloat {
+            switch self {
+            case .hidden:
+                return 400      // Slide completely down (adjust based on your sheet height)
+            case .halfVisible:
+                return 200      // Default position - half visible
+            case .expanded:
+                return 50       // Almost fully up, leaving some margin from top
+            }
+        }
+    }
     
-    // Total height of the bottom sheet container
-    private let totalSheetHeight: CGFloat = 600
-    
-    // Computed properties for easier access to counts
+    // Computed properties for easier access to data
     private var missingCount: Int {
         modHealthResponse?.missingItems.count ?? 0
     }
@@ -37,97 +42,59 @@ struct CustomExpandableBottomSheet: View {
     }
     
     var body: some View {
+        // The full sheet container - much taller than what's initially visible
         VStack(spacing: 0) {
-            // MARK: - Collapsed Content (Always visible when not hidden)
-            collapsedContent
-                .frame(height: 200) // Fixed height for collapsed content
+            // Top section - always visible content (stats and buttons)
+            topSection
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 16)
+                .background(Color.white)
             
-            // MARK: - Expanded Content (Only visible when expanded)
-            if currentState == .expanded {
-                expandedContent
-                    .frame(height: 400) // Additional height for expanded content
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
+            // Expandable content section - initially hidden below screen
+            expandableContent
+                .padding(.horizontal, 16)
+                .padding(.bottom, 32)
+                .background(Color.white)
         }
-        .frame(height: totalSheetHeight)
+        .frame(maxWidth: .infinity)
         .background(Color.white)
         .cornerRadius(16, corners: [.topLeft, .topRight])
-        .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: -5)
-        .offset(y: offsetForCurrentState())
-        .animation(.spring(response: 0.6, dampingFraction: 0.8), value: currentState)
+        // Add shadow for depth
+        .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: -5)
+        // Control the sheet position with offset
+        .offset(y: sheetPosition.offset)
+        // Smooth animation when position changes
+        .animation(.easeInOut(duration: 0.3), value: sheetPosition)
     }
     
-    // MARK: - Collapsed Content View
-    private var collapsedContent: some View {
-        VStack(spacing: 0) {
-            // Header with expand/collapse buttons and title
+    // MARK: - Top Section (Always Visible)
+    private var topSection: some View {
+        VStack(spacing: 16) {
+            // Header with expand/collapse and close buttons
             headerView
-                .padding(.top, 8)
-                .padding(.horizontal, 16)
             
-            // Stats section showing counts with icons
+            // Stats showing counts with icons
             statsView
-                .padding(.top, 16)
-                .padding(.horizontal, 16)
             
             // Divider
             Rectangle()
                 .fill(Color.gray.opacity(0.3))
                 .frame(height: 1)
-                .padding(.top, 16)
-                .padding(.horizontal, 16)
             
-            // Bottom buttons (Try Again and Done)
+            // Action buttons
             buttonSection
-                .padding(.top, 16)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 16)
         }
     }
     
-    // MARK: - Expanded Content View (Placeholder for future functionality)
-    private var expandedContent: some View {
-        VStack(spacing: 16) {
-            // Filter section header
-            HStack {
-                Text("Filter By")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.black)
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            
-            // Checkboxes for different item types
-            VStack(spacing: 12) {
-                filterCheckbox(title: "Missing Items (\(missingCount))", isChecked: true)
-                filterCheckbox(title: "Misplaced Items (\(misplacedCount))", isChecked: false)
-                filterCheckbox(title: "Unknown Items (\(unknownCount))", isChecked: false)
-                filterCheckbox(title: "Correct Items", isChecked: false)
-            }
-            .padding(.horizontal, 16)
-            
-            // Detailed items list placeholder
-            ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(0..<missingCount, id: \.self) { index in
-                        if let item = modHealthResponse?.missingItems[safe: index] {
-                            itemRow(item: item, type: "Missing")
-                        }
-                    }
-                }
-                .padding(.horizontal, 16)
-            }
-            
-            Spacer()
-        }
-    }
-    
-    // MARK: - Header Section
+    // MARK: - Header with Control Buttons
     private var headerView: some View {
         HStack {
-            // Expand/Collapse button
-            Button(action: toggleExpansion) {
-                Image(systemName: currentState == .expanded ? "chevron.down" : "chevron.up")
+            // Expand button - changes based on current state
+            Button(action: {
+                handleExpandTap()
+            }) {
+                Image(systemName: sheetPosition == .expanded ? "chevron.down" : "chevron.up")
                     .foregroundColor(.black)
                     .frame(width: 24, height: 24)
             }
@@ -141,8 +108,12 @@ struct CustomExpandableBottomSheet: View {
             
             Spacer()
             
-            // Close button
-            Button(action: hideBottomSheet) {
+            // Close button - slides sheet down to hidden
+            Button(action: {
+                withAnimation {
+                    sheetPosition = .hidden
+                }
+            }) {
                 Image(systemName: "xmark")
                     .foregroundColor(.black)
                     .frame(width: 24, height: 24)
@@ -150,9 +121,10 @@ struct CustomExpandableBottomSheet: View {
         }
     }
     
-    // MARK: - Stats Section (Same as before)
+    // MARK: - Stats Section with Icons and Counts
     private var statsView: some View {
         HStack(spacing: 20) {
+            // Missing items
             statsItem(
                 icon: "exclamationmark.circle.fill",
                 iconColor: .red,
@@ -160,6 +132,7 @@ struct CustomExpandableBottomSheet: View {
                 count: missingCount
             )
             
+            // Misplaced items  
             statsItem(
                 icon: "exclamationmark.triangle.fill",
                 iconColor: .yellow,
@@ -167,6 +140,7 @@ struct CustomExpandableBottomSheet: View {
                 count: misplacedCount
             )
             
+            // Unknown items
             statsItem(
                 icon: "circle.fill",
                 iconColor: .orange,
@@ -177,7 +151,7 @@ struct CustomExpandableBottomSheet: View {
         .frame(height: 32)
     }
     
-    // Helper function for stats items
+    // Helper to create individual stat items with consistent styling
     private func statsItem(icon: String, iconColor: Color, text: String, count: Int) -> some View {
         HStack(spacing: 4) {
             Image(systemName: icon)
@@ -190,15 +164,11 @@ struct CustomExpandableBottomSheet: View {
         }
     }
     
-    // MARK: - Button Section (Same as before)
+    // MARK: - Action Buttons
     private var buttonSection: some View {
         HStack(spacing: 16) {
-            Button(action: {
-                hideBottomSheet()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    onTryAgain()
-                }
-            }) {
+            // Try Again button with underlined text
+            Button(action: onTryAgain) {
                 Text("Try again")
                     .font(.system(size: 16, weight: .regular))
                     .foregroundColor(.black)
@@ -206,12 +176,8 @@ struct CustomExpandableBottomSheet: View {
             }
             .frame(width: 100, height: 40)
             
-            Button(action: {
-                hideBottomSheet()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    onDone()
-                }
-            }) {
+            // Done button with primary styling
+            Button(action: onDone) {
                 Text("Done")
                     .font(.system(size: 16, weight: .bold))
                     .foregroundColor(.white)
@@ -222,85 +188,42 @@ struct CustomExpandableBottomSheet: View {
         }
     }
     
-    // MARK: - Helper Views for Expanded Content
-    private func filterCheckbox(title: String, isChecked: Bool) -> some View {
-        HStack {
-            Image(systemName: isChecked ? "checkmark.square.fill" : "square")
-                .foregroundColor(isChecked ? .blue : .gray)
-                .font(.system(size: 20))
+    // MARK: - Expandable Content (Initially Hidden)
+    private var expandableContent: some View {
+        VStack(spacing: 20) {
+            // Placeholder for future expandable content
+            Text("Expandable content will go here")
+                .font(.system(size: 16, weight: .regular))
+                .foregroundColor(.gray)
+                .padding(.vertical, 40)
             
-            Text(title)
-                .font(.system(size: 14, weight: .regular))
-                .foregroundColor(.black)
+            // This is where you'll later add:
+            // - Detailed item lists
+            // - Checkboxes for filtering
+            // - Individual item details
+            // - Any other expanded functionality
             
             Spacer()
         }
+        .frame(height: 300) // Reserve space for expanded content
     }
     
-    private func itemRow(item: Item, type: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(item.name)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.black)
-            
-            HStack {
-                Text("UPC: \(item.upc)")
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundColor(.gray)
-                
-                Spacer()
-                
-                Text(type)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(type == "Missing" ? .red : .orange)
+    // MARK: - Handle Expand Button Logic
+    private func handleExpandTap() {
+        withAnimation {
+            switch sheetPosition {
+            case .hidden:
+                sheetPosition = .halfVisible
+            case .halfVisible:
+                sheetPosition = .expanded
+            case .expanded:
+                sheetPosition = .halfVisible
             }
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 12)
-        .background(Color.gray.opacity(0.1))
-        .cornerRadius(8)
-    }
-    
-    // MARK: - State Management Functions
-    private func offsetForCurrentState() -> CGFloat {
-        switch currentState {
-        case .hidden:
-            return hiddenOffset
-        case .collapsed:
-            return collapsedOffset
-        case .expanded:
-            return expandedOffset
-        }
-    }
-    
-    private func toggleExpansion() {
-        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-            currentState = currentState == .expanded ? .collapsed : .expanded
-        }
-    }
-    
-    private func hideBottomSheet() {
-        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-            currentState = .hidden
-        }
-    }
-    
-    // MARK: - Public function to show the sheet
-    func showBottomSheet() {
-        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-            currentState = .collapsed
-        }
     }
 }
 
-// MARK: - Safe Array Access Extension
-extension Array {
-    subscript(safe index: Index) -> Element? {
-        return indices.contains(index) ? self[index] : nil
-    }
-}
-
-// MARK: - Corner Radius Extension (Same as before)
+// MARK: - Corner Radius Extension for Specific Corners
 extension View {
     func cornerRadius(_ radius: CGFloat, corners: UIRectCorner) -> some View {
         clipShape(RoundedCorner(radius: radius, corners: corners))
@@ -323,15 +246,20 @@ struct RoundedCorner: Shape {
 
 
 
+
+
+
+
+
 import SwiftUI
 
 struct ContentView: View {
     @Environment(\.presentationMode) var presentationMode
     @StateObject private var viewModel = ModHealthViewModel()
+    @State private var showReviewBottomSheet = false
     
     var body: some View {
         ZStack {
-            // MARK: - Main Content Layer
             Color.black.edgesIgnoringSafeArea(.all)
             
             if viewModel.isLoading {
@@ -352,34 +280,38 @@ struct ContentView: View {
                     Spacer()
                 }
             }
-            
-            // MARK: - Custom Bottom Sheet Layer
-            // This sits on top of the main content and can move up/down
-            VStack {
-                Spacer()
-                
-                CustomExpandableBottomSheet(
-                    modHealthResponse: viewModel.modHealthResponse,
-                    onTryAgain: {
-                        // Handle try again action
-                        print("Try again tapped")
-                        // Add your retry logic here
-                        // For example: viewModel.reloadData()
-                    },
-                    onDone: {
-                        // Handle done action  
-                        print("Done tapped")
-                        // Add navigation or completion logic here
-                        // For example: navigateToNextScreen()
-                    }
-                )
-            }
-            .ignoresSafeArea(.keyboard) // Prevents keyboard from affecting bottom sheet position
         }
+        // Custom bottom sheet overlay
+        .overlay(
+            Group {
+                if showReviewBottomSheet {
+                    ReviewSectionBottomSheet(
+                        modHealthResponse: viewModel.modHealthResponse,
+                        onTryAgain: {
+                            // Handle try again action
+                            print("Try again tapped")
+                            // You can add your retry logic here
+                        },
+                        onDone: {
+                            // Handle done action  
+                            print("Done tapped")
+                            // You can add navigation or completion logic here
+                        }
+                    )
+                }
+            },
+            alignment: .bottom
+        )
         .navigationBarHidden(true)
+        .onAppear {
+            // Delay the bottom sheet presentation slightly to ensure smooth UI
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                showReviewBottomSheet = true
+            }
+        }
     }
     
-    // MARK: - Navigation Header
+    // MARK: - Navigation Header (unchanged)
     private var navigationHeader: some View {
         ZStack {
             // Blue background matching your app's theme
@@ -409,7 +341,6 @@ struct ContentView: View {
                 // Help button
                 Button(action: {
                     // Handle help action
-                    print("Help button tapped")
                 }) {
                     Image(systemName: "questionmark.circle")
                         .foregroundColor(.white)
@@ -420,15 +351,14 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - Main Image Content
+    // MARK: - Main Image Content (unchanged)
     private var mainImageContent: some View {
         GeometryReader { geometry in
-            // Placeholder for the shelf image
-            // You can replace this with AsyncImage to load actual images
+            // Placeholder for the shelf image - you can replace this with AsyncImage
             Rectangle()
                 .fill(Color.gray.opacity(0.3))
                 .overlay(
-                    VStack(spacing: 16) {
+                    VStack {
                         Text("Shelf Image")
                             .foregroundColor(.white)
                             .font(.title)
@@ -438,23 +368,10 @@ struct ContentView: View {
                             Text("Image: \(imageUri)")
                                 .foregroundColor(.white.opacity(0.7))
                                 .font(.caption)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal)
-                        }
-                        
-                        // Optional: Show loading state for actual image
-                        if viewModel.modHealthResponse != nil {
-                            Text("Tap to load actual image")
-                                .foregroundColor(.white.opacity(0.5))
-                                .font(.caption2)
                         }
                     }
                 )
                 .frame(width: geometry.size.width, height: geometry.size.height)
-                .onTapGesture {
-                    // Future: Load actual shelf image here
-                    print("Load shelf image tapped")
-                }
         }
     }
 }
