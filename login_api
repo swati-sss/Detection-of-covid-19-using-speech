@@ -1,172 +1,460 @@
 import SwiftUI
 
-struct ReviewSectionBottomSheet: View {
+// MARK: - Bottom Sheet States
+enum BottomSheetState {
+    case hidden      // Completely below screen
+    case collapsed   // Half visible (current design)
+    case expanded    // Almost fully visible
+}
+
+// MARK: - Custom Expandable Bottom Sheet
+struct CustomExpandableBottomSheet: View {
     let modHealthResponse: ModHealthResponse?
     let onTryAgain: () -> Void
     let onDone: () -> Void
-    @Binding var isPresented: Bool
-
-    // MARK: State
-    @State private var isExpanded = false
-    @State private var selectedFilters: Set<FilterType> = []
-
-    // MARK: Constants (tweak as needed)
-    private let cornerRadius: CGFloat = 16
-    private let collapsedHeight: CGFloat = 200
-    private let expandedHeight: CGFloat = 400
-
+    
+    @State private var currentState: BottomSheetState = .collapsed
+    
+    // Define the heights for different states
+    private let hiddenOffset: CGFloat = 300      // How much to push down when hidden
+    private let collapsedOffset: CGFloat = 100   // Partial visibility offset
+    private let expandedOffset: CGFloat = -400   // How much to pull up when expanded
+    
+    // Total height of the bottom sheet container
+    private let totalSheetHeight: CGFloat = 600
+    
+    // Computed properties for easier access to counts
+    private var missingCount: Int {
+        modHealthResponse?.missingItems.count ?? 0
+    }
+    
+    private var misplacedCount: Int {
+        modHealthResponse?.misplacedItems.count ?? 0
+    }
+    
+    private var unknownCount: Int {
+        modHealthResponse?.unknownItems.count ?? 0
+    }
+    
     var body: some View {
-        ZStack(alignment: .bottom) {
-            // semi‑transparent background
-            Color.black.opacity(0.4)
-                .ignoresSafeArea()
-                .onTapGesture { isPresented = false }
-
-            // sheet container
-            VStack(spacing: 0) {
-                header
-                Divider()
-                if isExpanded {
-                    expandedContent
-                } else {
-                    collapsedContent
-                }
-                Divider()
-                footer
-            }
-            .frame(height: isExpanded ? expandedHeight : collapsedHeight)
-            .background(Color(.systemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .animation(.easeInOut(duration: 0.3), value: isExpanded)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 20)
-        }
-    }
-
-    // MARK: Header
-
-    private var header: some View {
-        HStack {
-            Button {
-                withAnimation { isExpanded.toggle() }
-            } label: {
-                Image(systemName: "chevron.up")
-                    .rotationEffect(.degrees(isExpanded ? 0 : 180))
-                    .frame(width: 24, height: 24)
-            }
-
-            Text("Review section")
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .center)
-
-            Button {
-                isPresented = false
-            } label: {
-                Image(systemName: "xmark")
-                    .frame(width: 24, height: 24)
+        VStack(spacing: 0) {
+            // MARK: - Collapsed Content (Always visible when not hidden)
+            collapsedContent
+                .frame(height: 200) // Fixed height for collapsed content
+            
+            // MARK: - Expanded Content (Only visible when expanded)
+            if currentState == .expanded {
+                expandedContent
+                    .frame(height: 400) // Additional height for expanded content
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .padding()
+        .frame(height: totalSheetHeight)
+        .background(Color.white)
+        .cornerRadius(16, corners: [.topLeft, .topRight])
+        .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: -5)
+        .offset(y: offsetForCurrentState())
+        .animation(.spring(response: 0.6, dampingFraction: 0.8), value: currentState)
     }
-
-    // MARK: Collapsed Content
-
+    
+    // MARK: - Collapsed Content View
     private var collapsedContent: some View {
-        HStack(spacing: 24) {
-            statusView(icon: "circle.fill", color: .red,      label: "Missing",   count: modHealthResponse?.missingCount)
-            statusView(icon: "triangle.fill", color: .yellow, label: "Misplaced", count: modHealthResponse?.misplacedCount)
-            statusView(icon: "circle.fill", color: .orange,   label: "Unknown",   count: modHealthResponse?.unknownCount)
+        VStack(spacing: 0) {
+            // Header with expand/collapse buttons and title
+            headerView
+                .padding(.top, 8)
+                .padding(.horizontal, 16)
+            
+            // Stats section showing counts with icons
+            statsView
+                .padding(.top, 16)
+                .padding(.horizontal, 16)
+            
+            // Divider
+            Rectangle()
+                .fill(Color.gray.opacity(0.3))
+                .frame(height: 1)
+                .padding(.top, 16)
+                .padding(.horizontal, 16)
+            
+            // Bottom buttons (Try Again and Done)
+            buttonSection
+                .padding(.top, 16)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
         }
-        .padding(.vertical, 16)
     }
-
-    private func statusView(icon: String, color: Color, label: String, count: Int?) -> some View {
+    
+    // MARK: - Expanded Content View (Placeholder for future functionality)
+    private var expandedContent: some View {
+        VStack(spacing: 16) {
+            // Filter section header
+            HStack {
+                Text("Filter By")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.black)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            
+            // Checkboxes for different item types
+            VStack(spacing: 12) {
+                filterCheckbox(title: "Missing Items (\(missingCount))", isChecked: true)
+                filterCheckbox(title: "Misplaced Items (\(misplacedCount))", isChecked: false)
+                filterCheckbox(title: "Unknown Items (\(unknownCount))", isChecked: false)
+                filterCheckbox(title: "Correct Items", isChecked: false)
+            }
+            .padding(.horizontal, 16)
+            
+            // Detailed items list placeholder
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(0..<missingCount, id: \.self) { index in
+                        if let item = modHealthResponse?.missingItems[safe: index] {
+                            itemRow(item: item, type: "Missing")
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            
+            Spacer()
+        }
+    }
+    
+    // MARK: - Header Section
+    private var headerView: some View {
+        HStack {
+            // Expand/Collapse button
+            Button(action: toggleExpansion) {
+                Image(systemName: currentState == .expanded ? "chevron.down" : "chevron.up")
+                    .foregroundColor(.black)
+                    .frame(width: 24, height: 24)
+            }
+            
+            Spacer()
+            
+            // Title
+            Text("Review section")
+                .font(.system(size: 20, weight: .bold))
+                .foregroundColor(.black)
+            
+            Spacer()
+            
+            // Close button
+            Button(action: hideBottomSheet) {
+                Image(systemName: "xmark")
+                    .foregroundColor(.black)
+                    .frame(width: 24, height: 24)
+            }
+        }
+    }
+    
+    // MARK: - Stats Section (Same as before)
+    private var statsView: some View {
+        HStack(spacing: 20) {
+            statsItem(
+                icon: "exclamationmark.circle.fill",
+                iconColor: .red,
+                text: "Missing",
+                count: missingCount
+            )
+            
+            statsItem(
+                icon: "exclamationmark.triangle.fill",
+                iconColor: .yellow,
+                text: "Misplaced",
+                count: misplacedCount
+            )
+            
+            statsItem(
+                icon: "circle.fill",
+                iconColor: .orange,
+                text: "Unknown",
+                count: unknownCount
+            )
+        }
+        .frame(height: 32)
+    }
+    
+    // Helper function for stats items
+    private func statsItem(icon: String, iconColor: Color, text: String, count: Int) -> some View {
         HStack(spacing: 4) {
             Image(systemName: icon)
-                .foregroundColor(color)
-                .font(.system(size: 12))
-            Text("\(label) (\(count ?? 0))")
-                .font(.subheadline)
+                .foregroundColor(iconColor)
+                .font(.system(size: 16))
+            
+            Text("\(text) (\(count))")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundColor(.black)
         }
     }
-
-    // MARK: Expanded Content
-
-    private var expandedContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Filter By")
-                .font(.subheadline)
-                .bold()
-
-            // checkbox list
-            ForEach(FilterType.allCases, id: \.self) { filter in
-                Toggle(isOn: Binding(
-                    get: { selectedFilters.contains(filter) },
-                    set: { isOn in
-                        if isOn { selectedFilters.insert(filter) }
-                        else    { selectedFilters.remove(filter) }
-                    })
-                ) {
-                    HStack {
-                        Text(filter.title)
-                        Spacer()
-                        Text("(\(filter.count(from: modHealthResponse)))")
-                            .foregroundColor(.secondary)
-                    }
-                    .font(.subheadline)
+    
+    // MARK: - Button Section (Same as before)
+    private var buttonSection: some View {
+        HStack(spacing: 16) {
+            Button(action: {
+                hideBottomSheet()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    onTryAgain()
                 }
-                // Requires iOS 17+; for earlier versions you can roll your own ToggleStyle
-                .toggleStyle(.checkbox)
-            }
-        }
-        .padding()
-    }
-
-    enum FilterType: CaseIterable {
-        case missing, misplaced, unknown, correct
-
-        var title: String {
-            switch self {
-            case .missing:   return "Missing items"
-            case .misplaced: return "Misplaced items"
-            case .unknown:   return "Unknown items"
-            case .correct:   return "Correct items"
-            }
-        }
-
-        func count(from resp: ModHealthResponse?) -> Int {
-            guard let r = resp else { return 0 }
-            switch self {
-            case .missing:   return r.missingCount
-            case .misplaced: return r.misplacedCount
-            case .unknown:   return r.unknownCount
-            case .correct:   return r.correctCount
-            }
-        }
-    }
-
-    // MARK: Footer
-
-    private var footer: some View {
-        HStack {
-            Button(action: onTryAgain) {
+            }) {
                 Text("Try again")
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundColor(.black)
                     .underline()
-                    .font(.subheadline)
             }
-
-            Spacer()
-
-            Button(action: onDone) {
+            .frame(width: 100, height: 40)
+            
+            Button(action: {
+                hideBottomSheet()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    onDone()
+                }
+            }) {
                 Text("Done")
-                    .font(.subheadline)
-                    .frame(minWidth: 80)
-                    .padding(.vertical, 8)
-                    .background(Color.blue)
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundColor(.white)
-                    .cornerRadius(8)
+                    .frame(maxWidth: .infinity, minHeight: 40)
+                    .background(Color(red: 0/255, green: 113/255, blue: 220/255))
+                    .cornerRadius(20)
             }
         }
-        .padding()
+    }
+    
+    // MARK: - Helper Views for Expanded Content
+    private func filterCheckbox(title: String, isChecked: Bool) -> some View {
+        HStack {
+            Image(systemName: isChecked ? "checkmark.square.fill" : "square")
+                .foregroundColor(isChecked ? .blue : .gray)
+                .font(.system(size: 20))
+            
+            Text(title)
+                .font(.system(size: 14, weight: .regular))
+                .foregroundColor(.black)
+            
+            Spacer()
+        }
+    }
+    
+    private func itemRow(item: Item, type: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(item.name)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.black)
+            
+            HStack {
+                Text("UPC: \(item.upc)")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundColor(.gray)
+                
+                Spacer()
+                
+                Text(type)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(type == "Missing" ? .red : .orange)
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(8)
+    }
+    
+    // MARK: - State Management Functions
+    private func offsetForCurrentState() -> CGFloat {
+        switch currentState {
+        case .hidden:
+            return hiddenOffset
+        case .collapsed:
+            return collapsedOffset
+        case .expanded:
+            return expandedOffset
+        }
+    }
+    
+    private func toggleExpansion() {
+        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+            currentState = currentState == .expanded ? .collapsed : .expanded
+        }
+    }
+    
+    private func hideBottomSheet() {
+        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+            currentState = .hidden
+        }
+    }
+    
+    // MARK: - Public function to show the sheet
+    func showBottomSheet() {
+        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+            currentState = .collapsed
+        }
+    }
+}
+
+// MARK: - Safe Array Access Extension
+extension Array {
+    subscript(safe index: Index) -> Element? {
+        return indices.contains(index) ? self[index] : nil
+    }
+}
+
+// MARK: - Corner Radius Extension (Same as before)
+extension View {
+    func cornerRadius(_ radius: CGFloat, corners: UIRectCorner) -> some View {
+        clipShape(RoundedCorner(radius: radius, corners: corners))
+    }
+}
+
+struct RoundedCorner: Shape {
+    var radius: CGFloat = .infinity
+    var corners: UIRectCorner = .allCorners
+
+    func path(in rect: CGRect) -> Path {
+        let path = UIBezierPath(
+            roundedRect: rect,
+            byRoundingCorners: corners,
+            cornerRadii: CGSize(width: radius, height: radius)
+        )
+        return Path(path.cgPath)
+    }
+}
+
+
+
+import SwiftUI
+
+struct ContentView: View {
+    @Environment(\.presentationMode) var presentationMode
+    @StateObject private var viewModel = ModHealthViewModel()
+    
+    var body: some View {
+        ZStack {
+            // MARK: - Main Content Layer
+            Color.black.edgesIgnoringSafeArea(.all)
+            
+            if viewModel.isLoading {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+            } else if let error = viewModel.error {
+                Text("Error: \(error.localizedDescription)")
+                    .foregroundColor(.white)
+                    .padding()
+            } else {
+                VStack(spacing: 0) {
+                    // Navigation Header
+                    navigationHeader
+                    
+                    // Main Image Content
+                    mainImageContent
+                    
+                    Spacer()
+                }
+            }
+            
+            // MARK: - Custom Bottom Sheet Layer
+            // This sits on top of the main content and can move up/down
+            VStack {
+                Spacer()
+                
+                CustomExpandableBottomSheet(
+                    modHealthResponse: viewModel.modHealthResponse,
+                    onTryAgain: {
+                        // Handle try again action
+                        print("Try again tapped")
+                        // Add your retry logic here
+                        // For example: viewModel.reloadData()
+                    },
+                    onDone: {
+                        // Handle done action  
+                        print("Done tapped")
+                        // Add navigation or completion logic here
+                        // For example: navigateToNextScreen()
+                    }
+                )
+            }
+            .ignoresSafeArea(.keyboard) // Prevents keyboard from affecting bottom sheet position
+        }
+        .navigationBarHidden(true)
+    }
+    
+    // MARK: - Navigation Header
+    private var navigationHeader: some View {
+        ZStack {
+            // Blue background matching your app's theme
+            Color(red: 0/255, green: 113/255, blue: 220/255)
+                .frame(height: 56)
+            
+            HStack {
+                // Back button
+                Button(action: {
+                    presentationMode.wrappedValue.dismiss()
+                }) {
+                    Image(systemName: "chevron.left")
+                        .foregroundColor(.white)
+                        .frame(width: 24, height: 24)
+                }
+                .padding(.leading, 16)
+                
+                Spacer()
+                
+                // Title from JSON data - using the computed property from ModHealthResponse
+                Text(viewModel.modHealthResponse?.sectionTitle ?? "Loading...")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.white)
+                
+                Spacer()
+                
+                // Help button
+                Button(action: {
+                    // Handle help action
+                    print("Help button tapped")
+                }) {
+                    Image(systemName: "questionmark.circle")
+                        .foregroundColor(.white)
+                        .frame(width: 24, height: 24)
+                }
+                .padding(.trailing, 16)
+            }
+        }
+    }
+    
+    // MARK: - Main Image Content
+    private var mainImageContent: some View {
+        GeometryReader { geometry in
+            // Placeholder for the shelf image
+            // You can replace this with AsyncImage to load actual images
+            Rectangle()
+                .fill(Color.gray.opacity(0.3))
+                .overlay(
+                    VStack(spacing: 16) {
+                        Text("Shelf Image")
+                            .foregroundColor(.white)
+                            .font(.title)
+                        
+                        // Display image URI from JSON data if available
+                        if let imageUri = viewModel.modHealthResponse?.enhanceImageURI {
+                            Text("Image: \(imageUri)")
+                                .foregroundColor(.white.opacity(0.7))
+                                .font(.caption)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                        }
+                        
+                        // Optional: Show loading state for actual image
+                        if viewModel.modHealthResponse != nil {
+                            Text("Tap to load actual image")
+                                .foregroundColor(.white.opacity(0.5))
+                                .font(.caption2)
+                        }
+                    }
+                )
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .onTapGesture {
+                    // Future: Load actual shelf image here
+                    print("Load shelf image tapped")
+                }
+        }
     }
 }
