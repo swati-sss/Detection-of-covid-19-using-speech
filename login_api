@@ -1,127 +1,78 @@
+
 import Foundation
+import Combine
 
-// MARK: - API Response Wrapper
-struct ModHealthAPIResponse: Codable {
-    let status: String
-    let header: APIHeader
-    let errors: [String]
-    let payload: ModHealthPayload
+protocol ModHealthPollingServiceType {
+    func pollTaskStatus(wuId: String) -> AnyPublisher<ModHealthResponseData?, Error>
+    // For future use - continuous polling
+    // func startContinuousPolling(wuId: String, interval: TimeInterval) -> AnyPublisher<ModHealthResponseData?, Error>
 }
 
-struct APIHeader: Codable {
-    let headerAttributes: [String: String]
-}
-
-struct ModHealthPayload: Codable {
-    let timestamp: String
-    let data: [ModHealthResponseData]
-}
-
-// MARK: - Main Mod Health Data (similar to your existing response.json but with different field names)
-struct ModHealthResponseData: Codable {
-    let errors: [ModHealthError]?
-    let capturedAt: String
-    let storeId: String
-    let zoneId: String
-    let aisleId: String
-    let storeSectionId: String
-    let modSectionId: String
-    let modCategory: String
-    let planogramId: String
-    let planogramUri: String?
-    let taskId: String
-    let wuId: String
-    let enhancedImageUri: String
-    let originalImageUri: String
-    let imageIssue: [String]
-    let userId: String
-    let timestamp: String
-    let missingItems: [ModHealthItem]
-    let misplacedItems: [ModHealthItem]
-    let unknownItems: [ModHealthItem]
-    let correctItems: [ModHealthItem]
+class ModHealthPollingService: ModHealthPollingServiceType {
+    private let keychainService: KeychainServiceType
     
-    enum CodingKeys: String, CodingKey {
-        case errors
-        case capturedAt = "captured_at"
-        case storeId = "store_id"
-        case zoneId = "zone_id"
-        case aisleId = "aisle_id"
-        case storeSectionId = "store_section_id"
-        case modSectionId = "mod_section_id"
-        case modCategory = "mod_category"
-        case planogramId = "planogram_id"
-        case planogramUri = "planogram_uri"
-        case taskId = "task_id"
-        case wuId = "wu_id"
-        case enhancedImageUri = "enhanced_image_uri"
-        case originalImageUri = "original_image_uri"
-        case imageIssue = "image_issue"
-        case userId = "user_id"
-        case timestamp
-        case missingItems = "missing_items"
-        case misplacedItems = "misplaced_items"
-        case unknownItems = "unknown_items"
-        case correctItems = "correct_items"
+    init(keychainService: KeychainServiceType) {
+        self.keychainService = keychainService
     }
     
-    // Computed property to match your existing UI expectations
-    var sectionTitle: String {
-        return "\(zoneId)\(aisleId) Section \(storeSectionId)"
+    func pollTaskStatus(wuId: String) -> AnyPublisher<ModHealthResponseData?, Error> {
+        guard let urlString = buildPollingURL(wuId: wuId) else {
+            return Fail(error: URLError(.badURL)).eraseToAnyPublisher()
+        }
+        
+        let headers = APIHelper.getStandardRequestHeaders(keychainService: keychainService)
+        
+        Log.info("=== MOD-HEALTH POLLING REQUEST ===")
+        Log.info("URL: \(urlString)")
+        Log.info("WUID: \(wuId)")
+        Log.info("=== END REQUEST INFO ===")
+        
+        return URLSessionRequest<ModHealthAPIResponse>(
+            urlString: urlString,
+            method: .get,
+            headers: headers,
+            urlSession: URLSession.shared
+        )
+        .execute()
+        .map { apiResponse -> ModHealthResponseData? in
+            Log.info("=== MOD-HEALTH POLLING RESPONSE ===")
+            Log.info("Status: \(apiResponse?.status ?? "nil")")
+            Log.info("Errors: \(apiResponse?.errors ?? [])")
+            
+            if let data = apiResponse?.payload.data.first {
+                Log.info("Data received for section: \(data.sectionTitle)")
+                Log.info("Missing items: \(data.missingItems.count)")
+                Log.info("Misplaced items: \(data.misplacedItems.count)")
+                Log.info("Unknown items: \(data.unknownItems.count)")
+                Log.info("Correct items: \(data.correctItems.count)")
+                
+                if let errors = data.errors, !errors.isEmpty {
+                    Log.warning("Data level errors: \(errors)")
+                }
+            }
+            Log.info("=== END POLLING RESPONSE ===")
+            
+            return apiResponse?.payload.data.first
+        }
+        .eraseToAnyPublisher()
     }
-}
-
-struct ModHealthError: Codable {
-    let errorCode: String
-    let errorMessage: String
     
-    enum CodingKeys: String, CodingKey {
-        case errorCode = "error_code"
-        case errorMessage = "error_message"
+    // MARK: - Future Implementation (commented out for now)
+    /*
+    func startContinuousPolling(wuId: String, interval: TimeInterval = 30.0) -> AnyPublisher<ModHealthResponseData?, Error> {
+        return Timer.publish(every: interval, on: .main, in: .common)
+            .autoconnect()
+            .flatMap { _ in
+                self.pollTaskStatus(wuId: wuId)
+            }
+            .eraseToAnyPublisher()
     }
-}
-
-struct ModHealthItem: Codable {
-    let name: String
-    let upc: String        // Note: API returns string, not Int
-    let itemId: String
-    let status: String
-    let shelf: String      // Note: API returns string, not Int
-    let position: String
-    let confidence: String
-    let xMin: String?      // Note: API returns string, not Int
-    let xMax: String?
-    let yMin: String?
-    let yMax: String?
-    let priceTag: String   // Note: API returns string "true"/"false", not Bool
-    let priceTagDetails: ModHealthPriceTagDetails
+    */
     
-    enum CodingKeys: String, CodingKey {
-        case name, upc, status, shelf, position, confidence
-        case itemId = "item_id"
-        case xMin = "x_min"
-        case xMax = "x_max"
-        case yMin = "y_min"
-        case yMax = "y_max"
-        case priceTag = "price_tag"
-        case priceTagDetails = "price_tag_details"
-    }
-}
-
-struct ModHealthPriceTagDetails: Codable {
-    let shelf: String      // Note: API returns string, not Int
-    let xMin: String?
-    let xMax: String?
-    let yMin: String?
-    let yMax: String?
-    let titles: [String]
-    let prices: [String]   // Note: API returns array of strings, not single string
-    
-    enum CodingKeys: String, CodingKey {
-        case shelf, titles, prices
-        case xMin = "x_min"
-        case xMax = "x_max"
-        case yMin = "y_min"
-        case yMax = "y_max"
+    private func buildPollingURL(wuId: String) -> String? {
+        let baseURL = "https://developer.api.us.stg.walmart.com/api-proxy/service/COMPASS/SERVICE/v4/mod-health/task/status"
+        var components = URLComponents(string: baseURL)
+        components?.queryItems = [URLQueryItem(name: "wuId", value: wuId)]
+        return components?.url?.absoluteString
     }
 }
