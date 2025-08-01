@@ -1,3 +1,4 @@
+// Replace the entire createModHealthUploadRequest method with this corrected version
 private func createModHealthUploadRequest(
     image: UIImage,
     storeId: String,
@@ -18,52 +19,72 @@ private func createModHealthUploadRequest(
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     
-    // Set headers using the same credentials as your initialization
-    let boundary = "Boundary-\(UUID().uuidString)"
+    // Set headers EXACTLY as shown in cURL
+    request.setValue("Bearer eyJraWQ1OiJkOTY5MzBhYy04YjhlLTRkMDAtOGE1Ny05MGYwYWQwNWEwOGYiLCJlbmMiOiJBMjU2R0NNIiwiYWxnIjoiZGlyIn0..6jqcSt1ZQo-15t_M.AAZ3SiqoHfOTYdR1Jq3MPyBI77uMBcuZF32cpZj730AoHqFglqqFpiii6aJyBxnditU8MLEB120TrXyVa2ns0VAT5sotrvXq7HtadQb-bS19LGjz1UcXl6Zn_r-i7-b_9lB6zZx6jBcuXAXkrVUm0q6hqNBSjejBE__V3o3KXhlT598ZBzGiCuqWvDWU6xMIuU7HV7_nvgHRV7s2r0w2yyz1-rpWGI0dA8znBSkt74zXGuB2ieMKfWEvvHDEq3r0vdrlmPeS3UqYb-bQdUiNvFMTYyAfuDziEQacqQoDdRXvJFFcYppoNQKO8wjlXanwkNPdZr-FcnmJKTB0PXtO3Ui_yef6GslvSSvZ71_akFZ-FTvKzruphQp9_86qI7WMLs0nP6fsyvCuXH4K39fw4SNpLsDH-X8Vt_yheGq7ZtBdSEHn0MrcCfgcN51EQ1UOTVboGeT-5zfit5ER8CTWzO6v1tFfuwh9aJPg0HEEVFepNoZASy4IBwxz-KYzB11AkMrfmc3I8zr1-8vDLZM_UbhwNhd366-L5X7r_CDT2furAbRJtfK2xuu7NU_ebqNUV8v019nMLe4z1wQ6RDnw-lTmCCJKIVosuyPWfSB0sPoXlB3o-rbPVb4MQtechfR45DqPZt43yVfF3P1qJMVV6J4MKtsziwTT938cg6Gix1i32Wgf3jJHQ_AXpZVNtfXLudzFMhXMrUjCgeA0zwsFMSZZN9N4JRmv9T5rneMSx4L9qf4yKdbDbRJGqLC_BdqqNN0rZvoQA50EUdHCyq3rJVjpdS4h8PvB9k67MfF7XIGM2evLGDqz8XUL-r-SRQy8oUn47oK9h7OFMUYkfUpI8kulKLm90XoOnU6KjSUrx-B88vcOJsEnH0hHA-MgFwA.NEg8DWiVybu35F6fYeDKIg", 
+                     forHTTPHeaderField: "Authorization")
+    request.setValue("c061c52a-b978-4ae9-9875-6584e58e8a74", 
+                     forHTTPHeaderField: "wm_consumer.id")
+    
+    // Create multipart form data
+    let boundary = generateBoundary()
     request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
     
-    // Try using the same client secret from your initialization instead of keychain token
-    let clientSecret = "Uhcqt1EBCq3COum7WhGK4b0Pre0TyMndfqMsCslnzyd70Zc5Xy1NI-pyCARRNG0qQvkI2iVv2s7sKGBiTwz_PQ"
-    let clientId = "c061c52a-b978-4ae9-9875-6584e58e8a74"
+    // Build the multipart body
+    let formData = createMultipartFormData(
+        parameters: [
+            "source": "MOD_HEALTH",
+            "storeId": storeId,
+            "zoneId": zoneId,
+            "storeSectionId": storeSectionId,
+            "aisleId": aisleId,
+            "modSectionId": "0",
+            "userId": userId,
+            "taskId": "0",
+            "uploadType": "IMAGE",
+            "planogramId": "0"
+        ],
+        imageData: imageData,
+        boundary: boundary
+    )
     
-    request.setValue("Bearer \(clientSecret)", forHTTPHeaderField: "Authorization")
-    request.setValue(clientId, forHTTPHeaderField: "wm_consumer.id")
+    request.httpBody = formData
     
-    Log.info("=== USING DIRECT CREDENTIALS ===")
-    Log.info("Client ID: \(clientId)")
-    Log.info("Using client secret as Bearer token")
-    Log.info("=== END CREDENTIALS ===")
+    // Log the request details
+    Log.info("=== MOD-HEALTH REQUEST ===")
+    Log.info("URL: \(urlString)")
+    Log.info("Method: POST")
+    Log.info("Boundary: \(boundary)")
+    Log.info("Body size: \(formData.count) bytes")
+    Log.info("=========================")
     
-    // Rest of the multipart body creation stays the same...
-    var body = Data()
+    return request
+}
+
+// Helper function to generate boundary
+private func generateBoundary() -> String {
+    return "----WebKitFormBoundary\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+}
+
+// Helper function to create multipart form data
+private func createMultipartFormData(parameters: [String: String], imageData: Data, boundary: String) -> Data {
+    var data = Data()
     
-    func appendFormField(name: String, value: String) {
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
-        body.append("\(value)\r\n".data(using: .utf8)!)
+    // Add text parameters
+    for (key, value) in parameters {
+        data.append("--\(boundary)\r\n".data(using: .utf8)!)
+        data.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
+        data.append("\(value)\r\n".data(using: .utf8)!)
     }
     
-    appendFormField(name: "source", value: "MOD_HEALTH")
-    appendFormField(name: "storeId", value: storeId)
-    appendFormField(name: "zoneId", value: zoneId)
-    appendFormField(name: "storeSectionId", value: storeSectionId)
-    appendFormField(name: "aisleId", value: aisleId)
-    appendFormField(name: "modSectionId", value: "0")
-    appendFormField(name: "userId", value: userId)
-    appendFormField(name: "taskId", value: "0")
-    appendFormField(name: "uploadType", value: "IMAGE")
-    appendFormField(name: "planogramId", value: "0")
+    // Add image data
+    data.append("--\(boundary)\r\n".data(using: .utf8)!)
+    data.append("Content-Disposition: form-data; name=\"image\"; filename=\"image.jpg\"\r\n".data(using: .utf8)!)
+    data.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+    data.append(imageData)
+    data.append("\r\n".data(using: .utf8)!)
     
-    body.append("--\(boundary)\r\n".data(using: .utf8)!)
-    body.append("Content-Disposition: form-data; name=\"image\"; filename=\"shelf_image.jpg\"\r\n".data(using: .utf8)!)
-    body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
-    body.append(imageData)
-    body.append("\r\n".data(using: .utf8)!)
+    // Final boundary
+    data.append("--\(boundary)--\r\n".data(using: .utf8)!)
     
-    body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-    
-    request.httpBody = body
-    
-    Log.info("Created mod-health upload request. Body size: \(body.count) bytes")
-    return request
+    return data
 }
