@@ -1,1 +1,216 @@
 
+// Add this new method to CameraViewModel class
+private func uploadSingleImageToModHealth(image: UIImage, sectionInfo: SectionInfo) {
+    guard let storeId = KeychainService.standard.getStoreId(),
+          let userId = KeychainService.standard.getUserId() else {
+        Log.error("Missing store ID or user ID for mod-health upload")
+        return
+    }
+    
+    // Extract zone, aisle, section from sectionInfo
+    // Assuming locationName format is like "B17-4" (zone=B, aisle=17, section=4)
+    let locationParts = sectionInfo.basicInfo.itemDesc.components(separatedBy: "-")
+    let zoneAisle = locationParts.first ?? ""
+    let sectionPart = locationParts.count > 1 ? locationParts[1] : "0"
+    
+    // Extract zone (first character) and aisle (remaining characters)
+    let zoneId = String(zoneAisle.prefix(1))
+    let aisleId = String(zoneAisle.dropFirst())
+    
+    Log.info("Uploading single image to mod-health API...")
+    loadingStatus = "Uploading image for analysis..."
+    
+    // Create the multipart request
+    guard let request = createModHealthUploadRequest(
+        image: image,
+        storeId: String(storeId),
+        zoneId: zoneId,
+        aisleId: aisleId,
+        storeSectionId: sectionPart,
+        userId: userId
+    ) else {
+        Log.error("Failed to create mod-health upload request")
+        loadingStatus = ""
+        return
+    }
+    
+    // Execute the upload
+    let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        DispatchQueue.main.async {
+            self?.handleModHealthUploadResponse(data: data, response: response, error: error)
+        }
+    }
+    task.resume()
+}
+
+
+
+
+
+
+
+
+
+// Add this helper method to CameraViewModel class
+private func createModHealthUploadRequest(
+    image: UIImage,
+    storeId: String,
+    zoneId: String,
+    aisleId: String,
+    storeSectionId: String,
+    userId: String
+) -> URLRequest? {
+    
+    let urlString = "https://developer.api.us.stg.walmart.com/api-proxy/service/COMPASS/SERVICE/v4/mod-intel/upload-image"
+    
+    guard let url = URL(string: urlString),
+          let authParam = KeychainService.standard.getToken(),
+          let imageData = image.jpegData(compressionQuality: 0.8) else {
+        Log.error("Failed to prepare mod-health upload request components")
+        return nil
+    }
+    
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    
+    // Set headers
+    let boundary = "Boundary-\(UUID().uuidString)"
+    request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+    request.setValue("Bearer \(authParam.authToken)", forHTTPHeaderField: "Authorization")
+    request.setValue(authParam.consumerID, forHTTPHeaderField: "wm_consumer.id")
+    
+    // Build multipart body
+    var body = Data()
+    
+    // Helper function to append form field
+    func appendFormField(name: String, value: String) {
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(value)\r\n".data(using: .utf8)!)
+    }
+    
+    // Add all form fields
+    appendFormField(name: "source", value: "MOD_HEALTH")
+    appendFormField(name: "storeId", value: storeId)
+    appendFormField(name: "zoneId", value: zoneId)
+    appendFormField(name: "storeSectionId", value: storeSectionId)
+    appendFormField(name: "aisleId", value: aisleId)
+    appendFormField(name: "modSectionId", value: "0")
+    appendFormField(name: "userId", value: userId)
+    appendFormField(name: "taskId", value: "0")
+    appendFormField(name: "uploadType", value: "IMAGE")
+    appendFormField(name: "planogramId", value: "0")
+    
+    // Add image data
+    body.append("--\(boundary)\r\n".data(using: .utf8)!)
+    body.append("Content-Disposition: form-data; name=\"image\"; filename=\"shelf_image.jpg\"\r\n".data(using: .utf8)!)
+    body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+    body.append(imageData)
+    body.append("\r\n".data(using: .utf8)!)
+    
+    // Close boundary
+    body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+    
+    request.httpBody = body
+    
+    Log.info("Created mod-health upload request. Body size: \(body.count) bytes")
+    return request
+}
+
+
+
+
+
+
+
+// Add this response handler to CameraViewModel class
+private func handleModHealthUploadResponse(data: Data?, response: URLResponse?, error: Error?) {
+    loadingStatus = ""
+    
+    if let error = error {
+        Log.error("Mod-health upload failed with error: \(error)")
+        showErrorAlert(with: "Upload failed: \(error.localizedDescription)")
+        return
+    }
+    
+    guard let httpResponse = response as? HTTPURLResponse else {
+        Log.error("Invalid response type from mod-health API")
+        showErrorAlert(with: "Invalid response from server")
+        return
+    }
+    
+    Log.info("Mod-health upload response status: \(httpResponse.statusCode)")
+    
+    if let data = data {
+        let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode response"
+        Log.info("=== MOD-HEALTH UPLOAD RESPONSE ===")
+        Log.info("Status Code: \(httpResponse.statusCode)")
+        Log.info("Response Body: \(responseString)")
+        Log.info("=== END RESPONSE ===")
+        
+        if httpResponse.statusCode == 200 {
+            // Success! You'll see the WUID in the console
+            showErrorAlert(with: "Upload successful! Check Xcode console for response details.")
+        } else {
+            showErrorAlert(with: "Upload failed with status: \(httpResponse.statusCode)")
+        }
+    }
+}
+
+
+
+
+
+
+
+
+// Find this method in CameraViewModel.swift and update the sectionImageCapture case
+private func handleImage(image: UIImage) {
+    switch subFlowType {
+    case .imageCaptureAndValidation:
+        processImageCaptureAndValidation(with: image)
+    case .productEnrollment:
+        processProductEnrollment(with: image)
+    case .sectionImageCapture:
+        // NEW BEHAVIOR: Upload immediately for mod-health
+        processSectionImageForModHealth(with: image)
+    case .sectionBarCodeScanner:
+        break
+    }
+}
+
+// Add this new method to handle the immediate upload
+private func processSectionImageForModHealth(with image: UIImage) {
+    guard let sectionInfo = sectionInfo else {
+        Log.error("No section info available for mod-health upload")
+        showErrorAlert(with: "Section information missing. Please scan section label again.")
+        return
+    }
+    
+    // Store the image for display
+    capturedImage = image
+    lastCapturedImage = image
+    capturedImageCount = 1
+    
+    // Immediately upload to mod-health API
+    uploadSingleImageToModHealth(image: image, sectionInfo: sectionInfo)
+    
+    // Stop the camera since we only need one image
+    cameraManager.stopCapturing()
+}
+
+
+
+
+
+
+// In SectionImageValidationFooterView.swift, update the CaptureButton
+CaptureButton {
+    if viewModel.capturedImageCount == 0 {
+        viewModel.captureImage()
+    }
+}
+.opacity(viewModel.capturedImageCount == 0 ? 1.0 : 0.5) // Dim the button after capture
+.disabled(viewModel.capturedImageCount > 0) // Disable after one photo
+
+
