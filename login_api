@@ -2,77 +2,71 @@
 import Foundation
 import Combine
 
-protocol ModHealthPollingServiceType {
-    func pollTaskStatus(wuId: String) -> AnyPublisher<ModHealthResponseData?, Error>
-    // For future use - continuous polling
-    // func startContinuousPolling(wuId: String, interval: TimeInterval) -> AnyPublisher<ModHealthResponseData?, Error>
-}
-
-class ModHealthPollingService: ModHealthPollingServiceType {
-    private let keychainService: KeychainServiceType
+class ScanResultViewModel: ObservableObject {
+    // Use the NEW API model directly - no old model involved
+    @Published var modHealthResponse: ModHealthResponseData?
+    @Published var isLoading = true
+    @Published var error: Error?
     
-    init(keychainService: KeychainServiceType) {
-        self.keychainService = keychainService
+    private let pollingService: ModHealthPollingServiceType
+    private var cancellables = Set<AnyCancellable>()
+    
+    init(pollingService: ModHealthPollingServiceType = ModHealthPollingService(keychainService: KeychainService.standard)) {
+        self.pollingService = pollingService
+        // NO MOCK DATA - we only use real API now
     }
     
-    func pollTaskStatus(wuId: String) -> AnyPublisher<ModHealthResponseData?, Error> {
-        guard let urlString = buildPollingURL(wuId: wuId) else {
-            return Fail(error: URLError(.badURL)).eraseToAnyPublisher()
-        }
+    /// Call this method with the WUID received from the upload API
+    func startPolling(with wuId: String) {
+        isLoading = true
+        error = nil
         
-        let headers = APIHelper.getStandardRequestHeaders(keychainService: keychainService)
+        Log.info("Starting mod-health polling for WUID: \(wuId)")
         
-        Log.info("=== MOD-HEALTH POLLING REQUEST ===")
-        Log.info("URL: \(urlString)")
-        Log.info("WUID: \(wuId)")
-        Log.info("=== END REQUEST INFO ===")
-        
-        return URLSessionRequest<ModHealthAPIResponse>(
-            urlString: urlString,
-            method: .get,
-            headers: headers,
-            urlSession: URLSession.shared
-        )
-        .execute()
-        .map { apiResponse -> ModHealthResponseData? in
-            Log.info("=== MOD-HEALTH POLLING RESPONSE ===")
-            Log.info("Status: \(apiResponse?.status ?? "nil")")
-            Log.info("Errors: \(apiResponse?.errors ?? [])")
-            
-            if let data = apiResponse?.payload.data.first {
-                Log.info("Data received for section: \(data.sectionTitle)")
-                Log.info("Missing items: \(data.missingItems.count)")
-                Log.info("Misplaced items: \(data.misplacedItems.count)")
-                Log.info("Unknown items: \(data.unknownItems.count)")
-                Log.info("Correct items: \(data.correctItems.count)")
-                
-                if let errors = data.errors, !errors.isEmpty {
-                    Log.warning("Data level errors: \(errors)")
+        pollingService.pollTaskStatus(wuId: wuId)
+            .receive(on: DispatchQueue.main)
+            .sink(
+                receiveCompletion: { [weak self] completion in
+                    if case .failure(let error) = completion {
+                        Log.error("Mod-health polling failed: \(error)")
+                        self?.error = error
+                        self?.isLoading = false
+                    }
+                },
+                receiveValue: { [weak self] apiData in
+                    if let apiData = apiData {
+                        // NO MAPPING - use API data directly
+                        self?.modHealthResponse = apiData
+                        self?.isLoading = false
+                    } else {
+                        Log.warning("No data received from mod-health API")
+                        self?.error = NSError(domain: "ModHealth", code: 404, userInfo: [NSLocalizedDescriptionKey: "No data received from API"])
+                        self?.isLoading = false
+                    }
                 }
-            }
-            Log.info("=== END POLLING RESPONSE ===")
-            
-            return apiResponse?.payload.data.first
-        }
-        .eraseToAnyPublisher()
-    }
-    
-    // MARK: - Future Implementation (commented out for now)
-    /*
-    func startContinuousPolling(wuId: String, interval: TimeInterval = 30.0) -> AnyPublisher<ModHealthResponseData?, Error> {
-        return Timer.publish(every: interval, on: .main, in: .common)
-            .autoconnect()
-            .flatMap { _ in
-                self.pollTaskStatus(wuId: wuId)
-            }
-            .eraseToAnyPublisher()
-    }
-    */
-    
-    private func buildPollingURL(wuId: String) -> String? {
-        let baseURL = "https://developer.api.us.stg.walmart.com/api-proxy/service/COMPASS/SERVICE/v4/mod-health/task/status"
-        var components = URLComponents(string: baseURL)
-        components?.queryItems = [URLQueryItem(name: "wuId", value: wuId)]
-        return components?.url?.absoluteString
+            )
+            .store(in: &cancellables)
+        
+        // MARK: - Future Implementation (commented out for now)
+        /*
+        // For continuous polling every 30 seconds:
+        pollingService.startContinuousPolling(wuId: wuId, interval: 30.0)
+            .receive(on: DispatchQueue.main)
+            .sink(
+                receiveCompletion: { [weak self] completion in
+                    if case .failure(let error) = completion {
+                        Log.error("Continuous polling failed: \(error)")
+                        self?.error = error
+                    }
+                },
+                receiveValue: { [weak self] apiData in
+                    if let apiData = apiData {
+                        self?.modHealthResponse = apiData
+                        self?.isLoading = false
+                    }
+                }
+            )
+            .store(in: &cancellables)
+        */
     }
 }
