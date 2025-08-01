@@ -1,72 +1,225 @@
 
-import Foundation
-import Combine
 
-class ScanResultViewModel: ObservableObject {
-    // Use the NEW API model directly - no old model involved
-    @Published var modHealthResponse: ModHealthResponseData?
-    @Published var isLoading = true
-    @Published var error: Error?
+@_implementationOnly import LivingDesign
+@_implementationOnly import Bogle
+import SwiftUI
+
+struct ReviewSectionBottomSheet: View {
     
-    private let pollingService: ModHealthPollingServiceType
-    private var cancellables = Set<AnyCancellable>()
+    // Use the NEW API model directly
+    let modHealthResponse: ModHealthResponseData?
+    let onTryAgain: () -> Void
+    let onDone: () -> Void
     
-    init(pollingService: ModHealthPollingServiceType = ModHealthPollingService(keychainService: KeychainService.standard)) {
-        self.pollingService = pollingService
-        // NO MOCK DATA - we only use real API now
+    @Binding var isVisible: Bool
+    @Binding var isExpanded: Bool
+    
+    let screenHeight: CGFloat
+
+    let fullHeight: CGFloat = 800
+    let partialHeight: CGFloat = 200
+
+    var currentOffset: CGFloat {
+        if !isVisible {
+            return screenHeight
+        } else if isExpanded {
+            return screenHeight - fullHeight + 35
+        } else {
+            return screenHeight - partialHeight
+        }
     }
     
-    /// Call this method with the WUID received from the upload API
-    func startPolling(with wuId: String) {
-        isLoading = true
-        error = nil
-        
-        Log.info("Starting mod-health polling for WUID: \(wuId)")
-        
-        pollingService.pollTaskStatus(wuId: wuId)
-            .receive(on: DispatchQueue.main)
-            .sink(
-                receiveCompletion: { [weak self] completion in
-                    if case .failure(let error) = completion {
-                        Log.error("Mod-health polling failed: \(error)")
-                        self?.error = error
-                        self?.isLoading = false
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button(action: {
+                    withAnimation(.spring()) {
+                        isExpanded.toggle()
                     }
-                },
-                receiveValue: { [weak self] apiData in
-                    if let apiData = apiData {
-                        // NO MAPPING - use API data directly
-                        self?.modHealthResponse = apiData
-                        self?.isLoading = false
-                    } else {
-                        Log.warning("No data received from mod-health API")
-                        self?.error = NSError(domain: "ModHealth", code: 404, userInfo: [NSLocalizedDescriptionKey: "No data received from API"])
-                        self?.isLoading = false
+                }) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
+                        .font(.system(size: 19))
+                        .padding(.leading)
+                }
+                
+                Spacer()
+                
+                Text("Review Section")
+                    .font(Font(UIFont.bogle(ofSize: 19, weight: .bold)))
+                    .lineLimit(1)
+                
+                Spacer()
+                
+                Button(action: {
+                    withAnimation(.spring()) {
+                        isVisible = false
+                    }
+                }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 19))
+                        .padding(.trailing)
+                }
+            }
+            .foregroundStyle(.black)
+            .padding(.top, 15)
+            .padding(.horizontal, 5)
+            
+            HStack(spacing: 11) {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundColor(.red)
+                        .font(.system(size: 16))
+                    Text("Missing (\(modHealthResponse?.missingItems.count ?? 0))")
+                }
+                HStack(spacing: 5){
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.yellow)
+                        .font(.system(size: 16))
+                    Text("Misplaced (\(modHealthResponse?.misplacedItems.count ?? 0))")
+                }
+                HStack(spacing: 5){
+                    Image(systemName: "circle.fill")
+                        .foregroundColor(.orange)
+                        .font(.system(size: 16))
+                    Text("Unknown (\(modHealthResponse?.unknownItems.count ?? 0))")
+                }
+            }
+            .font(Font(UIFont.bogle(ofSize: 17, weight: .bold)))
+            .padding(.vertical)
+            
+            Divider()
+            
+            if isExpanded {
+                HStack {
+                    Text("Filter By")
+                        .font(Font(UIFont.bogle(ofSize: 17, weight: .bold)))
+                        .padding(.top)
+                        .padding(.leading)
+                    Spacer()
+                }
+                ExpandableListView(modHealthResponse: modHealthResponse)
+                Divider()
+            }
+            
+            HStack(spacing: 16) {
+                Button(action: {
+                    isVisible = false
+                    onTryAgain()
+                }) {
+                    Text("Try again")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundColor(.black)
+                        .underline()
+                }
+                .frame(width: 100, height: 40)
+                
+                Button(action: {
+                    isVisible = false
+                    onDone()
+                }) {
+                    Text("Done")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity, minHeight: 40)
+                        .background(Color(red: 0/255, green: 113/255, blue: 220/255))
+                        .cornerRadius(20)
+                }
+            }
+            .padding(25)
+            
+            Spacer()
+        }
+        .frame(height: fullHeight)
+        .frame(maxWidth: .infinity)
+        .background(Color(.white))
+        .cornerRadius(20)
+        .shadow(radius: 5)
+        .offset(y: currentOffset)
+        .animation(.easeInOut, value: isExpanded)
+        .animation(.easeInOut, value: isVisible)
+    }
+}
+
+struct ExpandableItem: Identifiable {
+    let id = UUID()
+    let title: String
+    var isChecked: Bool = false
+    var isExpanded: Bool = false
+    var items: [ModHealthItem]  // Use NEW API model directly
+}
+
+struct ExpandableListView: View {
+    
+    @State private var items: [ExpandableItem] = []
+    let modHealthResponse: ModHealthResponseData?  // Use NEW API model directly
+    
+    var body: some View {
+        List {
+            ForEach(items.indices, id: \.self) { index in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Button(action: {
+                            items[index].isChecked.toggle()
+                            items[index].isExpanded = items[index].isChecked
+                        }) {
+                            Image(systemName: items[index].isChecked ? "checkmark.square.fill" : "square")
+                        }
+
+                        Text(items[index].title)
+                            .font(Font(UIFont.bogle(ofSize: 17, weight: .bold)))
+
+                        Spacer()
+                    }
+
+                    if items[index].isExpanded {
+                        ForEach(items[index].items.indices, id: \.self) { itemIndex in
+                            let item = items[index].items[itemIndex]
+                            
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text(item.name)
+                                    .font(Font(UIFont.bogle(ofSize: 14, weight: .bold)))
+                                    .foregroundColor(.black)
+                                
+                                HStack() {
+                                    Text("UPC:")
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                    Text(item.upc)  // API returns string, use directly
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                }
+                                
+                                HStack() {
+                                    Text("Expected:")
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                    Text("Position \(item.position)")
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                }
+                            }
+                            .padding(.vertical, 8)
+                            .transition(.opacity.combined(with: .slide))
+                        }
                     }
                 }
-            )
-            .store(in: &cancellables)
+                .padding(.vertical, 8)
+            }
+        }
+        .listStyle(.plain)
+        .onAppear {
+            setupExpandableItems()
+        }
+    }
+    
+    private func setupExpandableItems() {
+        guard let response = modHealthResponse else { return }
         
-        // MARK: - Future Implementation (commented out for now)
-        /*
-        // For continuous polling every 30 seconds:
-        pollingService.startContinuousPolling(wuId: wuId, interval: 30.0)
-            .receive(on: DispatchQueue.main)
-            .sink(
-                receiveCompletion: { [weak self] completion in
-                    if case .failure(let error) = completion {
-                        Log.error("Continuous polling failed: \(error)")
-                        self?.error = error
-                    }
-                },
-                receiveValue: { [weak self] apiData in
-                    if let apiData = apiData {
-                        self?.modHealthResponse = apiData
-                        self?.isLoading = false
-                    }
-                }
-            )
-            .store(in: &cancellables)
-        */
+        items = [
+            ExpandableItem(title: "Missing Items (\(response.missingItems.count))", items: response.missingItems),
+            ExpandableItem(title: "Misplaced Items (\(response.misplacedItems.count))", items: response.misplacedItems),
+            ExpandableItem(title: "Unknown Items (\(response.unknownItems.count))", items: response.unknownItems),
+            ExpandableItem(title: "Correct Items (\(response.correctItems.count))", items: response.correctItems)
+        ]
     }
 }
