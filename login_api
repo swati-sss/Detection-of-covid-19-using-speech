@@ -1,4 +1,3 @@
-// Replace the entire createModHealthUploadRequest method with this corrected version
 private func createModHealthUploadRequest(
     image: UIImage,
     storeId: String,
@@ -11,6 +10,7 @@ private func createModHealthUploadRequest(
     let urlString = "https://developer.api.us.stg.walmart.com/api-proxy/service/COMPASS/SERVICE/v4/mod-intel/upload-image"
     
     guard let url = URL(string: urlString),
+          let authParam: AuthParameter = KeychainService.standard.getToken(),
           let imageData = image.jpegData(compressionQuality: 0.8) else {
         Log.error("Failed to prepare mod-health upload request components")
         return nil
@@ -19,72 +19,57 @@ private func createModHealthUploadRequest(
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     
-    // Set headers EXACTLY as shown in cURL
-    request.setValue("Bearer eyJraWQ1OiJkOTY5MzBhYy04YjhlLTRkMDAtOGE1Ny05MGYwYWQwNWEwOGYiLCJlbmMiOiJBMjU2R0NNIiwiYWxnIjoiZGlyIn0..6jqcSt1ZQo-15t_M.AAZ3SiqoHfOTYdR1Jq3MPyBI77uMBcuZF32cpZj730AoHqFglqqFpiii6aJyBxnditU8MLEB120TrXyVa2ns0VAT5sotrvXq7HtadQb-bS19LGjz1UcXl6Zn_r-i7-b_9lB6zZx6jBcuXAXkrVUm0q6hqNBSjejBE__V3o3KXhlT598ZBzGiCuqWvDWU6xMIuU7HV7_nvgHRV7s2r0w2yyz1-rpWGI0dA8znBSkt74zXGuB2ieMKfWEvvHDEq3r0vdrlmPeS3UqYb-bQdUiNvFMTYyAfuDziEQacqQoDdRXvJFFcYppoNQKO8wjlXanwkNPdZr-FcnmJKTB0PXtO3Ui_yef6GslvSSvZ71_akFZ-FTvKzruphQp9_86qI7WMLs0nP6fsyvCuXH4K39fw4SNpLsDH-X8Vt_yheGq7ZtBdSEHn0MrcCfgcN51EQ1UOTVboGeT-5zfit5ER8CTWzO6v1tFfuwh9aJPg0HEEVFepNoZASy4IBwxz-KYzB11AkMrfmc3I8zr1-8vDLZM_UbhwNhd366-L5X7r_CDT2furAbRJtfK2xuu7NU_ebqNUV8v019nMLe4z1wQ6RDnw-lTmCCJKIVosuyPWfSB0sPoXlB3o-rbPVb4MQtechfR45DqPZt43yVfF3P1qJMVV6J4MKtsziwTT938cg6Gix1i32Wgf3jJHQ_AXpZVNtfXLudzFMhXMrUjCgeA0zwsFMSZZN9N4JRmv9T5rneMSx4L9qf4yKdbDbRJGqLC_BdqqNN0rZvoQA50EUdHCyq3rJVjpdS4h8PvB9k67MfF7XIGM2evLGDqz8XUL-r-SRQy8oUn47oK9h7OFMUYkfUpI8kulKLm90XoOnU6KjSUrx-B88vcOJsEnH0hHA-MgFwA.NEg8DWiVybu35F6fYeDKIg", 
-                     forHTTPHeaderField: "Authorization")
-    request.setValue("c061c52a-b978-4ae9-9875-6584e58e8a74", 
-                     forHTTPHeaderField: "wm_consumer.id")
+    // Use auth from keychain exactly like the existing upload does
+    request.addValue(authParam.consumerID, forHTTPHeaderField: RequestIdentifier.wmConsumerId.rawValue)
+    request.addValue(RequestIdentifier.bearerSpace.rawValue + authParam.authToken,
+                     forHTTPHeaderField: RequestIdentifier.authorization.rawValue)
     
     // Create multipart form data
-    let boundary = generateBoundary()
+    let boundary = "Boundary-\(UUID().uuidString)"
     request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
     
-    // Build the multipart body
-    let formData = createMultipartFormData(
-        parameters: [
-            "source": "MOD_HEALTH",
-            "storeId": storeId,
-            "zoneId": zoneId,
-            "storeSectionId": storeSectionId,
-            "aisleId": aisleId,
-            "modSectionId": "0",
-            "userId": userId,
-            "taskId": "0",
-            "uploadType": "IMAGE",
-            "planogramId": "0"
-        ],
-        imageData: imageData,
-        boundary: boundary
-    )
+    // Build multipart body similar to existing ImageUploader
+    var body = Data()
+    let boundaryPrefix = "--\(boundary)\r\n"
     
-    request.httpBody = formData
-    
-    // Log the request details
-    Log.info("=== MOD-HEALTH REQUEST ===")
-    Log.info("URL: \(urlString)")
-    Log.info("Method: POST")
-    Log.info("Boundary: \(boundary)")
-    Log.info("Body size: \(formData.count) bytes")
-    Log.info("=========================")
-    
-    return request
-}
-
-// Helper function to generate boundary
-private func generateBoundary() -> String {
-    return "----WebKitFormBoundary\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
-}
-
-// Helper function to create multipart form data
-private func createMultipartFormData(parameters: [String: String], imageData: Data, boundary: String) -> Data {
-    var data = Data()
-    
-    // Add text parameters
-    for (key, value) in parameters {
-        data.append("--\(boundary)\r\n".data(using: .utf8)!)
-        data.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
-        data.append("\(value)\r\n".data(using: .utf8)!)
+    // Helper to add form fields
+    func appendFormField(name: String, value: String) {
+        body.append(string: boundaryPrefix)
+        body.append(string: "Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n")
+        body.append(string: "\(value)\r\n")
     }
     
-    // Add image data
-    data.append("--\(boundary)\r\n".data(using: .utf8)!)
-    data.append("Content-Disposition: form-data; name=\"image\"; filename=\"image.jpg\"\r\n".data(using: .utf8)!)
-    data.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
-    data.append(imageData)
-    data.append("\r\n".data(using: .utf8)!)
+    // Add all parameters
+    appendFormField(name: "source", value: "MOD_HEALTH")
+    appendFormField(name: "storeId", value: storeId)
+    appendFormField(name: "zoneId", value: zoneId)
+    appendFormField(name: "storeSectionId", value: storeSectionId)
+    appendFormField(name: "aisleId", value: aisleId)
+    appendFormField(name: "modSectionId", value: "0")
+    appendFormField(name: "userId", value: userId)
+    appendFormField(name: "taskId", value: "0")
+    appendFormField(name: "uploadType", value: "IMAGE")
+    appendFormField(name: "planogramId", value: "0")
+    
+    // Add image - following the pattern from existing ImageUploader
+    body.append(string: boundaryPrefix)
+    body.append(string: "Content-Disposition: form-data; name=\"image\"; filename=\"shelf_image.jpg\"\r\n")
+    body.append(string: "Content-Type: image/jpeg\r\n\r\n")
+    body.append(imageData)
+    body.append(string: "\r\n")
     
     // Final boundary
-    data.append("--\(boundary)--\r\n".data(using: .utf8)!)
+    body.append(string: "--\(boundary)--\r\n")
     
-    return data
+    request.httpBody = body
+    
+    // Debug logging
+    Log.info("MOD-HEALTH Upload Request:")
+    Log.info("  URL: \(urlString)")
+    Log.info("  Auth Token Type: \(authParam.tokenType)")
+    Log.info("  Consumer ID: \(authParam.consumerID)")
+    Log.info("  Body size: \(body.count) bytes")
+    Log.info("  Image size: \(imageData.count) bytes")
+    
+    return request
 }
