@@ -1,133 +1,54 @@
-
-import SwiftUI
-
-struct ScanResultView: View {
-    @Environment(\.presentationMode) var presentationMode
-    @StateObject private var viewModel = ScanResultViewModel()
-    @State private var isExpanded = false
-    @State private var isVisible = true
-    
-    // Add this to accept WUID from navigation
-    let wuId: String?
-    
-    init(wuId: String? = nil) {
-        self.wuId = wuId
+func pollTaskStatus(wuId: String) -> AnyPublisher<ModHealthResponseData?, Error> {
+    guard let urlString = buildPollingURL(wuId: wuId) else {
+        return Fail(error: URLError(.badURL)).eraseToAnyPublisher()
     }
     
-    var body: some View {
-        ZStack {
-            Color.black.edgesIgnoringSafeArea(.all)
+    let headers = APIHelper.getStandardRequestHeaders(keychainService: keychainService)
+    
+    Log.info("=== MOD-HEALTH POLLING REQUEST ===")
+    Log.info("URL: \(urlString)")
+    Log.info("WUID: \(wuId)")
+    Log.info("=== END REQUEST INFO ===")
+    
+    // Create a raw URLRequest to see the actual response
+    guard let url = URL(string: urlString) else {
+        return Fail(error: URLError(.badURL)).eraseToAnyPublisher()
+    }
+    
+    var request = URLRequest(url: url)
+    request.httpMethod = "GET"
+    headers.forEach { key, value in
+        request.setValue(value, forHTTPHeaderField: key)
+    }
+    
+    return URLSession.shared.dataTaskPublisher(for: request)
+        .map { data, response -> ModHealthResponseData? in
+            // LOG THE RAW RESPONSE
+            let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode response"
+            Log.info("=== RAW API RESPONSE ===")
+            Log.info(responseString)
+            Log.info("=== END RAW RESPONSE ===")
             
-            if viewModel.isLoading {
-                ProgressView("Analyzing shelf image...")
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .foregroundColor(.white)
-            } else if let error = viewModel.error {
-                VStack {
-                    Text("Error: \(error.localizedDescription)")
-                        .foregroundColor(.white)
-                        .padding()
-                    Button("Retry") {
-                        if let wuId = wuId {
-                            viewModel.startPolling(with: wuId)
-                        }
+            // Try to decode - but handle errors gracefully
+            do {
+                let apiResponse = try JSONDecoder().decode(ModHealthAPIResponse.self, from: data)
+                return apiResponse.payload.data.first
+            } catch {
+                Log.error("Decoding failed: \(error)")
+                // Let's try to understand the structure
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    Log.info("JSON structure: \(json.keys)")
+                    if let payload = json["payload"] {
+                        Log.info("Payload type: \(type(of: payload))")
+                        Log.info("Payload content: \(payload)")
                     }
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
                 }
-            } else {
-                VStack(spacing: 0) {
-                    navigationHeader
-                    mainImageContent
-                    Spacer()
-                }
-            }
-            
-            GeometryReader { geometry in
-                if isVisible && viewModel.modHealthResponse != nil {
-                    ReviewSectionBottomSheet(
-                        modHealthResponse: viewModel.modHealthResponse,
-                        onTryAgain: {
-                            print("Try again tapped")
-                        },
-                        onDone: {
-                            print("Done tapped")
-                            presentationMode.wrappedValue.dismiss()
-                        },
-                        isVisible: $isVisible,
-                        isExpanded: $isExpanded,
-                        screenHeight: geometry.size.height
-                    )
-                }
+                throw error
             }
         }
-        .navigationBarHidden(true)
-        .onAppear {
-            if let wuId = wuId {
-                viewModel.startPolling(with: wuId)
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                isVisible = true
-            }
+        .mapError { error in
+            Log.error("Network or parsing error: \(error)")
+            return error
         }
-    }
-    
-    // MARK: - Navigation Header
-    private var navigationHeader: some View {
-        ZStack {
-            Color(red: 0/255, green: 113/255, blue: 220/255)
-                .frame(height: 56)
-            
-            HStack {
-                Button(action: {
-                    presentationMode.wrappedValue.dismiss()
-                }) {
-                    Image(systemName: "chevron.left")
-                        .foregroundColor(.white)
-                        .frame(width: 24, height: 24)
-                }
-                .padding(.leading, 16)
-                
-                Spacer()
-                
-                Text(viewModel.modHealthResponse?.sectionTitle ?? "Loading...")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(.white)
-                
-                Spacer()
-                
-                Button(action: {
-                }) {
-                    Image(systemName: "questionmark.circle")
-                        .foregroundColor(.white)
-                        .frame(width: 24, height: 24)
-                }
-                .padding(.trailing, 16)
-            }
-        }
-    }
-    
-    // MARK: - Main Image Content
-    private var mainImageContent: some View {
-        GeometryReader { geometry in
-            Rectangle()
-                .fill(Color.gray.opacity(0.3))
-                .overlay(
-                    VStack {
-                        Text("Shelf Image")
-                            .foregroundColor(.white)
-                            .font(.title)
-                        
-                        if let imageUri = viewModel.modHealthResponse?.enhancedImageUri {
-                            Text("Image: \(imageUri)")
-                                .foregroundColor(.white.opacity(0.7))
-                                .font(.caption)
-                        }
-                    }
-                )
-                .frame(width: geometry.size.width, height: geometry.size.height)
-        }
-    }
+        .eraseToAnyPublisher()
 }
