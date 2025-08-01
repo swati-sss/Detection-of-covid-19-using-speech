@@ -1,1 +1,127 @@
+import Foundation
 
+// MARK: - API Response Wrapper
+struct ModHealthAPIResponse: Codable {
+    let status: String
+    let header: APIHeader
+    let errors: [String]
+    let payload: ModHealthPayload
+}
+
+struct APIHeader: Codable {
+    let headerAttributes: [String: String]
+}
+
+struct ModHealthPayload: Codable {
+    let timestamp: String
+    let data: [ModHealthResponseData]
+}
+
+// MARK: - Main Mod Health Data (similar to your existing response.json but with different field names)
+struct ModHealthResponseData: Codable {
+    let errors: [ModHealthError]?
+    let capturedAt: String
+    let storeId: String
+    let zoneId: String
+    let aisleId: String
+    let storeSectionId: String
+    let modSectionId: String
+    let modCategory: String
+    let planogramId: String
+    let planogramUri: String?
+    let taskId: String
+    let wuId: String
+    let enhancedImageUri: String
+    let originalImageUri: String
+    let imageIssue: [String]
+    let userId: String
+    let timestamp: String
+    let missingItems: [ModHealthItem]
+    let misplacedItems: [ModHealthItem]
+    let unknownItems: [ModHealthItem]
+    let correctItems: [ModHealthItem]
+    
+    enum CodingKeys: String, CodingKey {
+        case errors
+        case capturedAt = "captured_at"
+        case storeId = "store_id"
+        case zoneId = "zone_id"
+        case aisleId = "aisle_id"
+        case storeSectionId = "store_section_id"
+        case modSectionId = "mod_section_id"
+        case modCategory = "mod_category"
+        case planogramId = "planogram_id"
+        case planogramUri = "planogram_uri"
+        case taskId = "task_id"
+        case wuId = "wu_id"
+        case enhancedImageUri = "enhanced_image_uri"
+        case originalImageUri = "original_image_uri"
+        case imageIssue = "image_issue"
+        case userId = "user_id"
+        case timestamp
+        case missingItems = "missing_items"
+        case misplacedItems = "misplaced_items"
+        case unknownItems = "unknown_items"
+        case correctItems = "correct_items"
+    }
+    
+    // Computed property to match your existing UI expectations
+    var sectionTitle: String {
+        return "\(zoneId)\(aisleId) Section \(storeSectionId)"
+    }
+}
+
+struct ModHealthError: Codable {
+    let errorCode: String
+    let errorMessage: String
+    
+    enum CodingKeys: String, CodingKey {
+        case errorCode = "error_code"
+        case errorMessage = "error_message"
+    }
+}
+
+struct ModHealthItem: Codable {
+    let name: String
+    let upc: String        // Note: API returns string, not Int
+    let itemId: String
+    let status: String
+    let shelf: String      // Note: API returns string, not Int
+    let position: String
+    let confidence: String
+    let xMin: String?      // Note: API returns string, not Int
+    let xMax: String?
+    let yMin: String?
+    let yMax: String?
+    let priceTag: String   // Note: API returns string "true"/"false", not Bool
+    let priceTagDetails: ModHealthPriceTagDetails
+    
+    enum CodingKeys: String, CodingKey {
+        case name, upc, status, shelf, position, confidence
+        case itemId = "item_id"
+        case xMin = "x_min"
+        case xMax = "x_max"
+        case yMin = "y_min"
+        case yMax = "y_max"
+        case priceTag = "price_tag"
+        case priceTagDetails = "price_tag_details"
+    }
+}
+
+struct ModHealthPriceTagDetails: Codable {
+    let shelf: String      // Note: API returns string, not Int
+    let xMin: String?
+    let xMax: String?
+    let yMin: String?
+    let yMax: String?
+    let titles: [String]
+    let prices: [String]   // Note: API returns array of strings, not single string
+    
+    enum CodingKeys: String, CodingKey {
+        case shelf, titles, prices
+        case xMin = "x_min"
+        case xMax = "x_max"
+        case yMin = "y_min"
+        case yMax = "y_max"
+    }
+}
