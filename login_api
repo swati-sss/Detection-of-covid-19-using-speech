@@ -1,225 +1,133 @@
 
-
-@_implementationOnly import LivingDesign
-@_implementationOnly import Bogle
 import SwiftUI
 
-struct ReviewSectionBottomSheet: View {
+struct ScanResultView: View {
+    @Environment(\.presentationMode) var presentationMode
+    @StateObject private var viewModel = ScanResultViewModel()
+    @State private var isExpanded = false
+    @State private var isVisible = true
     
-    // Use the NEW API model directly
-    let modHealthResponse: ModHealthResponseData?
-    let onTryAgain: () -> Void
-    let onDone: () -> Void
+    // Add this to accept WUID from navigation
+    let wuId: String?
     
-    @Binding var isVisible: Bool
-    @Binding var isExpanded: Bool
-    
-    let screenHeight: CGFloat
-
-    let fullHeight: CGFloat = 800
-    let partialHeight: CGFloat = 200
-
-    var currentOffset: CGFloat {
-        if !isVisible {
-            return screenHeight
-        } else if isExpanded {
-            return screenHeight - fullHeight + 35
-        } else {
-            return screenHeight - partialHeight
-        }
+    init(wuId: String? = nil) {
+        self.wuId = wuId
     }
     
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button(action: {
-                    withAnimation(.spring()) {
-                        isExpanded.toggle()
+        ZStack {
+            Color.black.edgesIgnoringSafeArea(.all)
+            
+            if viewModel.isLoading {
+                ProgressView("Analyzing shelf image...")
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .foregroundColor(.white)
+            } else if let error = viewModel.error {
+                VStack {
+                    Text("Error: \(error.localizedDescription)")
+                        .foregroundColor(.white)
+                        .padding()
+                    Button("Retry") {
+                        if let wuId = wuId {
+                            viewModel.startPolling(with: wuId)
+                        }
                     }
-                }) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
-                        .font(.system(size: 19))
-                        .padding(.leading)
+                    .padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
                 }
-                
-                Spacer()
-                
-                Text("Review Section")
-                    .font(Font(UIFont.bogle(ofSize: 19, weight: .bold)))
-                    .lineLimit(1)
-                
-                Spacer()
-                
-                Button(action: {
-                    withAnimation(.spring()) {
-                        isVisible = false
-                    }
-                }) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 19))
-                        .padding(.trailing)
-                }
-            }
-            .foregroundStyle(.black)
-            .padding(.top, 15)
-            .padding(.horizontal, 5)
-            
-            HStack(spacing: 11) {
-                HStack(spacing: 5) {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .foregroundColor(.red)
-                        .font(.system(size: 16))
-                    Text("Missing (\(modHealthResponse?.missingItems.count ?? 0))")
-                }
-                HStack(spacing: 5){
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.yellow)
-                        .font(.system(size: 16))
-                    Text("Misplaced (\(modHealthResponse?.misplacedItems.count ?? 0))")
-                }
-                HStack(spacing: 5){
-                    Image(systemName: "circle.fill")
-                        .foregroundColor(.orange)
-                        .font(.system(size: 16))
-                    Text("Unknown (\(modHealthResponse?.unknownItems.count ?? 0))")
-                }
-            }
-            .font(Font(UIFont.bogle(ofSize: 17, weight: .bold)))
-            .padding(.vertical)
-            
-            Divider()
-            
-            if isExpanded {
-                HStack {
-                    Text("Filter By")
-                        .font(Font(UIFont.bogle(ofSize: 17, weight: .bold)))
-                        .padding(.top)
-                        .padding(.leading)
+            } else {
+                VStack(spacing: 0) {
+                    navigationHeader
+                    mainImageContent
                     Spacer()
                 }
-                ExpandableListView(modHealthResponse: modHealthResponse)
-                Divider()
             }
             
-            HStack(spacing: 16) {
-                Button(action: {
-                    isVisible = false
-                    onTryAgain()
-                }) {
-                    Text("Try again")
-                        .font(.system(size: 16, weight: .regular))
-                        .foregroundColor(.black)
-                        .underline()
+            GeometryReader { geometry in
+                if isVisible && viewModel.modHealthResponse != nil {
+                    ReviewSectionBottomSheet(
+                        modHealthResponse: viewModel.modHealthResponse,
+                        onTryAgain: {
+                            print("Try again tapped")
+                        },
+                        onDone: {
+                            print("Done tapped")
+                            presentationMode.wrappedValue.dismiss()
+                        },
+                        isVisible: $isVisible,
+                        isExpanded: $isExpanded,
+                        screenHeight: geometry.size.height
+                    )
                 }
-                .frame(width: 100, height: 40)
+            }
+        }
+        .navigationBarHidden(true)
+        .onAppear {
+            if let wuId = wuId {
+                viewModel.startPolling(with: wuId)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                isVisible = true
+            }
+        }
+    }
+    
+    // MARK: - Navigation Header
+    private var navigationHeader: some View {
+        ZStack {
+            Color(red: 0/255, green: 113/255, blue: 220/255)
+                .frame(height: 56)
+            
+            HStack {
+                Button(action: {
+                    presentationMode.wrappedValue.dismiss()
+                }) {
+                    Image(systemName: "chevron.left")
+                        .foregroundColor(.white)
+                        .frame(width: 24, height: 24)
+                }
+                .padding(.leading, 16)
+                
+                Spacer()
+                
+                Text(viewModel.modHealthResponse?.sectionTitle ?? "Loading...")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.white)
+                
+                Spacer()
                 
                 Button(action: {
-                    isVisible = false
-                    onDone()
                 }) {
-                    Text("Done")
-                        .font(.system(size: 16, weight: .bold))
+                    Image(systemName: "questionmark.circle")
                         .foregroundColor(.white)
-                        .frame(maxWidth: .infinity, minHeight: 40)
-                        .background(Color(red: 0/255, green: 113/255, blue: 220/255))
-                        .cornerRadius(20)
+                        .frame(width: 24, height: 24)
                 }
+                .padding(.trailing, 16)
             }
-            .padding(25)
-            
-            Spacer()
-        }
-        .frame(height: fullHeight)
-        .frame(maxWidth: .infinity)
-        .background(Color(.white))
-        .cornerRadius(20)
-        .shadow(radius: 5)
-        .offset(y: currentOffset)
-        .animation(.easeInOut, value: isExpanded)
-        .animation(.easeInOut, value: isVisible)
-    }
-}
-
-struct ExpandableItem: Identifiable {
-    let id = UUID()
-    let title: String
-    var isChecked: Bool = false
-    var isExpanded: Bool = false
-    var items: [ModHealthItem]  // Use NEW API model directly
-}
-
-struct ExpandableListView: View {
-    
-    @State private var items: [ExpandableItem] = []
-    let modHealthResponse: ModHealthResponseData?  // Use NEW API model directly
-    
-    var body: some View {
-        List {
-            ForEach(items.indices, id: \.self) { index in
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Button(action: {
-                            items[index].isChecked.toggle()
-                            items[index].isExpanded = items[index].isChecked
-                        }) {
-                            Image(systemName: items[index].isChecked ? "checkmark.square.fill" : "square")
-                        }
-
-                        Text(items[index].title)
-                            .font(Font(UIFont.bogle(ofSize: 17, weight: .bold)))
-
-                        Spacer()
-                    }
-
-                    if items[index].isExpanded {
-                        ForEach(items[index].items.indices, id: \.self) { itemIndex in
-                            let item = items[index].items[itemIndex]
-                            
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text(item.name)
-                                    .font(Font(UIFont.bogle(ofSize: 14, weight: .bold)))
-                                    .foregroundColor(.black)
-                                
-                                HStack() {
-                                    Text("UPC:")
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
-                                    Text(item.upc)  // API returns string, use directly
-                                        .font(.caption)
-                                        .fontWeight(.medium)
-                                }
-                                
-                                HStack() {
-                                    Text("Expected:")
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
-                                    Text("Position \(item.position)")
-                                        .font(.caption)
-                                        .fontWeight(.medium)
-                                }
-                            }
-                            .padding(.vertical, 8)
-                            .transition(.opacity.combined(with: .slide))
-                        }
-                    }
-                }
-                .padding(.vertical, 8)
-            }
-        }
-        .listStyle(.plain)
-        .onAppear {
-            setupExpandableItems()
         }
     }
     
-    private func setupExpandableItems() {
-        guard let response = modHealthResponse else { return }
-        
-        items = [
-            ExpandableItem(title: "Missing Items (\(response.missingItems.count))", items: response.missingItems),
-            ExpandableItem(title: "Misplaced Items (\(response.misplacedItems.count))", items: response.misplacedItems),
-            ExpandableItem(title: "Unknown Items (\(response.unknownItems.count))", items: response.unknownItems),
-            ExpandableItem(title: "Correct Items (\(response.correctItems.count))", items: response.correctItems)
-        ]
+    // MARK: - Main Image Content
+    private var mainImageContent: some View {
+        GeometryReader { geometry in
+            Rectangle()
+                .fill(Color.gray.opacity(0.3))
+                .overlay(
+                    VStack {
+                        Text("Shelf Image")
+                            .foregroundColor(.white)
+                            .font(.title)
+                        
+                        if let imageUri = viewModel.modHealthResponse?.enhancedImageUri {
+                            Text("Image: \(imageUri)")
+                                .foregroundColor(.white.opacity(0.7))
+                                .font(.caption)
+                        }
+                    }
+                )
+                .frame(width: geometry.size.width, height: geometry.size.height)
+        }
     }
 }
