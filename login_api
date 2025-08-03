@@ -13,17 +13,17 @@ struct BoundingBoxView: View {
            let yMin = Double(yMinStr),
            let yMax = Double(yMaxStr) {
             
-            // ✅ Y-axis scaling (perfect with .fill)
-            let scaleY = imageSize.height / 1080
+            // ✅ X-axis scaling (perfect with .fit since no side letterboxing)
+            let scaleX = imageSize.width / 1080  // Image width
             
-            // ✅ X-axis adjustment for cropping
-            let originalWidthScaled = 1920 * scaleY  // What the width would be at same scale
-            let cropAmount = (originalWidthScaled - imageSize.width) / 2  // How much is cropped off each side
-            let scaleX = scaleY  // Use same scale
+            // ✅ Y-axis adjustment for top/bottom letterboxing
+            let originalHeightScaled = 1920 * scaleX  // What the height would be at same scale
+            let letterboxAmount = (imageSize.height - originalHeightScaled) / 2  // Black bars on top/bottom
+            let scaleY = scaleX  // Use same scale to maintain aspect ratio
             
             // Calculate positions
-            let boxX = (CGFloat(xMin) * scaleX) - cropAmount
-            let boxY = CGFloat(yMin) * scaleY
+            let boxX = CGFloat(xMin) * scaleX
+            let boxY = (CGFloat(yMin) * scaleY) + letterboxAmount  // ✅ Add letterbox offset
             let boxWidth = CGFloat(xMax - xMin) * scaleX
             let boxHeight = CGFloat(yMax - yMin) * scaleY
             
