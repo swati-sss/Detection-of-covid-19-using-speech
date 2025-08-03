@@ -1,54 +1,48 @@
-func pollTaskStatus(wuId: String) -> AnyPublisher<ModHealthResponseData?, Error> {
-    guard let urlString = buildPollingURL(wuId: wuId) else {
-        return Fail(error: URLError(.badURL)).eraseToAnyPublisher()
-    }
+struct BoundingBoxView: View {
+    let item: ModHealthItem
+    let color: Color
+    let imageSize: CGSize
     
-    let headers = APIHelper.getStandardRequestHeaders(keychainService: keychainService)
-    
-    Log.info("=== MOD-HEALTH POLLING REQUEST ===")
-    Log.info("URL: \(urlString)")
-    Log.info("WUID: \(wuId)")
-    Log.info("=== END REQUEST INFO ===")
-    
-    // Create a raw URLRequest to see the actual response
-    guard let url = URL(string: urlString) else {
-        return Fail(error: URLError(.badURL)).eraseToAnyPublisher()
-    }
-    
-    var request = URLRequest(url: url)
-    request.httpMethod = "GET"
-    headers.forEach { key, value in
-        request.setValue(value, forHTTPHeaderField: key)
-    }
-    
-    return URLSession.shared.dataTaskPublisher(for: request)
-        .map { data, response -> ModHealthResponseData? in
-            // LOG THE RAW RESPONSE
-            let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode response"
-            Log.info("=== RAW API RESPONSE ===")
-            Log.info(responseString)
-            Log.info("=== END RAW RESPONSE ===")
+    var body: some View {
+        if let xMinStr = item.xMin,
+           let xMaxStr = item.xMax,
+           let yMinStr = item.yMin,
+           let yMaxStr = item.yMax,
+           let xMin = Double(xMinStr),
+           let xMax = Double(xMaxStr),
+           let yMin = Double(yMinStr),
+           let yMax = Double(yMaxStr) {
             
-            // Try to decode - but handle errors gracefully
-            do {
-                let apiResponse = try JSONDecoder().decode(ModHealthAPIResponse.self, from: data)
-                return apiResponse.payload.data.first
-            } catch {
-                Log.error("Decoding failed: \(error)")
-                // Let's try to understand the structure
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    Log.info("JSON structure: \(json.keys)")
-                    if let payload = json["payload"] {
-                        Log.info("Payload type: \(type(of: payload))")
-                        Log.info("Payload content: \(payload)")
-                    }
-                }
-                throw error
-            }
+            // ✅ Calculate how much of the original image is actually visible
+            let originalImageAspectRatio: CGFloat = 1920 / 1080  // 16:9
+            let containerAspectRatio = imageSize.width / imageSize.height
+            
+            // With .fill, Y-axis uses full height, X-axis gets cropped
+            let scaleY = imageSize.height / 1080  // Y-axis is perfect
+            
+            // Calculate the actual width of the original image when scaled to fit height
+            let scaledOriginalWidth = 1920 * scaleY
+            let visibleWidth = imageSize.width
+            let cropOffsetX = (scaledOriginalWidth - visibleWidth) / 2
+            
+            // ✅ Adjust X coordinates for the cropped portion
+            let scaleX = scaleY  // Same scale as Y since image maintains aspect ratio
+            
+            let adjustedXMin = (CGFloat(xMin) * scaleX) - cropOffsetX
+            let adjustedXMax = (CGFloat(xMax) * scaleX) - cropOffsetX
+            
+            // Y coordinates don't need adjustment since they're perfect
+            let boxY = CGFloat(yMin) * scaleY
+            let boxHeight = CGFloat(yMax - yMin) * scaleY
+            
+            // Calculate final box dimensions
+            let boxX = adjustedXMin
+            let boxWidth = adjustedXMax - adjustedXMin
+            
+            Rectangle()
+                .stroke(color, lineWidth: 2)
+                .frame(width: boxWidth, height: boxHeight)
+                .position(x: boxX + boxWidth/2, y: boxY + boxHeight/2)
         }
-        .mapError { error in
-            Log.error("Network or parsing error: \(error)")
-            return error
-        }
-        .eraseToAnyPublisher()
+    }
 }
