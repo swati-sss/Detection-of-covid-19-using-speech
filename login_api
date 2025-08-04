@@ -1,53 +1,21 @@
-func pollTaskStatus(wuId: String) -> AnyPublisher<ModHealthResponseData?, Error> {
-    // Create a timer that fires every 30 seconds
-    Timer.publish(every: 30.0, on: .main, in: .common)
-        .autoconnect()
-        .prepend(Date()) // Fire immediately first time
-        .flatMap { [weak self] _ -> AnyPublisher<ModHealthAPIResponse?, Error> in
-            guard let self = self else {
-                return Fail(error: URLError(.cancelled)).eraseToAnyPublisher()
+private func showScanResults(with wuId: String) {
+    DispatchQueue.main.async { [weak self] in
+        self?.showPhotoGallery = false // Close any open gallery
+        
+        let scanResultView = ScanResultView(wuId: wuId)
+        let hostingController = UIHostingController(rootView: scanResultView)
+        hostingController.modalPresentationStyle = .fullScreen
+        
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = windowScene.windows.first,
+           let rootVC = window.rootViewController {
+            
+            var presentingVC = rootVC
+            while let presented = presentingVC.presentedViewController {
+                presentingVC = presented
             }
             
-            guard let urlString = self.buildPollingURL(wuId: wuId) else {
-                return Fail(error: URLError(.badURL)).eraseToAnyPublisher()
-            }
-            
-            let headers = APIHelper.getStandardRequestHeaders(keychainService: self.keychainService)
-            
-            Log.info("Polling mod-health API for WUID: \(wuId)")
-            
-            return URLSessionRequest<ModHealthAPIResponse>(
-                urlString: urlString,
-                method: .get,
-                headers: headers,
-                urlSession: URLSession.shared
-            )
-            .execute()
-            .eraseToAnyPublisher()
+            presentingVC.present(hostingController, animated: true)
         }
-        .compactMap { response -> ModHealthResponseData? in
-            guard let taskStatus = response?.payload?.taskStatus else {
-                Log.warning("No task status in response")
-                return nil
-            }
-            
-            Log.info("Task status: \(taskStatus)")
-            
-            switch taskStatus {
-            case "COMPLETED":
-                Log.info("Task completed successfully")
-                return response?.payload?.data
-            case "FAILED":
-                Log.error("Task failed")
-                return nil // This will stop the polling
-            case "PENDING":
-                Log.info("Task still pending, will poll again in 30 seconds...")
-                return nil // Continue polling
-            default:
-                Log.warning("Unknown task status: \(taskStatus)")
-                return nil
-            }
-        }
-        .first(where: { $0 != nil }) // Stop when we get data (COMPLETED) or nil (FAILED)
-        .eraseToAnyPublisher()
+    }
 }
