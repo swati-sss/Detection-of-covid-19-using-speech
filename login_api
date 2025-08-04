@@ -1,36 +1,44 @@
-struct BoundingBoxView: View {
-    let item: ModHealthItem
-    let color: Color
-    let imageSize: CGSize
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct TestView: View {
+    let fn = "log.zip"
     
     var body: some View {
-        if let xMinStr = item.xMin,
-           let xMaxStr = item.xMax,
-           let yMinStr = item.yMin,
-           let yMaxStr = item.yMax,
-           let xMin = Double(xMinStr),
-           let xMax = Double(xMaxStr),
-           let yMin = Double(yMinStr),
-           let yMax = Double(yMaxStr) {
+        VStack {
+            Text("test")
+                .font(.title)
+                .padding()
             
-            // ✅ X-axis scaling (perfect with .fit since no side letterboxing)
-            let scaleX = imageSize.width / 1080  // Image width
-            
-            // ✅ Y-axis adjustment for top/bottom letterboxing
-            let originalHeightScaled = 1920 * scaleX  // What the height would be at same scale
-            let letterboxAmount = (imageSize.height - originalHeightScaled) / 2  // Black bars on top/bottom
-            let scaleY = scaleX  // Use same scale to maintain aspect ratio
-            
-            // Calculate positions
-            let boxX = CGFloat(xMin) * scaleX
-            let boxY = (CGFloat(yMin) * scaleY) + letterboxAmount  // ✅ Add letterbox offset
-            let boxWidth = CGFloat(xMax - xMin) * scaleX
-            let boxHeight = CGFloat(yMax - yMin) * scaleY
-            
-            Rectangle()
-                .stroke(color, lineWidth: 2)
-                .frame(width: boxWidth, height: boxHeight)
-                .position(x: boxX + boxWidth/2, y: boxY + boxHeight/2)
+            Button(action: {
+                testfn()
+            }) {
+                HStack {
+                    Text("test \(fn)")
+                }
+                .padding()
+                .background(Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(8)
+            }
+        }
+    }
+    
+    func testfn() {
+        guard let fur = Bundle.main.url(forResource: fn.components(separatedBy: ".").first,
+                                              withExtension: "zip") else {
+            print("error")
+            return
+        }
+        
+        let activityViewController = UIActivityViewController(
+            activityItems: [fur],
+            applicationActivities: nil
+        )
+        
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootViewController = windowScene.windows.first?.rootViewController {
+            rootViewController.present(activityViewController, animated: true, completion: nil)
         }
     }
 }
