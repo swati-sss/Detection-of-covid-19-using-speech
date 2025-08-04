@@ -1,46 +1,53 @@
-private func pollOnce(wuId: String) {
-    let pollingService = ModHealthPollingService(keychainService: KeychainService.standard)
-    
-    pollingCancellable = pollingService.pollTaskStatus(wuId: wuId)
-        .receive(on: DispatchQueue.main)
-        .sink(
-            receiveCompletion: { [weak self] completion in
-                if case .failure(let error) = completion {
-                    self?.loadingStatus = ""
-                    self?.showErrorAlert(with: "Failed to check status: \(error.localizedDescription)")
-                }
-            },
-            receiveValue: { [weak self] apiResponse in
-                guard let self = self else { return }
-                
-                let taskStatus = apiResponse?.payload?.taskStatus ?? "PENDING"
-                
-                switch taskStatus.uppercased() {
-                case "COMPLETED":
-                    self.loadingStatus = ""
-                    // Present ScanResultView with the wuId
-                    let scanResultView = ScanResultView(wuId: wuId)
-                    let hostingController = UIHostingController(rootView: scanResultView)
-                    hostingController.modalPresentationStyle = .fullScreen
-                    
-                    if let presented = UIApplication.shared.windows.first?.rootViewController?.presentedViewController {
-                        presented.present(hostingController, animated: true)
-                    }
-                    
-                case "FAILED":
-                    self.loadingStatus = ""
-                    self.showErrorAlert(with: "Image processing failed")
-                    
-                case "PENDING":
-                    // Poll again after 30 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
-                        self.pollOnce(wuId: wuId)
-                    }
-                    
-                default:
-                    self.loadingStatus = ""
-                    self.showErrorAlert(with: "Unknown status: \(taskStatus)")
-                }
+func pollTaskStatus(wuId: String) -> AnyPublisher<ModHealthResponseData?, Error> {
+    // Create a timer that fires every 30 seconds
+    Timer.publish(every: 30.0, on: .main, in: .common)
+        .autoconnect()
+        .prepend(Date()) // Fire immediately first time
+        .flatMap { [weak self] _ -> AnyPublisher<ModHealthAPIResponse?, Error> in
+            guard let self = self else {
+                return Fail(error: URLError(.cancelled)).eraseToAnyPublisher()
             }
-        )
+            
+            guard let urlString = self.buildPollingURL(wuId: wuId) else {
+                return Fail(error: URLError(.badURL)).eraseToAnyPublisher()
+            }
+            
+            let headers = APIHelper.getStandardRequestHeaders(keychainService: self.keychainService)
+            
+            Log.info("Polling mod-health API for WUID: \(wuId)")
+            
+            return URLSessionRequest<ModHealthAPIResponse>(
+                urlString: urlString,
+                method: .get,
+                headers: headers,
+                urlSession: URLSession.shared
+            )
+            .execute()
+            .eraseToAnyPublisher()
+        }
+        .compactMap { response -> ModHealthResponseData? in
+            guard let taskStatus = response?.payload?.taskStatus else {
+                Log.warning("No task status in response")
+                return nil
+            }
+            
+            Log.info("Task status: \(taskStatus)")
+            
+            switch taskStatus {
+            case "COMPLETED":
+                Log.info("Task completed successfully")
+                return response?.payload?.data
+            case "FAILED":
+                Log.error("Task failed")
+                return nil // This will stop the polling
+            case "PENDING":
+                Log.info("Task still pending, will poll again in 30 seconds...")
+                return nil // Continue polling
+            default:
+                Log.warning("Unknown task status: \(taskStatus)")
+                return nil
+            }
+        }
+        .first(where: { $0 != nil }) // Stop when we get data (COMPLETED) or nil (FAILED)
+        .eraseToAnyPublisher()
 }
