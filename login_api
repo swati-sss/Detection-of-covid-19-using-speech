@@ -1,91 +1,46 @@
-private func uploadSingleImageToModHealth(image: UIImage, sectionInfo: SectionInfo) {
-    let storeId = 809
-    let userId = "u123"
+private func pollOnce(wuId: String) {
+    let pollingService = ModHealthPollingService(keychainService: KeychainService.standard)
     
-    let locationParts = sectionInfo.basicInfo.itemDesc.components(separatedBy: "-")
-    let zoneAisle = locationParts.first ?? ""
-    let sectionPart = locationParts.count > 1 ? locationParts[1] : "0"
-    
-    let zoneId = String(zoneAisle.prefix(1))
-    let aisleId = String(zoneAisle.dropFirst())
-    
-    Log.info("Uploading single image to mod-health API...")
-    loadingStatus = "Uploading image for analysis..."
-    
-    guard let request = createModHealthUploadRequest(
-        image: image,
-        storeId: String(storeId),
-        zoneId: zoneId,
-        aisleId: aisleId,
-        storeSectionId: sectionPart,
-        userId: userId
-    ) else {
-        Log.error("Failed to create mod-health upload request")
-        loadingStatus = ""
-        showErrorAlert(with: "Failed to prepare image upload")
-        return
-    }
-    
-    // Use Combine for consistency with the rest of the codebase
-    URLSession.shared.dataTaskPublisher(for: request)
-        .tryMap { data, response -> Data in
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw URLError(.badServerResponse)
-            }
-            
-            Log.info("Mod-health upload response status: \(httpResponse.statusCode)")
-            
-            guard httpResponse.statusCode == 200 else {
-                throw URLError(.badServerResponse, userInfo: [
-                    "statusCode": httpResponse.statusCode,
-                    "response": String(data: data, encoding: .utf8) ?? "No response body"
-                ])
-            }
-            
-            return data
-        }
+    pollingCancellable = pollingService.pollTaskStatus(wuId: wuId)
         .receive(on: DispatchQueue.main)
         .sink(
             receiveCompletion: { [weak self] completion in
-                self?.loadingStatus = ""
-                
-                switch completion {
-                case .finished:
-                    break
-                case .failure(let error):
-                    Log.error("Mod-health upload failed: \(error)")
-                    if let urlError = error as? URLError,
-                       let statusCode = urlError.userInfo["statusCode"] as? Int {
-                        self?.showErrorAlert(with: "Upload failed with status: \(statusCode)")
-                    } else {
-                        self?.showErrorAlert(with: "Upload failed: \(error.localizedDescription)")
-                    }
+                if case .failure(let error) = completion {
+                    self?.loadingStatus = ""
+                    self?.showErrorAlert(with: "Failed to check status: \(error.localizedDescription)")
                 }
             },
-            receiveValue: { [weak self] data in
-                // Parse the response to get WUID
-                do {
-                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let payload = json["payload"] as? [String: Any],
-                       let wuId = payload["wuId"] as? String {
-                        
-                        Log.info("Upload successful! WUID: \(wuId)")
-                        
-                        // TODO: When backend is ready, uncomment this to proceed with polling
-                        // self?.startPollingForResults(wuId: wuId)
-                        
-                        // For now, just show success
-                        self?.showErrorAlert(with: "Upload successful! WUID: \(wuId)")
-                    } else {
-                        Log.warning("Could not extract WUID from response")
-                        self?.showErrorAlert(with: "Upload successful but could not extract task ID")
+            receiveValue: { [weak self] apiResponse in
+                guard let self = self else { return }
+                
+                let taskStatus = apiResponse?.payload?.taskStatus ?? "PENDING"
+                
+                switch taskStatus.uppercased() {
+                case "COMPLETED":
+                    self.loadingStatus = ""
+                    // Present ScanResultView with the wuId
+                    let scanResultView = ScanResultView(wuId: wuId)
+                    let hostingController = UIHostingController(rootView: scanResultView)
+                    hostingController.modalPresentationStyle = .fullScreen
+                    
+                    if let presented = UIApplication.shared.windows.first?.rootViewController?.presentedViewController {
+                        presented.present(hostingController, animated: true)
                     }
-                } catch {
-                    Log.error("Failed to parse upload response: \(error)")
-                    // Even if we can't parse the response, the upload might have succeeded
-                    self?.showErrorAlert(with: "Upload completed. Check Xcode console for details.")
+                    
+                case "FAILED":
+                    self.loadingStatus = ""
+                    self.showErrorAlert(with: "Image processing failed")
+                    
+                case "PENDING":
+                    // Poll again after 30 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+                        self.pollOnce(wuId: wuId)
+                    }
+                    
+                default:
+                    self.loadingStatus = ""
+                    self.showErrorAlert(with: "Unknown status: \(taskStatus)")
                 }
             }
         )
-        .store(in: &cancellables)
 }
