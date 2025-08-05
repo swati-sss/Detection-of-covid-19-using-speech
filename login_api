@@ -1,1 +1,51 @@
 
+else if let error = viewModel.error {
+    VStack(spacing: 20) {
+        Image(systemName: "exclamationmark.triangle")
+            .font(.system(size: 50))
+            .foregroundColor(.yellow)
+        
+        Text("Image Analysis Failed")
+            .font(.system(size: 20, weight: .bold))
+            .foregroundColor(.white)
+        
+        Text("The image could not be analyzed. This might be due to image quality, lighting, or server issues.")
+            .font(.system(size: 16))
+            .foregroundColor(.white)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal)
+        
+        HStack(spacing: 16) {
+            // Option 1: Retake photo
+            Button("Retake Photo") {
+                presentationMode.wrappedValue.dismiss()
+                onTryAgain() // Use the existing try again flow
+            }
+            .padding()
+            .background(Color.blue)
+            .foregroundColor(.white)
+            .cornerRadius(8)
+            
+            // Option 2: Try different section
+            Button("Try Different Section") {
+                presentationMode.wrappedValue.dismiss()
+                onDone() // Use the existing done flow
+            }
+            .padding()
+            .background(Color.green)
+            .foregroundColor(.white)
+            .cornerRadius(8)
+        }
+        
+        // Option 3: Retry polling (less prominent)
+        Button("Retry Analysis") {
+            if let wuId = wuId {
+                viewModel.startPolling(with: wuId)
+            }
+        }
+        .font(.system(size: 14))
+        .foregroundColor(.gray)
+        .underline()
+    }
+    .padding()
+}
