@@ -1,44 +1,33 @@
-import SwiftUI
-import UniformTypeIdentifiers
+// MARK: - Reset Methods for Try Again and Done
 
-struct TestView: View {
-    let fn = "log.zip"
-    
-    var body: some View {
-        VStack {
-            Text("test")
-                .font(.title)
-                .padding()
-            
-            Button(action: {
-                testfn()
-            }) {
-                HStack {
-                    Text("test \(fn)")
-                }
-                .padding()
-                .background(Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(8)
-            }
-        }
+func resetForTryAgain() {
+    // Reset to photo capture mode to retake the picture
+    DispatchQueue.main.async {
+        self.capturedImage = nil
+        self.lastCapturedImage = nil
+        self.capturedImageCount = 0
+        self.loadingStatus = ""
+        self.captureMode = .photo
+        self.cameraManager.startCapturing()
     }
-    
-    func testfn() {
-        guard let fur = Bundle.main.url(forResource: fn.components(separatedBy: ".").first,
-                                              withExtension: "zip") else {
-            print("error")
-            return
-        }
-        
-        let activityViewController = UIActivityViewController(
-            activityItems: [fur],
-            applicationActivities: nil
-        )
-        
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootViewController = windowScene.windows.first?.rootViewController {
-            rootViewController.present(activityViewController, animated: true, completion: nil)
-        }
+}
+
+func resetForNextSection() {
+    // Reset everything to scan a new section
+    DispatchQueue.main.async {
+        self.capturedImage = nil
+        self.lastCapturedImage = nil
+        self.capturedImageCount = 0
+        self.sectionInfo = nil
+        self.productInfo = nil
+        self.isBarCodeScanned = false
+        self.isSectionInfoAvailable = false
+        self.didDismissBottomSheet = false
+        self.didClickOnBottomSheetAction = false
+        self.loadingStatus = ""
+        self.bottomSheetStatus = .notValidated
+        self.subFlowType = .sectionBarCodeScanner
+        self.captureMode = .barcode
+        self.cameraManager.startCapturing()
     }
 }
