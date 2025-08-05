@@ -1,35 +1,44 @@
-    private var storeInputView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "barcode.viewfinder")
-                .font(.system(size: 60))
-                .foregroundColor(.blue)
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct TestView: View {
+    let fn = "log.zip"
+    
+    var body: some View {
+        VStack {
+            Text("test")
+                .font(.title)
+                .padding()
             
-            Text("ModHealth Scanner")
-                .font(Font(UIFont.bogle(ofSize: 24, weight: .bold)))
-            
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Store Number")
-                    .font(Font(UIFont.bogle(ofSize: 14, weight: .medium)))
-                
-                TextField("Enter store number", text: $storeIdInput)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .keyboardType(.numberPad)
-                    .frame(width: 200)
-            }
-            
-            Button("Start Scanner") {
-                if let storeId = Int(storeIdInput) {
-                    compassViewModel.setStoreId(storeId)
-                    compassViewModel.initializeCompass()
+            Button(action: {
+                testfn()
+            }) {
+                HStack {
+                    Text("test \(fn)")
                 }
+                .padding()
+                .background(Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(8)
             }
-            .padding()
-            .background(Color.blue)
-            .foregroundColor(.white)
-            .cornerRadius(12)
-            .font(Font(UIFont.bogle(ofSize: 18, weight: .bold)))
-            .disabled(storeIdInput.isEmpty)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
     }
+    
+    func testfn() {
+        guard let fur = Bundle.main.url(forResource: fn.components(separatedBy: ".").first,
+                                              withExtension: "zip") else {
+            print("error")
+            return
+        }
+        
+        let activityViewController = UIActivityViewController(
+            activityItems: [fur],
+            applicationActivities: nil
+        )
+        
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootViewController = windowScene.windows.first?.rootViewController {
+            rootViewController.present(activityViewController, animated: true, completion: nil)
+        }
+    }
+}
