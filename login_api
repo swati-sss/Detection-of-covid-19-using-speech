@@ -1,31 +1,35 @@
-func startPolling(with wuId: String) {
-    isLoading = true
-    error = nil
-    
-    Log.info("Starting mod-health polling for WUID: \(wuId)")
-    
-    pollingService.pollTaskStatus(wuId: wuId)
-        .receive(on: DispatchQueue.main)
-        .sink(
-            receiveCompletion: { [weak self] completion in
-                self?.isLoading = false
-                if case .failure(let error) = completion {
-                    Log.error("Polling failed: \(error)")
-                    self?.error = error
-                }
-            },
-            receiveValue: { [weak self] apiData in
-                self?.isLoading = false
-                if let apiData = apiData {
-                    self?.modHealthResponse = apiData
-                } else {
-                    self?.error = NSError(
-                        domain: "ModHealth", 
-                        code: -1, 
-                        userInfo: [NSLocalizedDescriptionKey: "Task processing failed"]
-                    )
+    private var storeInputView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "barcode.viewfinder")
+                .font(.system(size: 60))
+                .foregroundColor(.blue)
+            
+            Text("ModHealth Scanner")
+                .font(Font(UIFont.bogle(ofSize: 24, weight: .bold)))
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Store Number")
+                    .font(Font(UIFont.bogle(ofSize: 14, weight: .medium)))
+                
+                TextField("Enter store number", text: $storeIdInput)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .keyboardType(.numberPad)
+                    .frame(width: 200)
+            }
+            
+            Button("Start Scanner") {
+                if let storeId = Int(storeIdInput) {
+                    compassViewModel.setStoreId(storeId)
+                    compassViewModel.initializeCompass()
                 }
             }
-        )
-        .store(in: &cancellables)
-}
+            .padding()
+            .background(Color.blue)
+            .foregroundColor(.white)
+            .cornerRadius(12)
+            .font(Font(UIFont.bogle(ofSize: 18, weight: .bold)))
+            .disabled(storeIdInput.isEmpty)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+    }
