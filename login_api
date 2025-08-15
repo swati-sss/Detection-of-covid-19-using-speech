@@ -1,45 +1,61 @@
-import SwiftUI
-import UniformTypeIdentifiers
 
-struct TestView: View {
-    let fn = "log.zip"
+public func simulateGeofenceChangeForTesting(_ state: String) {
+    #if DEBUG
+    Log.warning("TESTING ONLY: Simulating geofence state change to: \(state)")
     
-    var body: some View {
-        VStack {
-            Text("test")
-                .font(.title)
-                .padding()
-            
-            Button(action: {
-                testfn()
-            }) {
-                HStack {
-                    Text("test \(fn)")
-                }
-                .padding()
-                .background(Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(8)
-            }
-        }
-    }
+    // Get the indoor positioning service
+    let indoorService = serviceLocator.getIndoorPositioningService()
     
-    func testfn() {
-        guard let fur = Bundle.main.url(forResource: fn.components(separatedBy: ".").first,
-                                              withExtension: "zip") else {
-            print("error")
-            return
-        }
-        
-        let activityViewController = UIActivityViewController(
-            activityItems: [fur],
-            applicationActivities: nil
-        )
-        
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootViewController = windowScene.windows.first?.rootViewController {
-            rootViewController.present(activityViewController, animated: true, completion: nil)
-        }
+    // We need to trigger the geofencingStateUpdated method
+    // Since we can't directly call it from here, we'll do it through the StatusService
+    // But first, let's add a proper test method
+    
+    // Cast to the implementation to access the test method
+    if let indoorServiceImpl = indoorService as? IndoorPositioningServiceImpl {
+        indoorServiceImpl.simulateGeofenceStateChangeForTesting(state)
     }
+    #endif
 }
+
+
+
+
+/// Test method - only call this for testing
+func simulateGeofenceStateChangeForTesting(_ stateString: String) {
+    Log.warning("TEST MODE: Simulating geofence state change to \(stateString)")
+    
+    // Create a mock building since we might not have a real one
+    struct TestBuilding: IPSBuilding {
+        var id = "test_building"
+        var clientBuildingId: String? = "test_store"
+        var displayName = "Test Store"
+        var floors: [IPSFloor] = []
+        var primaryFloor: IPSFloor {
+            TestFloor()
+        }
+        
+        struct TestFloor: IPSFloor {
+            var id = "test_floor"
+            var name = "Ground Floor"
+            var order = 0
+            var maps: [IPSMap] = []
+        }
+    }
+    
+    let testBuilding = TestBuilding()
+    let state: IPSBuildingGeofencingState
+    
+    switch stateString.lowercased() {
+    case "inside":
+        state = .inside
+    case "outside":
+        state = .outside
+    default:
+        state = .undefined
+    }
+    
+    // Call the actual method that Oriient would call
+    self.geofencingStateUpdated(for: testBuilding, newState: state)
+}
+
 
