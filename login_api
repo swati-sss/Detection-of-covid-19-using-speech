@@ -1,50 +1,56 @@
-
-public func simulateGeofenceChangeForTesting(_ state: String) {
-    #if DEBUG
-    Log.warning("TESTING ONLY: Simulating geofence state change to: \(state)")
-    
-    // Get the indoor positioning service
-    let indoorService = serviceLocator.getIndoorPositioningService()
-    
-    // We need to trigger the geofencingStateUpdated method
-    // Since we can't directly call it from here, we'll do it through the StatusService
-    // But first, let's add a proper test method
-    
-    // Cast to the implementation to access the test method
-    if let indoorServiceImpl = indoorService as? IndoorPositioningServiceImpl {
-        indoorServiceImpl.simulateGeofenceStateChangeForTesting(state)
-    }
-    #endif
-}
-
-
-
-
-/// Test method - only call this for testing
 func simulateGeofenceStateChangeForTesting(_ stateString: String) {
     Log.warning("TEST MODE: Simulating geofence state change to \(stateString)")
     
-    // Create a mock building since we might not have a real one
-    struct TestBuilding: IPSBuilding {
-        var id = "test_building"
-        var clientBuildingId: String? = "test_store"
-        var displayName = "Test Store"
-        var floors: [IPSFloor] = []
-        var primaryFloor: IPSFloor {
-            TestFloor()
+    // Try to get the actual building from positioning floor
+    let building: IPSBuilding
+    
+    if let actualBuilding = self.positioningFloor.value {
+        // We have a real building from the initialization
+        class BuildingWrapper: IPSBuilding {
+            let id: String
+            let clientBuildingId: String?
+            let displayName: String
+            let floors: [IPSFloor]
+            let primaryFloor: IPSFloor
+            
+            init(floor: IPSFloor) {
+                self.id = floor.buildingId ?? "unknown"
+                // Get store ID from the asset service which should have it
+                let storeId = String(ServiceLocator.shared.getAssetService().storeId)
+                self.clientBuildingId = storeId
+                self.displayName = "Store \(storeId)"
+                self.primaryFloor = floor
+                self.floors = [floor]
+            }
         }
-        
-        struct TestFloor: IPSFloor {
-            var id = "test_floor"
-            var name = "Ground Floor"
-            var order = 0
-            var maps: [IPSMap] = []
+        building = BuildingWrapper(floor: actualBuilding)
+    } else {
+        // Fallback to mock building
+        class TestBuilding: IPSBuilding {
+            var id = "test_building"
+            var clientBuildingId: String?
+            var displayName = "Test Store"
+            var floors: [IPSFloor] = []
+            lazy var primaryFloor: IPSFloor = TestFloor()
+            
+            init() {
+                // Get store ID from asset service
+                let storeId = String(ServiceLocator.shared.getAssetService().storeId)
+                self.clientBuildingId = storeId
+                self.displayName = "Store \(storeId)"
+            }
+            
+            class TestFloor: IPSFloor {
+                var id = "test_floor"
+                var name = "Ground Floor"
+                var order = 0
+                var maps: [IPSMap] = []
+            }
         }
+        building = TestBuilding()
     }
     
-    let testBuilding = TestBuilding()
     let state: IPSBuildingGeofencingState
-    
     switch stateString.lowercased() {
     case "inside":
         state = .inside
@@ -54,8 +60,6 @@ func simulateGeofenceStateChangeForTesting(_ stateString: String) {
         state = .undefined
     }
     
-    // Call the actual method that Oriient would call
-    self.geofencingStateUpdated(for: testBuilding, newState: state)
+    // This triggers the ACTUAL pipeline that Oriient would trigger
+    self.geofencingStateUpdated(for: building, newState: state)
 }
-
-
