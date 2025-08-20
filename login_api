@@ -1,241 +1,31 @@
-import SwiftUI
-import compass_sdk_ios
+ForEach(numericIndices, id: \.self) { i in
+    VStack(alignment: .leading, spacing: 8) {
+        Text(flags[i].name)
+            .font(.headline)
 
-struct FeatureFlagsView: View {
-    @State private var flags: [FeatureFlag] = []
-    @State private var showingAlert = false
-    @State private var alertTitle = ""
-    @State private var alertMessage = ""
-    @Environment(\.presentationMode) var presentationMode
-    
-    struct FeatureFlag: Identifiable {
-        let id = UUID()
-        let name: String
-        let key: String
-        var isEnabled: Bool
-        let isBoolean: Bool
-        var doubleValue: Double?
-        var intValue: Int?
-    }
-    
-    var body: some View {
-        NavigationView {
-            List {
-                Section(header: Text("Boolean Flags")) {
-                    ForEach($flags.filter { $0.wrappedValue.isBoolean }) { $flag in
-                        Toggle(flag.name, isOn: $flag.isEnabled)
-                            .tint(.blue)
-                    }
-                }
-                
-                Section(header: Text("Numeric Flags")) {
-                    ForEach($flags.filter { !$0.wrappedValue.isBoolean }) { $flag in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(flag.name)
-                                .font(.headline)
-                            
-                            if flag.key.contains("Timeout") || flag.key.contains("Interval") {
-                                HStack {
-                                    Text("Value: \(Int(flag.doubleValue ?? 0))")
-                                    Slider(value: Binding(
-                                        get: { flag.doubleValue ?? 0 },
-                                        set: { newValue in
-                                            if let index = flags.firstIndex(where: { $0.id == flag.id }) {
-                                                flags[index].doubleValue = newValue
-                                            }
-                                        }
-                                    ), in: 0...1000, step: 1)
-                                }
-                            } else if flag.key == "sessionRefreshTime" {
-                                HStack {
-                                    Text("Value: \(flag.intValue ?? 0)")
-                                    Slider(value: Binding(
-                                        get: { Double(flag.intValue ?? 0) },
-                                        set: { newValue in
-                                            if let index = flags.firstIndex(where: { $0.id == flag.id }) {
-                                                flags[index].intValue = Int(newValue)
-                                            }
-                                        }
-                                    ), in: 0...3600, step: 60)
-                                }
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
+        if flags[i].key.contains("Timeout") || flags[i].key.contains("Interval") {
+            HStack {
+                Text("Value: \(Int(flags[i].doubleValue ?? 0))")
+                Slider(
+                    value: Binding(
+                        get: { flags[i].doubleValue ?? 0 },
+                        set: { flags[i].doubleValue = $0 }
+                    ),
+                    in: 0...1000, step: 1
+                )
             }
-            .navigationTitle("Feature Flags")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 16) {
-                        Button("Revert") {
-                            revertToDefaults()
-                        }
-                        .foregroundColor(.orange)
-                        
-                        Button("Apply") {
-                            applyChanges()
-                        }
-                        .foregroundColor(.green)
-                        .fontWeight(.bold)
-                    }
-                }
+        } else if flags[i].key == "sessionRefreshTime" {
+            HStack {
+                Text("Value: \(flags[i].intValue ?? 0)")
+                Slider(
+                    value: Binding(
+                        get: { Double(flags[i].intValue ?? 0) },
+                        set: { flags[i].intValue = Int($0) }
+                    ),
+                    in: 0...3600, step: 60
+                )
             }
         }
-        .onAppear {
-            loadCurrentFlags()
-        }
-        .alert(isPresented: $showingAlert) {
-            Alert(
-                title: Text(alertTitle),
-                message: Text(alertMessage),
-                dismissButton: .default(Text("OK")) {
-                    if alertTitle == "Success" {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                }
-            )
-        }
     }
-    
-    private func loadCurrentFlags() {
-        guard let config = compass?.getCurrentStoreConfig() else { return }
-        
-        // Load saved overrides from UserDefaults
-        let savedOverrides = UserDefaults.standard.dictionary(forKey: "FeatureFlagOverrides") ?? [:]
-        
-        flags = [
-            // Boolean flags
-            FeatureFlag(
-                name: "Blue Dot Enabled",
-                key: "bluedotEnabled",
-                isEnabled: savedOverrides["bluedotEnabled"] as? Bool ?? config["bluedotEnabled"] as? Bool ?? false,
-                isBoolean: true
-            ),
-            FeatureFlag(
-                name: "Blue Dot Displayed",
-                key: "bluedotDisplayed",
-                isEnabled: savedOverrides["bluedotDisplayed"] as? Bool ?? config["bluedotDisplayed"] as? Bool ?? false,
-                isBoolean: true
-            ),
-            FeatureFlag(
-                name: "Dynamic Map Enabled",
-                key: "dynamicMapEnabled",
-                isEnabled: savedOverrides["dynamicMapEnabled"] as? Bool ?? config["dynamicMapEnabled"] as? Bool ?? false,
-                isBoolean: true
-            ),
-            FeatureFlag(
-                name: "Zoom Control Enabled",
-                key: "zoomControlEnabled",
-                isEnabled: savedOverrides["zoomControlEnabled"] as? Bool ?? config["zoomControlEnabled"] as? Bool ?? false,
-                isBoolean: true
-            ),
-            FeatureFlag(
-                name: "Error Screens Enabled",
-                key: "errorScreensEnabled",
-                isEnabled: savedOverrides["errorScreensEnabled"] as? Bool ?? config["errorScreensEnabled"] as? Bool ?? false,
-                isBoolean: true
-            ),
-            FeatureFlag(
-                name: "Dynamic Map Rotation",
-                key: "dynamicMapRotationEnabled",
-                isEnabled: savedOverrides["dynamicMapRotationEnabled"] as? Bool ?? config["dynamicMapRotationEnabled"] as? Bool ?? false,
-                isBoolean: true
-            ),
-            FeatureFlag(
-                name: "Spinner Enabled",
-                key: "spinnerEnabled",
-                isEnabled: savedOverrides["spinnerEnabled"] as? Bool ?? config["spinnerEnabled"] as? Bool ?? false,
-                isBoolean: true
-            ),
-            FeatureFlag(
-                name: "Use Background Service",
-                key: "useBackgroundService",
-                isEnabled: savedOverrides["useBackgroundService"] as? Bool ?? config["useBackgroundService"] as? Bool ?? false,
-                isBoolean: true
-            ),
-            // Numeric flags
-            FeatureFlag(
-                name: "Background Service Timeout",
-                key: "backgroundServiceTimeout",
-                isEnabled: false,
-                isBoolean: false,
-                doubleValue: savedOverrides["backgroundServiceTimeout"] as? Double ?? config["backgroundServiceTimeout"] as? Double ?? 300.0
-            ),
-            FeatureFlag(
-                name: "Geofence Check Timeout",
-                key: "geoFenceCheckTimeout",
-                isEnabled: false,
-                isBoolean: false,
-                doubleValue: savedOverrides["geoFenceCheckTimeout"] as? Double ?? config["geoFenceCheckTimeout"] as? Double ?? 1.0
-            ),
-            FeatureFlag(
-                name: "Positioning Session Timeout",
-                key: "positioningSessionTimeout",
-                isEnabled: false,
-                isBoolean: false,
-                doubleValue: savedOverrides["positioningSessionTimeout"] as? Double ?? config["positioningSessionTimeout"] as? Double ?? 1.0
-            ),
-            FeatureFlag(
-                name: "Session Refresh Time",
-                key: "sessionRefreshTime",
-                isEnabled: false,
-                isBoolean: false,
-                intValue: savedOverrides["sessionRefreshTime"] as? Int ?? config["sessionRefreshTime"] as? Int ?? 900
-            )
-        ]
-    }
-    
-    private func applyChanges() {
-        var overrides: [String: Any] = [:]
-        
-        for flag in flags {
-            if flag.isBoolean {
-                overrides[flag.key] = flag.isEnabled
-            } else if let doubleValue = flag.doubleValue {
-                overrides[flag.key] = doubleValue
-            } else if let intValue = flag.intValue {
-                overrides[flag.key] = intValue
-            }
-        }
-        
-        // Save to UserDefaults
-        UserDefaults.standard.set(overrides, forKey: "FeatureFlagOverrides")
-        
-        // Apply to Compass
-        compass?.applyFeatureFlagOverrides(overrides)
-        
-        alertTitle = "Success"
-        alertMessage = "Feature flags have been applied successfully"
-        showingAlert = true
-    }
-    
-    private func revertToDefaults() {
-        // Clear saved overrides
-        UserDefaults.standard.removeObject(forKey: "FeatureFlagOverrides")
-        
-        // Reload original flags
-        loadCurrentFlags()
-        
-        alertTitle = "Reverted"
-        alertMessage = "Feature flags have been reverted to backend defaults. Re-initialize to apply."
-        showingAlert = true
-    }
-}
-
-// SwiftUI wrapper for UIKit integration
-struct FeatureFlagsViewController: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> UIHostingController<FeatureFlagsView> {
-        return UIHostingController(rootView: FeatureFlagsView())
-    }
-    
-    func updateUIViewController(_ uiViewController: UIHostingController<FeatureFlagsView>, context: Context) {
-        // No updates needed
-    }
+    .padding(.vertical, 4)
 }
