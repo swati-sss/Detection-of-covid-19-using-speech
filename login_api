@@ -1,30 +1,80 @@
-#if DEBUG
-private func addGeofenceDebugButtons() {
-    let inside = UIButton(type: .system)
-    inside.setTitle("Sim: INSIDE", for: .normal)
-    inside.addTarget(self, action: #selector(simInside), for: .touchUpInside)
+// Add these methods inside the Compass class (around line 300, after the existing public methods)
 
-    let outside = UIButton(type: .system)
-    outside.setTitle("Sim: OUTSIDE", for: .normal)
-    outside.addTarget(self, action: #selector(simOutside), for: .touchUpInside)
-
-    let stack = UIStackView(arrangedSubviews: [inside, outside])
-    stack.axis = .horizontal
-    stack.spacing = 12
-    stack.translatesAutoresizingMaskIntoConstraints = false
-
-    view.addSubview(stack)
-    NSLayoutConstraint.activate([
-        stack.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
-        stack.centerXAnchor.constraint(equalTo: view.centerXAnchor)
-    ])
+/// Get the current store configuration
+public func getCurrentStoreConfig() -> [String: Any]? {
+    guard let assetService = serviceLocator.getAssetService() as? AssetServiceImpl else { return nil }
+    
+    // Create a dictionary from current configuration
+    var config: [String: Any] = [:]
+    
+    // Get the last fetched store config from the service
+    if let storeConfig = assetService.lastStoreConfig {
+        config["bluedotEnabled"] = storeConfig.bluedotEnabled ?? false
+        config["bluedotDisplayed"] = storeConfig.bluedotDisplayed ?? false
+        config["dynamicMapEnabled"] = storeConfig.dynamicMapEnabled ?? false
+        config["zoomControlEnabled"] = storeConfig.zoomControlEnabled ?? false
+        config["errorScreensEnabled"] = storeConfig.errorScreensEnabled ?? false
+        config["dynamicMapRotationEnabled"] = storeConfig.dynamicMapRotationEnabled ?? false
+        config["spinnerEnabled"] = storeConfig.spinnerEnabled ?? false
+        config["useBackgroundService"] = storeConfig.useBackgroundService ?? false
+        config["backgroundServiceTimeout"] = storeConfig.backgroundServiceTimeout ?? 300.0
+        config["geoFenceCheckTimeout"] = storeConfig.geoFenceCheckTimeout ?? 1.0
+        config["positioningSessionTimeout"] = storeConfig.positioningSessionTimeout ?? 1.0
+        config["geofenceRadius"] = storeConfig.geofenceRadius ?? 0.0
+        config["sessionRefreshTime"] = storeConfig.sessionRefreshTime ?? 900
+        config["heartbeatInterval"] = storeConfig.heartbeatInterval ?? 300000.0
+        config["batchInterval"] = storeConfig.batchInterval ?? 60000.0
+    }
+    
+    return config
 }
 
-@objc private func simInside() {
-    serviceLocator.getStatusService().emitGeofenceStateChangeEvent(state: "inside")
+/// Override store configuration for testing
+public func applyFeatureFlagOverrides(_ overrides: [String: Any]) {
+    guard let assetService = serviceLocator.getAssetService() as? AssetServiceImpl,
+          var storeConfig = assetService.lastStoreConfig else { return }
+    
+    // Apply overrides
+    if let bluedotEnabled = overrides["bluedotEnabled"] as? Bool {
+        storeConfig.bluedotEnabled = bluedotEnabled
+    }
+    if let bluedotDisplayed = overrides["bluedotDisplayed"] as? Bool {
+        storeConfig.bluedotDisplayed = bluedotDisplayed
+    }
+    if let dynamicMapEnabled = overrides["dynamicMapEnabled"] as? Bool {
+        storeConfig.dynamicMapEnabled = dynamicMapEnabled
+    }
+    if let zoomControlEnabled = overrides["zoomControlEnabled"] as? Bool {
+        storeConfig.zoomControlEnabled = zoomControlEnabled
+    }
+    if let errorScreensEnabled = overrides["errorScreensEnabled"] as? Bool {
+        storeConfig.errorScreensEnabled = errorScreensEnabled
+    }
+    if let dynamicMapRotationEnabled = overrides["dynamicMapRotationEnabled"] as? Bool {
+        storeConfig.dynamicMapRotationEnabled = dynamicMapRotationEnabled
+    }
+    if let spinnerEnabled = overrides["spinnerEnabled"] as? Bool {
+        storeConfig.spinnerEnabled = spinnerEnabled
+    }
+    if let useBackgroundService = overrides["useBackgroundService"] as? Bool {
+        storeConfig.useBackgroundService = useBackgroundService
+    }
+    if let backgroundServiceTimeout = overrides["backgroundServiceTimeout"] as? Double {
+        storeConfig.backgroundServiceTimeout = backgroundServiceTimeout
+    }
+    if let geoFenceCheckTimeout = overrides["geoFenceCheckTimeout"] as? Double {
+        storeConfig.geoFenceCheckTimeout = geoFenceCheckTimeout
+    }
+    if let positioningSessionTimeout = overrides["positioningSessionTimeout"] as? Double {
+        storeConfig.positioningSessionTimeout = positioningSessionTimeout
+    }
+    if let sessionRefreshTime = overrides["sessionRefreshTime"] as? Int {
+        storeConfig.sessionRefreshTime = sessionRefreshTime
+    }
+    
+    // Update the stored config
+    assetService.lastStoreConfig = storeConfig
+    
+    // Re-apply configuration
+    viewModel.updateStoreConfiguration(storeConfig)
 }
-
-@objc private func simOutside() {
-    serviceLocator.getStatusService().emitGeofenceStateChangeEvent(state: "outside")
-}
-#endif
