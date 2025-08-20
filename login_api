@@ -1,31 +1,145 @@
-ForEach(numericIndices, id: \.self) { i in
-    VStack(alignment: .leading, spacing: 8) {
-        Text(flags[i].name)
-            .font(.headline)
+import UIKit
+import compass_sdk_ios
 
-        if flags[i].key.contains("Timeout") || flags[i].key.contains("Interval") {
-            HStack {
-                Text("Value: \(Int(flags[i].doubleValue ?? 0))")
-                Slider(
-                    value: Binding(
-                        get: { flags[i].doubleValue ?? 0 },
-                        set: { flags[i].doubleValue = $0 }
-                    ),
-                    in: 0...1000, step: 1
-                )
-            }
-        } else if flags[i].key == "sessionRefreshTime" {
-            HStack {
-                Text("Value: \(flags[i].intValue ?? 0)")
-                Slider(
-                    value: Binding(
-                        get: { Double(flags[i].intValue ?? 0) },
-                        set: { flags[i].intValue = Int($0) }
-                    ),
-                    in: 0...3600, step: 60
-                )
-            }
+class FeatureFlagsTableViewController: UITableViewController {
+    
+    struct Flag {
+        let name: String
+        let key: String
+        var value: Any
+        let type: FlagType
+        
+        enum FlagType {
+            case boolean
+            case double
+            case integer
         }
     }
-    .padding(.vertical, 4)
+    
+    private var flags: [Flag] = []
+    private var originalConfig: [String: Any]?
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        
+        title = "Feature Flags"
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            title: "Cancel",
+            style: .plain,
+            target: self,
+            action: #selector(cancelTapped)
+        )
+        
+        navigationItem.rightBarButtonItems = [
+            UIBarButtonItem(
+                title: "Apply",
+                style: .done,
+                target: self,
+                action: #selector(applyTapped)
+            ),
+            UIBarButtonItem(
+                title: "Revert",
+                style: .plain,
+                target: self,
+                action: #selector(revertTapped)
+            )
+        ]
+        
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "Cell")
+        loadFlags()
+    }
+    
+    private func loadFlags() {
+        originalConfig = compass?.getCurrentStoreConfig()
+        guard let config = originalConfig else { return }
+        
+        let savedOverrides = UserDefaults.standard.dictionary(forKey: "FeatureFlagOverrides") ?? [:]
+        
+        flags = [
+            Flag(name: "Blue Dot Enabled", key: "bluedotEnabled",
+                 value: savedOverrides["bluedotEnabled"] ?? config["bluedotEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Dynamic Map Enabled", key: "dynamicMapEnabled",
+                 value: savedOverrides["dynamicMapEnabled"] ?? config["dynamicMapEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Zoom Control Enabled", key: "zoomControlEnabled",
+                 value: savedOverrides["zoomControlEnabled"] ?? config["zoomControlEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Error Screens Enabled", key: "errorScreensEnabled",
+                 value: savedOverrides["errorScreensEnabled"] ?? config["errorScreensEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Dynamic Map Rotation", key: "dynamicMapRotationEnabled",
+                 value: savedOverrides["dynamicMapRotationEnabled"] ?? config["dynamicMapRotationEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Spinner Enabled", key: "spinnerEnabled",
+                 value: savedOverrides["spinnerEnabled"] ?? config["spinnerEnabled"] ?? false,
+                 type: .boolean)
+        ]
+        
+        tableView.reloadData()
+    }
+    
+    @objc private func cancelTapped() {
+        dismiss(animated: true)
+    }
+    
+    @objc private func applyTapped() {
+        var overrides: [String: Any] = [:]
+        for flag in flags {
+            overrides[flag.key] = flag.value
+        }
+        
+        UserDefaults.standard.set(overrides, forKey: "FeatureFlagOverrides")
+        compass?.applyFeatureFlagOverrides(overrides)
+        
+        let alert = UIAlertController(
+            title: "Success",
+            message: "Feature flags applied",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
+            self.dismiss(animated: true)
+        })
+        present(alert, animated: true)
+    }
+    
+    @objc private func revertTapped() {
+        UserDefaults.standard.removeObject(forKey: "FeatureFlagOverrides")
+        loadFlags()
+        
+        let alert = UIAlertController(
+            title: "Reverted",
+            message: "Flags reverted to defaults",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
+    }
+    
+    // MARK: - Table view data source
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        return flags.count
+    }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "Cell", for: indexPath)
+        let flag = flags[indexPath.row]
+        
+        cell.textLabel?.text = flag.name
+        
+        if flag.type == .boolean {
+            let switchView = UISwitch()
+            switchView.isOn = flag.value as? Bool ?? false
+            switchView.tag = indexPath.row
+            switchView.addTarget(self, action: #selector(switchChanged(_:)), for: .valueChanged)
+            cell.accessoryView = switchView
+        }
+        
+        return cell
+    }
+    
+    @objc private func switchChanged(_ sender: UISwitch) {
+        flags[sender.tag].value = sender.isOn
+    }
 }
