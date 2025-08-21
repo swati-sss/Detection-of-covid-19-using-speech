@@ -1,145 +1,116 @@
-import UIKit
-import compass_sdk_ios
+// Add these properties at the class level (around line 40)
+private var originalStoreConfig: StoreConfig?
+private var hasAppliedOverrides = false
 
-class FeatureFlagsTableViewController: UITableViewController {
+// Add these public methods (around line 300)
+
+/// Get the current store configuration
+public func getCurrentStoreConfig() -> [String: Any]? {
+    guard let assetService = serviceLocator.getAssetService() as? AssetServiceImpl else { return nil }
     
-    struct Flag {
-        let name: String
-        let key: String
-        var value: Any
-        let type: FlagType
-        
-        enum FlagType {
-            case boolean
-            case double
-            case integer
-        }
+    // Use original config if available, otherwise current
+    let storeConfig = originalStoreConfig ?? assetService.lastStoreConfig
+    
+    var config: [String: Any] = [:]
+    
+    if let storeConfig = storeConfig {
+        config["bluedotEnabled"] = storeConfig.bluedotEnabled ?? false
+        config["bluedotDisplayed"] = storeConfig.bluedotDisplayed ?? false
+        config["dynamicMapEnabled"] = storeConfig.dynamicMapEnabled ?? false
+        config["zoomControlEnabled"] = storeConfig.zoomControlEnabled ?? false
+        config["errorScreensEnabled"] = storeConfig.errorScreensEnabled ?? false
+        config["dynamicMapRotationEnabled"] = storeConfig.dynamicMapRotationEnabled ?? false
+        config["spinnerEnabled"] = storeConfig.spinnerEnabled ?? false
+        config["useBackgroundService"] = storeConfig.useBackgroundService ?? false
+        config["backgroundServiceTimeout"] = storeConfig.backgroundServiceTimeout ?? 300.0
+        config["geoFenceCheckTimeout"] = storeConfig.geoFenceCheckTimeout ?? 1.0
+        config["positioningSessionTimeout"] = storeConfig.positioningSessionTimeout ?? 1.0
+        config["geofenceRadius"] = storeConfig.geofenceRadius ?? 0.0
+        config["sessionRefreshTime"] = storeConfig.sessionRefreshTime ?? 900
+        config["heartbeatInterval"] = storeConfig.heartbeatInterval ?? 300000.0
+        config["batchInterval"] = storeConfig.batchInterval ?? 60000.0
     }
     
-    private var flags: [Flag] = []
-    private var originalConfig: [String: Any]?
+    return config
+}
+
+/// Apply feature flag overrides for testing
+public func applyFeatureFlagOverrides(_ overrides: [String: Any]) {
+    guard let assetService = serviceLocator.getAssetService() as? AssetServiceImpl,
+          var storeConfig = assetService.lastStoreConfig else { return }
     
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        
-        title = "Feature Flags"
-        navigationItem.leftBarButtonItem = UIBarButtonItem(
-            title: "Cancel",
-            style: .plain,
-            target: self,
-            action: #selector(cancelTapped)
-        )
-        
-        navigationItem.rightBarButtonItems = [
-            UIBarButtonItem(
-                title: "Apply",
-                style: .done,
-                target: self,
-                action: #selector(applyTapped)
-            ),
-            UIBarButtonItem(
-                title: "Revert",
-                style: .plain,
-                target: self,
-                action: #selector(revertTapped)
-            )
-        ]
-        
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "Cell")
-        loadFlags()
+    // Store original config if this is the first override
+    if !hasAppliedOverrides {
+        originalStoreConfig = storeConfig
+        hasAppliedOverrides = true
     }
     
-    private func loadFlags() {
-        originalConfig = compass?.getCurrentStoreConfig()
-        guard let config = originalConfig else { return }
-        
-        let savedOverrides = UserDefaults.standard.dictionary(forKey: "FeatureFlagOverrides") ?? [:]
-        
-        flags = [
-            Flag(name: "Blue Dot Enabled", key: "bluedotEnabled",
-                 value: savedOverrides["bluedotEnabled"] ?? config["bluedotEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Dynamic Map Enabled", key: "dynamicMapEnabled",
-                 value: savedOverrides["dynamicMapEnabled"] ?? config["dynamicMapEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Zoom Control Enabled", key: "zoomControlEnabled",
-                 value: savedOverrides["zoomControlEnabled"] ?? config["zoomControlEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Error Screens Enabled", key: "errorScreensEnabled",
-                 value: savedOverrides["errorScreensEnabled"] ?? config["errorScreensEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Dynamic Map Rotation", key: "dynamicMapRotationEnabled",
-                 value: savedOverrides["dynamicMapRotationEnabled"] ?? config["dynamicMapRotationEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Spinner Enabled", key: "spinnerEnabled",
-                 value: savedOverrides["spinnerEnabled"] ?? config["spinnerEnabled"] ?? false,
-                 type: .boolean)
-        ]
-        
-        tableView.reloadData()
+    // Apply overrides
+    if let bluedotEnabled = overrides["bluedotEnabled"] as? Bool {
+        storeConfig.bluedotEnabled = bluedotEnabled
+    }
+    if let bluedotDisplayed = overrides["bluedotDisplayed"] as? Bool {
+        storeConfig.bluedotDisplayed = bluedotDisplayed
+    }
+    if let dynamicMapEnabled = overrides["dynamicMapEnabled"] as? Bool {
+        storeConfig.dynamicMapEnabled = dynamicMapEnabled
+    }
+    if let zoomControlEnabled = overrides["zoomControlEnabled"] as? Bool {
+        storeConfig.zoomControlEnabled = zoomControlEnabled
+    }
+    if let errorScreensEnabled = overrides["errorScreensEnabled"] as? Bool {
+        storeConfig.errorScreensEnabled = errorScreensEnabled
+    }
+    if let dynamicMapRotationEnabled = overrides["dynamicMapRotationEnabled"] as? Bool {
+        storeConfig.dynamicMapRotationEnabled = dynamicMapRotationEnabled
+    }
+    if let spinnerEnabled = overrides["spinnerEnabled"] as? Bool {
+        storeConfig.spinnerEnabled = spinnerEnabled
+    }
+    if let useBackgroundService = overrides["useBackgroundService"] as? Bool {
+        storeConfig.useBackgroundService = useBackgroundService
+    }
+    if let backgroundServiceTimeout = overrides["backgroundServiceTimeout"] as? Double {
+        storeConfig.backgroundServiceTimeout = backgroundServiceTimeout
+    }
+    if let geoFenceCheckTimeout = overrides["geoFenceCheckTimeout"] as? Double {
+        storeConfig.geoFenceCheckTimeout = geoFenceCheckTimeout
+    }
+    if let positioningSessionTimeout = overrides["positioningSessionTimeout"] as? Double {
+        storeConfig.positioningSessionTimeout = positioningSessionTimeout
+    }
+    if let sessionRefreshTime = overrides["sessionRefreshTime"] as? Int {
+        storeConfig.sessionRefreshTime = sessionRefreshTime
     }
     
-    @objc private func cancelTapped() {
-        dismiss(animated: true)
-    }
+    // Update the stored config
+    assetService.lastStoreConfig = storeConfig
     
-    @objc private func applyTapped() {
-        var overrides: [String: Any] = [:]
-        for flag in flags {
-            overrides[flag.key] = flag.value
-        }
-        
-        UserDefaults.standard.set(overrides, forKey: "FeatureFlagOverrides")
-        compass?.applyFeatureFlagOverrides(overrides)
-        
-        let alert = UIAlertController(
-            title: "Success",
-            message: "Feature flags applied",
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
-            self.dismiss(animated: true)
-        })
-        present(alert, animated: true)
-    }
+    // Re-apply configuration
+    viewModel.updateStoreConfiguration(storeConfig)
+}
+
+/// Revert to original backend configuration
+public func revertToOriginalConfig() {
+    guard let originalConfig = originalStoreConfig,
+          let assetService = serviceLocator.getAssetService() as? AssetServiceImpl else { return }
     
-    @objc private func revertTapped() {
-        UserDefaults.standard.removeObject(forKey: "FeatureFlagOverrides")
-        loadFlags()
-        
-        let alert = UIAlertController(
-            title: "Reverted",
-            message: "Flags reverted to defaults",
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "OK", style: .default))
-        present(alert, animated: true)
-    }
+    // Restore original config
+    assetService.lastStoreConfig = originalConfig
+    viewModel.updateStoreConfiguration(originalConfig)
     
-    // MARK: - Table view data source
-    
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return flags.count
-    }
-    
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "Cell", for: indexPath)
-        let flag = flags[indexPath.row]
-        
-        cell.textLabel?.text = flag.name
-        
-        if flag.type == .boolean {
-            let switchView = UISwitch()
-            switchView.isOn = flag.value as? Bool ?? false
-            switchView.tag = indexPath.row
-            switchView.addTarget(self, action: #selector(switchChanged(_:)), for: .valueChanged)
-            cell.accessoryView = switchView
-        }
-        
-        return cell
-    }
-    
-    @objc private func switchChanged(_ sender: UISwitch) {
-        flags[sender.tag].value = sender.isOn
-    }
+    // Reset the flag
+    hasAppliedOverrides = false
+    originalStoreConfig = nil
+}
+
+/// Check if overrides are currently applied
+public func hasOverridesApplied() -> Bool {
+    return hasAppliedOverrides
+}
+
+/// Reset all override tracking (called on new initialization)
+public func resetOverrideTracking() {
+    hasAppliedOverrides = false
+    originalStoreConfig = nil
 }
