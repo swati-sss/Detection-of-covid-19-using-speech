@@ -1,44 +1,152 @@
-import SwiftUI
-import UniformTypeIdentifiers
+import Foundation
 
-struct TestView: View {
-    let fn = "log.zip"
+// MARK: - Feature Flag Model
+public struct FeatureFlag {
+    public let key: String
+    public let name: String
+    public let backendValue: Bool
+    public var overrideValue: Bool?
     
-    var body: some View {
-        VStack {
-            Text("test")
-                .font(.title)
-                .padding()
-            
-            Button(action: {
-                testfn()
-            }) {
-                HStack {
-                    Text("test \(fn)")
-                }
-                .padding()
-                .background(Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(8)
-            }
-        }
+    public var currentValue: Bool {
+        return overrideValue ?? backendValue
     }
     
-    func testfn() {
-        guard let fur = Bundle.main.url(forResource: fn.components(separatedBy: ".").first,
-                                              withExtension: "zip") else {
-            print("error")
-            return
+    public var isOverridden: Bool {
+        return overrideValue != nil
+    }
+}
+
+// MARK: - Feature Flag Manager Extension
+public extension Compass {
+    
+    private struct FeatureFlagKeys {
+        static let overridePrefix = "compass_feature_override_"
+        static let zoomControl = "zoomControlEnabled"
+        static let dynamicMap = "dynamicMapEnabled"
+        static let errorScreens = "errorScreensEnabled"
+        static let dynamicMapRotation = "dynamicMapRotationEnabled"
+        static let spinner = "spinnerEnabled"
+    }
+    
+    /// Get all available feature flags with their current values
+    func getFeatureFlags() -> [FeatureFlag] {
+        var flags: [FeatureFlag] = []
+        
+        // Get stored config from asset service
+        let assetService = serviceLocator.getAssetService()
+        
+        // For now, we'll focus on zoomControlEnabled
+        // You can expand this to include other flags
+        if let storeConfig = getStoredStoreConfig() {
+            flags.append(FeatureFlag(
+                key: FeatureFlagKeys.zoomControl,
+                name: "Zoom Control",
+                backendValue: storeConfig.zoomControlEnabled ?? false,
+                overrideValue: getFeatureFlagOverride(for: FeatureFlagKeys.zoomControl)
+            ))
+            
+            // Add more flags as needed
+            flags.append(FeatureFlag(
+                key: FeatureFlagKeys.dynamicMap,
+                name: "Dynamic Map",
+                backendValue: storeConfig.dynamicMapEnabled ?? false,
+                overrideValue: getFeatureFlagOverride(for: FeatureFlagKeys.dynamicMap)
+            ))
+            
+            flags.append(FeatureFlag(
+                key: FeatureFlagKeys.errorScreens,
+                name: "Error Screens",
+                backendValue: storeConfig.errorScreensEnabled ?? false,
+                overrideValue: getFeatureFlagOverride(for: FeatureFlagKeys.errorScreens)
+            ))
         }
         
-        let activityViewController = UIActivityViewController(
-            activityItems: [fur],
-            applicationActivities: nil
+        return flags
+    }
+    
+    /// Set override value for a feature flag
+    func setFeatureFlagOverride(for key: String, value: Bool?) {
+        let overrideKey = FeatureFlagKeys.overridePrefix + key
+        
+        if let value = value {
+            UserDefaults.standard.set(value, forKey: overrideKey)
+        } else {
+            // Remove override to revert to backend value
+            UserDefaults.standard.removeObject(forKey: overrideKey)
+        }
+        
+        UserDefaults.standard.synchronize()
+        
+        // Notify that feature flags have changed
+        NotificationCenter.default.post(
+            name: NSNotification.Name("CompassFeatureFlagsChanged"),
+            object: nil,
+            userInfo: ["key": key, "value": value as Any]
         )
+    }
+    
+    /// Get override value for a feature flag
+    func getFeatureFlagOverride(for key: String) -> Bool? {
+        let overrideKey = FeatureFlagKeys.overridePrefix + key
         
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootViewController = windowScene.windows.first?.rootViewController {
-            rootViewController.present(activityViewController, animated: true, completion: nil)
+        if UserDefaults.standard.object(forKey: overrideKey) != nil {
+            return UserDefaults.standard.bool(forKey: overrideKey)
         }
+        
+        return nil
+    }
+    
+    /// Clear all feature flag overrides
+    func clearAllFeatureFlagOverrides() {
+        let defaults = UserDefaults.standard
+        let dictionary = defaults.dictionaryRepresentation()
+        
+        dictionary.keys.forEach { key in
+            if key.hasPrefix(FeatureFlagKeys.overridePrefix) {
+                defaults.removeObject(forKey: key)
+            }
+        }
+        
+        defaults.synchronize()
+        
+        // Notify that feature flags have been cleared
+        NotificationCenter.default.post(
+            name: NSNotification.Name("CompassFeatureFlagsChanged"),
+            object: nil
+        )
+    }
+    
+    /// Get the stored StoreConfig (internal helper)
+    private func getStoredStoreConfig() -> StoreConfig? {
+        // This would need to access the stored config
+        // You might need to add a method in CompassViewModel to expose this
+        if let viewModel = self.viewModel as? CompassViewModel {
+            return viewModel.getCurrentStoreConfig()
+        }
+        return nil
+    }
+}
+
+// MARK: - CompassViewModel Extension
+extension CompassViewModel {
+    private static var currentStoreConfig: StoreConfig?
+    
+    func getCurrentStoreConfig() -> StoreConfig? {
+        return CompassViewModel.currentStoreConfig
+    }
+    
+    // Modify the updateStoreConfiguration method to store the config
+    func updateStoreConfigurationWithStorage(_ storeConfig: StoreConfig?) -> AnyPublisher<Void, Never> {
+        CompassViewModel.currentStoreConfig = storeConfig
+        
+        // Apply feature flag overrides if they exist
+        if var config = storeConfig {
+            if let zoomOverride = Compass().getFeatureFlagOverride(for: "zoomControlEnabled") {
+                config.zoomControlEnabled = zoomOverride
+            }
+            // Add more overrides as needed
+        }
+        
+        return updateStoreConfiguration(storeConfig)
     }
 }
