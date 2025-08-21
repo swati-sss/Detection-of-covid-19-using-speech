@@ -1,566 +1,274 @@
-//
-//  CompassViewModel.swift
-//  compass_sdk_ios
-//
-//  Created by Rakesh Shetty on 2/17/23.
-//
+import UIKit
+import compass_sdk_ios
 
-import Combine
-import CoreData
-import Foundation
-
-@_implementationOnly import IPSFramework
-
-protocol CompassViewModelType {
-    var rootViewController: UIViewController? { get set }
-
-    func getAccessToken(authParameter: AuthParameter) -> AnyPublisher<AccessTokenResponse?, Never>
-    func toggleMockUser(_ option: Bool)
-    func updateStoreConfiguration(_ storeConfig: StoreConfig?) -> AnyPublisher<Void, Never>
-    func getAisle(id: String)
-    func isMapViewReady() -> AnyPublisher<Bool, Never>
-    func displayMap()
-    func clearMap(mapConfig: MapConfig)
-    func updateEvent(compassEvent: CompassEvent)
-    func updateEventList(namespace: String, eventType: String, eventValue: String, metaData: HashMap?)
-    func displayPin(uuidList: [String], idType: PinDropMethod, config: DisplayPinConfig?)
-    func displayPinV2(pins: [AislePin], config: DisplayPinConfig?, isZoomOutRequired: Bool)
-    func startPositionSession()
-    func stopPositioning()
-    func resetPositionStatusEvent()
-    func killSwitch()
-    func removeUserPositionIndicator()
-    func getUserDistance(pins: [AislePin], completion: UserDistanceCompleteHandler?)
-}
-
-final class CompassViewModel: CompassViewModelType {
-    private var mapHostViewModel: MapHostViewModelType?
-    private var isPositioningEnabled: Bool = false
-    private var includeLocationInHeatbeat: Bool = false
-    private var includeUserInHeatbeat: Bool = false
-    private var positioningSessioinTimeout: Int = 2
-    private var positionSessionTimer: Timer?
-    private var positionRefreshTime: Double = 1.0
-    private var sessionRefreshTime: Int = SessionTime.positionRefreshTime
-    private var assetService: AssetService
-    let serviceLocator: ServiceLocatorType
-    private var cancellable: Set<AnyCancellable> = []
-    private var shouldClearBlueDot: Bool = false
-
-    weak var rootViewController: UIViewController?
-
-    init(serviceLocator: ServiceLocatorType) {
-        self.serviceLocator = serviceLocator
-        self.assetService = serviceLocator.getAssetService()
-        Analytics.logDefault = serviceLocator.getLogDefaultImpl()
-        bindAppLifecycleObservation()
-    }
-
-    /// Initialize the CompassViewModel class.
-    /// This is use to assign accessTokenService and configurationService.
-
-    /// This is used to retrieve access token based on clientId and consumerId.
-    /// Will also store access token data in core data model .
-    func getAccessToken(authParameter: AuthParameter) -> AnyPublisher<AccessTokenResponse?, Never> {
-        return Just(authParameter.authToken.isEmptyOrWhitespace() ? nil : authParameter)
-            .flatMap { [weak self] authParameter -> AnyPublisher<AccessTokenResponse?, Never> in
-                guard let self = self, let authParameter else {
-                    self?.logAndHandleEmptyAuthParameter()
-                    return Just(nil).eraseToAnyPublisher()
-                }
-                return self.handleTokenType(for: authParameter)
-            }
-            .eraseToAnyPublisher()
-    }
-
-    func toggleMockUser(_ option: Bool) {
-        Log.info("Set up Mock User: \(option)")
-        if option {
-            IPSPositioning.testLockThreshold = 0
+class FeatureFlagsTableViewController: UITableViewController {
+    
+    struct Flag {
+        let name: String
+        let key: String
+        var value: Any
+        let type: FlagType
+        
+        enum FlagType {
+            case boolean
+            case double
+            case integer
         }
     }
-
-    func updateStoreConfiguration(_ storeConfig: StoreConfig?) -> AnyPublisher<Void, Never> {
-        if let assetService = serviceLocator.getAssetService() as? AssetServiceImpl {
-            assetService.lastStoreConfig = storeConfig
-        }
-        positionRefreshTime = storeConfig?.positioningSessionTimeout ?? 1
-        sessionRefreshTime = storeConfig?.sessionRefreshTime ?? sessionRefreshTime
-        setStore(using: storeConfig)
-        setSupportedEventList(using: storeConfig)
-        setMapType(using: storeConfig)
-        setStoreConfigOffset(using: storeConfig)
-        setupLogIntervalsData(storeConfig: storeConfig)
-        return Publishers.Zip(setDeviceId(), setSessionId()).map { _ in }.eraseToAnyPublisher()
-    }
-
-    func getAisle(id: String) {
-        mapHostViewModel?.getAisle(id: id)
-    }
-
-    func isMapViewReady() -> AnyPublisher<Bool, Never> {
-        serviceLocator.getMapFocusManager().isMapViewPresent.eraseToAnyPublisher()
-    }
-
-    func displayMap() {
-        Log.debug("API Called: displayMap")
-        Analytics.telemetry(payload: TelemetryAnalytics(event: DisplayMap.DISPLAY_MAP_REQUESTED.rawValue))
-        startPositionSession()
-        mapHostViewModel?.displayMap()
-    }
-
-    func clearMap(mapConfig: MapConfig) {
-        Log.debug("API Called: clearMap with config: \(mapConfig)")
-        mapHostViewModel?.clearMap(mapConfig: mapConfig)
-    }
-
-    func updateEvent(compassEvent: CompassEvent) {
-        Log.debug("API Called: updateEvent for event: \(compassEvent)")
-
-        startPositionSession()
-
-        guard let position = serviceLocator.getIndoorPositioningService().lastLockedPosition else {
-            Log.info("The value of lastLockedPosition is nil")
-            emitUpdateEventError()
-            Analytics.telemetry(payload: TelemetryAnalytics(
-                isError: true,
-                event: UpdateEvent.UPDATE_EVENT_ERROR_NOT_LOCKED.rawValue
-            ))
-            return
-        }
-
-        guard let converter = serviceLocator.getIndoorPositioningService().floorCoordinatesConverter else {
-            Log.info("The value of floorCoordinatesConverter is nil")
-            Analytics.telemetry(payload: TelemetryAnalytics(
-                isError: true,
-                event: UpdateEvent.UPDATE_EVENT_ERROR_NOT_LOCKED.rawValue
-            ))
-            emitUpdateEventError()
-            return
-        }
-
-        serviceLocator.getEventService()
-            .cacheAndBootstrapAsset(
-                compassEvent, position: position.convertToCompass(using: converter).asCGPoint()
-            ) { [ weak self] bootstrapStatus in
-                if bootstrapStatus == .notBootstrapped {
-                    self?.emitUpdateEventError()
-                    Analytics.telemetry(payload: TelemetryAnalytics(
-                        isError: true,
-                        event: UpdateEvent.UPDATE_EVENT_ERROR_QUADTREE_CALC.rawValue
-                    ))
-                }
-            }
-    }
-
-    func updateEventList(namespace: String, eventType: String, eventValue: String, metaData: HashMap?) {
-        guard isPositioningEnabled else {
-            Log.info("Blue dot is disabled")
-            return
-        }
-
-        startPositionSession()
-        let supportedEventList = assetService.supportedEventList.components(
-            separatedBy: "},"
+    
+    private var flags: [Flag] = []
+    private var originalBackendConfig: [String: Any]?
+    private var currentStoreId: Int?
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        
+        let hasOverrides = compass?.hasOverridesApplied() ?? false
+        title = hasOverrides ? "Feature Flags (Mod)" : "Feature Flags"
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            title: "Cancel",
+            style: .plain,
+            target: self,
+            action: #selector(cancelTapped)
         )
-        let eventKey = "\(namespace)/\(eventType)"
-        let isSupportedEvent = supportedEventList.filter {
-            $0.lowercased().contains(eventKey.lowercased()) &&
-            ($0.lowercased().contains("\"enabled\": true") || $0.lowercased().contains("\"enabled\":true"))
-        }
-
-        guard !isSupportedEvent.isEmpty else {
-            Log.info("The event list is not supported.")
-            emitUpdateEventListError()
-            Analytics.telemetry(payload: TelemetryAnalytics(
-                isError: true,
-                event: UpdateEvent.UPDATE_EVENT_ERROR_INVALID_INPUT.rawValue
-            ))
-            return
-        }
-
-        let position = serviceLocator.getIndoorPositioningService().lastLockedPosition
-        let converter = serviceLocator.getIndoorPositioningService().floorCoordinatesConverter
-
-        let compassPosition: CGPoint?
-        if let converter {
-            compassPosition = position?.convertToCompass(using: converter).asCGPoint()
-        } else {
-            compassPosition = nil
-        }
-
-        let eventAnalytics: EventAnalytics.EventLocation?
-        if let compassPosition {
-            eventAnalytics = EventAnalytics.EventLocation(
-                roc: EventAnalytics.EventLocationRoc(x: compassPosition.x, y: compassPosition.y)
+        
+        navigationItem.rightBarButtonItems = [
+            UIBarButtonItem(
+                title: "Apply",
+                style: .done,
+                target: self,
+                action: #selector(applyTapped)
+            ),
+            UIBarButtonItem(
+                title: "Revert",
+                style: .plain,
+                target: self,
+                action: #selector(revertTapped)
             )
+        ]
+        
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "Cell")
+        currentStoreId = compass?.currentStore
+        loadFlags()
+    }
+    
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // Refresh flags when view appears in case store changed
+        if currentStoreId != compass?.currentStore {
+            currentStoreId = compass?.currentStore
+            loadFlags()
+        }
+    }
+    
+    private func loadFlags() {
+        // Get the current configuration from SDK
+        originalBackendConfig = compass?.getCurrentStoreConfig()
+        guard let config = originalBackendConfig else { return }
+        
+        // Build flags array with current values from SDK
+        flags = [
+            Flag(name: "Blue Dot Enabled", key: "bluedotEnabled",
+                 value: config["bluedotEnabled"] ?? false,
+                 type: .boolean),
+//            Flag(name: "Blue Dot Displayed", key: "bluedotDisplayed",
+//                 value: config["bluedotDisplayed"] ?? false,
+//                 type: .boolean),
+            Flag(name: "Dynamic Map Enabled", key: "dynamicMapEnabled",
+                 value: config["dynamicMapEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Zoom Control Enabled", key: "zoomControlEnabled",
+                 value: config["zoomControlEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Error Screens Enabled", key: "errorScreensEnabled",
+                 value: config["errorScreensEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Dynamic Map Rotation", key: "dynamicMapRotationEnabled",
+                 value: config["dynamicMapRotationEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Spinner Enabled", key: "spinnerEnabled",
+                 value: config["spinnerEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Use Background Service", key: "useBackgroundService",
+                 value: config["useBackgroundService"] ?? false,
+                 type: .boolean),
+            Flag(name: "Background Service Timeout", key: "backgroundServiceTimeout",
+                 value: config["backgroundServiceTimeout"] ?? 300.0,
+                 type: .double),
+            Flag(name: "Geofence Check Timeout", key: "geoFenceCheckTimeout",
+                 value: config["geoFenceCheckTimeout"] ?? 1.0,
+                 type: .double),
+            Flag(name: "Positioning Session Timeout", key: "positioningSessionTimeout",
+                 value: config["positioningSessionTimeout"] ?? 1.0,
+                 type: .double),
+            Flag(name: "Session Refresh Time", key: "sessionRefreshTime",
+                 value: config["sessionRefreshTime"] ?? 900,
+                 type: .integer)
+        ]
+        
+        tableView.reloadData()
+    }
+    
+    @objc private func cancelTapped() {
+        dismiss(animated: true)
+    }
+    
+    @objc private func applyTapped() {
+        var overrides: [String: Any] = [:]
+        for flag in flags {
+            overrides[flag.key] = flag.value
+        }
+        
+        // Apply to SDK immediately
+        compass?.applyFeatureFlagOverrides(overrides)
+        
+        // Store in UserDefaults with store-specific key for the session
+        if let storeId = currentStoreId {
+            UserDefaults.standard.set(overrides, forKey: "FeatureFlagOverrides_\(storeId)")
+            UserDefaults.standard.synchronize()
+        }
+        
+        let alert = UIAlertController(
+            title: "Success",
+            message: "Feature flags applied successfully",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
+            self.dismiss(animated: true)
+        })
+        present(alert, animated: true)
+    }
+    
+    @objc private func revertTapped() {
+        // Clear stored overrides
+        if let storeId = currentStoreId {
+            UserDefaults.standard.removeObject(forKey: "FeatureFlagOverrides_\(storeId)")
+            UserDefaults.standard.synchronize()
+        }
+        
+        // Revert in SDK immediately
+        compass?.revertToOriginalConfig()
+        
+        // Reload the UI with original values
+        loadFlags()
+        
+        let alert = UIAlertController(
+            title: "Reverted",
+            message: "Feature flags reverted to backend defaults",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
+    }
+    
+    // MARK: - Table view data source
+    
+    override func numberOfSections(in tableView: UITableView) -> Int {
+        return 2
+    }
+    
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        return section == 0 ? "Boolean Flags" : "Numeric Flags"
+    }
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        if section == 0 {
+            return flags.filter { $0.type == .boolean }.count
         } else {
-            eventAnalytics = nil
+            return flags.filter { $0.type != .boolean }.count
         }
-
-        let event = EventAnalytics.Event(
-            id: RequestIdentifier.id1.rawValue,
-            type: eventType,
-            value: eventValue,
-            properties: metaData?.toCodableValueDictionary()
+    }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "Cell", for: indexPath)
+        
+        let sectionFlags = indexPath.section == 0 ?
+            flags.filter { $0.type == .boolean } :
+            flags.filter { $0.type != .boolean }
+        
+        guard indexPath.row < sectionFlags.count else { return cell }
+        
+        let flag = sectionFlags[indexPath.row]
+        let flagIndex = flags.firstIndex { $0.key == flag.key } ?? 0
+        
+        cell.textLabel?.text = flag.name
+        
+        switch flag.type {
+        case .boolean:
+            let switchView = UISwitch()
+            switchView.isOn = flag.value as? Bool ?? false
+            switchView.tag = flagIndex
+            switchView.addTarget(self, action: #selector(switchChanged(_:)), for: .valueChanged)
+            cell.accessoryView = switchView
+            
+        case .double, .integer:
+            let label = UILabel()
+            if flag.type == .double {
+                label.text = String(format: "%.1f", flag.value as? Double ?? 0)
+            } else {
+                label.text = "\(flag.value as? Int ?? 0)"
+            }
+            label.textColor = .systemBlue
+            label.sizeToFit()
+            cell.accessoryView = label
+        }
+        
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        
+        let sectionFlags = indexPath.section == 0 ?
+            flags.filter { $0.type == .boolean } :
+            flags.filter { $0.type != .boolean }
+        
+        guard indexPath.row < sectionFlags.count else { return }
+        
+        let flag = sectionFlags[indexPath.row]
+        let flagIndex = flags.firstIndex { $0.key == flag.key } ?? 0
+        
+        // Show input dialog for numeric values
+        if flag.type == .double || flag.type == .integer {
+            showInputDialog(for: flagIndex)
+        }
+    }
+    
+    private func showInputDialog(for index: Int) {
+        let flag = flags[index]
+        
+        let alert = UIAlertController(
+            title: flag.name,
+            message: "Enter new value",
+            preferredStyle: .alert
         )
-
-        let authParam: AuthParameter? = serviceLocator.getKeychainService().getToken()
-                let configurationService = serviceLocator.getConfigurationService()
-                configurationService.getStoreConfiguration().sink { [weak self] configuration in
-                    Log.info("[COVERAGE] updateEventList block executed for namespace: \(namespace), eventType: \(eventType), eventValue: \(eventValue)")
-                    guard let configuration else { return }
-            let payload = EventAnalytics(userId: configuration.userId,
-                                         namespace: namespace,
-                                         clientId: authParam?.accountID ?? "",
-                                         location: eventAnalytics,
-                                         event: event,
-                                         isPositionLocked: position?.isLocked ?? false)
-
-            Analytics.updateEvent(payload: payload)
-            Log.info("Update Event List: \(payload)")
-            self?.serviceLocator.getStatusService().emitUpdateEventList(description: "Compass UpdateEventList success")
-        }
-        .store(in: &cancellable)
-    }
-
-    func resetPositionStatusEvent() {
-        self.serviceLocator.getStatusService().resetCompassPositionType()
-
-        guard !isPositioningEnabled else { return }
-        self.serviceLocator.getStatusService().emitPositionStatusEvent(
-            calibrationProgress: 0,
-            isCalibrationGestureNeeded: false,
-            positioningProgress: 0,
-            isPositionLocked: true
-        )
-    }
-
-    func displayPin(uuidList: [String], idType: PinDropMethod, config: DisplayPinConfig?) {
-        Log.debug("displayPin called: \(uuidList), idType:\(idType.rawValue), config: \(String(describing: config))")
-        startPositionSession()
-        mapHostViewModel?.displayPin(uuidList: uuidList, idType: idType, config: config)
-    }
-
-    func displayPinV2(pins: [AislePin], config: DisplayPinConfig?, isZoomOutRequired: Bool = false) {
-        Log.debug("API Called: displayPinV2 for: \(pins), config:\(String(describing: config)), isZoomOutRequired: \(isZoomOutRequired)")
-        startPositionSession()
-        mapHostViewModel?.displayPinV2(pins: pins, config: config, isZoomOutRequired: isZoomOutRequired)
-    }
-
-    // If multiple getUserDistance calls are made in quick succession (for example by different UI actions or async flows) the requestId helps us match each response to its original request.
-    func getUserDistance(pins: [AislePin], completion: UserDistanceCompleteHandler?) {
-        Log.debug("API Called: getUserDistance for pins: \(pins)")
-        startPositionSession()
-        mapHostViewModel?.getUserDistance(pins: pins, completion: completion)
-    }
-
-    func killSwitch() {
-        stopPositioning()
-        serviceLocator.getUserPositionManager().logout()
-        cancellable.removeAll()
-    }
-
-    func removeUserPositionIndicator() {
-        guard let mapHostViewModel = mapHostViewModel else {
-            Log.warning("Cannot remove user position indicator: mapHostViewModel is nil")
-            return
-        }
-        mapHostViewModel.removeUserPositionIndicator()
-    }
-
-    deinit {
-        positionSessionTimer?.invalidate()
-        positionSessionTimer = nil
-        Log.info("Released CompassViewModel")
-    }
-}
-
-extension CompassViewModel {
-    func startPositionSession() {
-        guard isPositioningEnabled else {
-            return
-        }
-
-        serviceLocator.getUserPositionManager().startPositioning()
-
-        guard positionRefreshTime != -1 else { return }
-        positionSessionTimer?.invalidate()
-        positionSessionTimer = .scheduledTimer(withTimeInterval: TimeInterval(sessionRefreshTime),
-                                               repeats: false) { [weak self] _ in
-            self?.stopPositioning()
-        }
-    }
-
-    func stopPositioning() {
-        Log.info("Stop Oriient Position")
-        guard isPositioningEnabled else { return }
-        serviceLocator.getUserPositionManager().stopPositioning()
-    }
-}
-
-private extension CompassViewModel {
-    func bindAppLifecycleObservation() {
-        let notificationCenter = NotificationCenter.default
-        notificationCenter.addObserver(forName: UIApplication.didEnterBackgroundNotification,
-                                       object: nil,
-                                       queue: .main) { [weak self] _ in
-            Log.info("App moved to background")
-            self?.setBackgroundMode(true)
-        }
-
-        notificationCenter.addObserver(forName: UIApplication.willEnterForegroundNotification,
-                                       object: nil,
-                                       queue: .main) { [weak self] _ in
-            Log.info("App moved to foreground")
-            self?.setBackgroundMode(false)
-        }
-    }
-
-    func setBackgroundMode(_ isBackgroundMode: Bool) {
-        serviceLocator.getNetworkMonitorService().setIsBackgroundMode(isBackgroundMode)
-        if isBackgroundMode == false {
-            startPositionSession()
-        }
-    }
-
-    func setStore(using storeConfig: StoreConfig?) {
-        guard let storeId = storeConfig?.storeId else {
-            Log.warning("Cannot set assetService.storeId")
-            return
-        }
-
-        assetService.storeId = storeId
-        Analytics.storeId = storeId.asString()
-    }
-
-    func setSupportedEventList(using storeConfig: StoreConfig?) {
-        guard let supportedEventString = storeConfig?.supportedEventList else {
-            Log.warning("Cannot set assetService storeId")
-            return
-        }
-
-        assetService.supportedEventList = supportedEventString
-    }
-
-    func setMapType(using storeConfig: StoreConfig?) {
-        guard let mapTypeString = storeConfig?.mapType else {
-            Log.warning("Cannot set mapType")
-            return
-        }
-
-        Log.info("Set Map Type as \(mapTypeString)")
-        let mapType = MapIdentifier(rawValue: mapTypeString) ?? .WalmartMap
-        assetService.mapType = mapType
-
-        /* // hard code blue dot enabled
-        var storeConfig = storeConfig
-        storeConfig?.bluedotEnabled = true
-         */
-        var blueDotMode: BlueDotMode = .none
-        if storeConfig?.bluedotEnabled == true {
-            blueDotMode = .visible
-            if storeConfig?.bluedotDisplayed == false {
-                blueDotMode = .ghost
+        
+        alert.addTextField { textField in
+            if flag.type == .double {
+                textField.text = String(format: "%.1f", flag.value as? Double ?? 0)
+                textField.keyboardType = .decimalPad
+            } else {
+                textField.text = "\(flag.value as? Int ?? 0)"
+                textField.keyboardType = .numberPad
             }
         }
-        let dynamicMapEnabled: Bool = storeConfig?.dynamicMapEnabled ?? false
-        let zoomControlEnabled: Bool = storeConfig?.zoomControlEnabled ?? false
-        let errorScreensEnabled: Bool = storeConfig?.errorScreensEnabled ?? false
-        let dynamicMapRotationEnabled: Bool = storeConfig?.dynamicMapRotationEnabled ?? false
-        let spinnerEnabled: Bool = storeConfig?.spinnerEnabled ?? false
-
-        Log.info(
-            """
-            The value for blueDotMode is: \(blueDotMode)
-            dynamicMapEnabled is \(dynamicMapEnabled)
-            zoomControlEnabled is \(zoomControlEnabled)
-            errorScreensEnabled is \(errorScreensEnabled)
-            dynamicMapRotationEnabled is \(dynamicMapRotationEnabled)
-            spinnerEnabled is \(spinnerEnabled)
-            """
-        )
-
-        isPositioningEnabled = blueDotMode != .none
-        if let insideGeoFenceTimeout = storeConfig?.backgroundServiceTimeout {
-            serviceLocator.getIndoorPositioningService().insideGeoFenceTimeout = Int(insideGeoFenceTimeout)
-        }
-        if let outsideGeoFenceTimeOut = storeConfig?.geoFenceCheckTimeout {
-            serviceLocator.getIndoorPositioningService().outsideGeoFenceTimeOut = Int(outsideGeoFenceTimeOut)
-        }
-
-        serviceLocator.getUserPositionManager().stopPositioning()
-        startPositionSession()
-        let options = StoreMapView.Options(
-            dynamicMapEnabled: dynamicMapEnabled,
-            zoomControlEnabled: zoomControlEnabled,
-            errorScreensEnabled: errorScreensEnabled,
-            spinnerEnabled: spinnerEnabled,
-            dynamicMapRotationEnabled: dynamicMapRotationEnabled
-        )
-        setMapHostViewModel(mapType: mapType,
-                            blueDotMode: blueDotMode,
-                            storeMapOptions: options)
-    }
-
-    func setupLogIntervalsData(storeConfig: StoreConfig?) {
-        if let batchInterval = storeConfig?.batchInterval {
-            Log.batchInterval = batchInterval / 1000
-        }
-        if let heartBeatInterval = storeConfig?.heartbeatInterval {
-            Analytics.heartbeatInterval = heartBeatInterval / 1000
-        }
-
-        Analytics.includeUserInHeatbeat = storeConfig?.heartBeatInUser ?? false
-        Analytics.includeLocationInHeatbeat = storeConfig?.heartbeatInLocation ?? false
-    }
-
-    func setStoreConfigOffset(using storeConfig: StoreConfig?) {
-        guard let storeConfigOffset = storeConfig?.offset else {
-            Log.warning("Cannot set assetService storeConfigOffset")
-            return
-        }
-
-        assetService.storeConfigOffset = storeConfigOffset
-    }
-
-    func setMapHostViewModel(mapType: MapIdentifier,
-                             blueDotMode: BlueDotMode,
-                             storeMapOptions: StoreMapView.Options) {
-        switch mapType {
-        case .OriientMap:
-            Log.info("Set up oriient map view model")
-//            mapHostViewModel = OriientViewModel(blueDotMode: blueDotMode,
-//                                                dynamicMapEnabled: dynamicMapEnabled,
-//                                                zoomControlEnabled: zoomControlEnabled,
-//                                                errorScreensEnabled: errorScreensEnabled,
-//                                                dynamicMapRotationEnabled: dynamicMapRotationEnabled,
-//                                                spinnerEnabled: spinnerEnabled,
-//                                                rootViewController: rootViewController,
-//                                                serviceLocator: serviceLocator)
-        case .WalmartMap:
-            Log.info("Set up in store map view model")
-            mapHostViewModel = InStoreMapViewModel(blueDotMode: blueDotMode,
-                                                   storeMapOptions: storeMapOptions,
-                                                   rootViewController: rootViewController,
-                                                   serviceLocator: serviceLocator)
-        }
-    }
-
-    /// Used to retrieve access token based on clientId and consumerId.
-    ///
-    /// - Parameters:
-    ///   - clientId: The clientId to be used to setup
-    ///   - consumerId: The consumerId to be used to setup
-    func getTokenData(for clientId: String, consumerId: String) -> AnyPublisher<AccessTokenResponse?, Never> {
-        serviceLocator.getNetworkService().getTokenData(for: clientId, consumerId: consumerId)
-            .receive(on: DispatchQueue.main)
-            .retry()
-            .catch { [weak self] error -> AnyPublisher<AccessTokenResponse?, Error> in
-                Log.error(error)
-                guard let error = error as? ErrorResponse else {
-                    return Fail(error: error).eraseToAnyPublisher()
+        
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
+            if let text = alert.textFields?.first?.text {
+                if flag.type == .double {
+                    self.flags[index].value = Double(text) ?? 0
+                } else {
+                    self.flags[index].value = Int(text) ?? 0
                 }
-                self?.serviceLocator.getStatusService()
-                    .emitErrorStatusEvent(for: error, isInitError: true)
-                return Fail(error: error).eraseToAnyPublisher()
+                self.tableView.reloadData()
             }
-            .replaceError(with: nil)
-            .receive(on: DispatchQueue.main)
-            .eraseToAnyPublisher()
+        })
+        
+        present(alert, animated: true)
     }
-
-    func setDeviceId() -> AnyPublisher<DeviceDataModel, Never> {
-        serviceLocator.getIdentifierService().setDeviceId()
-            .retry()
-            .catch { error -> AnyPublisher<DeviceDataModel, Never> in
-                Log.error(error)
-                return Empty().eraseToAnyPublisher()
-            }
-            .receive(on: DispatchQueue.main)
-            .eraseToAnyPublisher()
-    }
-
-    func setSessionId() -> AnyPublisher<SessionDataModel, Never> {
-        serviceLocator.getIdentifierService().setSessionId()
-            .retry()
-            .catch { error -> AnyPublisher<SessionDataModel, Never> in
-                Log.error(error)
-                return Empty().eraseToAnyPublisher()
-            }
-            .receive(on: DispatchQueue.main)
-            .eraseToAnyPublisher()
-    }
-
-    func emitUpdateEventError() {
-        self.serviceLocator.getStatusService().emitErrorStatusEvent(
-            using: nil, compassErrorType: .addEventError, isInitError: false
-        )
-    }
-
-    func emitUpdateEventListError() {
-        self.serviceLocator.getStatusService().emitErrorStatusEvent(
-            using: nil, compassErrorType: .updateEventListError, isInitError: false
-        )
-    }
-
-    // Logs an error and saves an empty token to Keychain
-    func logAndHandleEmptyAuthParameter() {
-        Log.error("Auth Parameter is empty")
-        saveEmptyTokenToKeychain()
-    }
-
-    // Handles different token types
-    func handleTokenType(for authParameter: AuthParameter) -> AnyPublisher<AccessTokenResponse?, Never> {
-        switch authParameter.tokenType {
-        case TokenType.User.rawValue, TokenType.Pingfed.rawValue:
-            return handleUserToken(authParameter)
-        default:
-            return handleDefaultToken(authParameter)
-        }
-    }
-
-    // Handles the case for user tokens
-    func handleUserToken(_ authParameter: AuthParameter) -> AnyPublisher<AccessTokenResponse?, Never> {
-        saveTokenToKeychain(authParameter: authParameter)
-        let response = AccessTokenResponse(
-            accessToken: authParameter.authToken, tokenType: authParameter.tokenType, expiresIn: 0
-        )
-        return Just(response).eraseToAnyPublisher()
-    }
-
-    // Handles the default token retrieval case
-    func handleDefaultToken(_ authParameter: AuthParameter) -> AnyPublisher<AccessTokenResponse?, Never> {
-        return self.getTokenData(for: authParameter.authToken, consumerId: authParameter.consumerID)
-            .flatMap { [weak self] accessTokenResponse -> AnyPublisher<AccessTokenResponse?, Never> in
-                guard let self, let accessTokenResponse else {
-                    self?.saveEmptyTokenToKeychain()
-                    return Just(nil).eraseToAnyPublisher()
-                }
-
-                return self.handleAccessTokenResponse(accessTokenResponse, authParameter: authParameter)
-            }
-            .eraseToAnyPublisher()
-    }
-
-    // Handles the response after getting the access token
-    private func handleAccessTokenResponse(
-        _ accessTokenResponse: AccessTokenResponse, authParameter: AuthParameter
-    ) -> AnyPublisher<AccessTokenResponse?, Never> {
-        var updatedAuthParameter = authParameter
-        updatedAuthParameter.update(using: accessTokenResponse)
-        saveTokenToKeychain(authParameter: updatedAuthParameter)
-        return Just(accessTokenResponse).eraseToAnyPublisher()
-    }
-
-    // Method to save an empty token to the Keychain
-    func saveEmptyTokenToKeychain() {
-        let emptyAccessTokenResponse = AccessTokenResponse(accessToken: "", tokenType: "", expiresIn: 0)
-        try? self.serviceLocator.getKeychainService().saveToken(emptyAccessTokenResponse)
-    }
-
-    // Method to save the token to the Keychain
-    func saveTokenToKeychain(authParameter: AuthParameter) {
-        try? self.serviceLocator.getKeychainService().saveToken(authParameter)
+    
+    @objc private func switchChanged(_ sender: UISwitch) {
+        flags[sender.tag].value = sender.isOn
     }
 }
