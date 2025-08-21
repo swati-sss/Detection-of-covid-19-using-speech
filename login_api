@@ -1,274 +1,1088 @@
+//
+//  HomeViewController.swift
+//  Compass_ios
+//
+//  Created by Rakesh Shetty on 2/18/23.
+//
+
 import UIKit
 import compass_sdk_ios
+import Combine
+import LivingDesign
 
-class FeatureFlagsTableViewController: UITableViewController {
-    
-    struct Flag {
-        let name: String
-        let key: String
-        var value: Any
-        let type: FlagType
-        
-        enum FlagType {
-            case boolean
-            case double
-            case integer
+var compass: Compass?
+typealias PinDropEventEmitterHandler = (PinDropEventEmitter) -> Void
+typealias PinClickedEventEmitterHandler = (PinClickedEventEmitter) -> Void
+typealias EventEmitterDescriptionHandler = (EventEmitterDescription) -> Void
+typealias ErrorEventEmitterHandler = (ErrorEventEmitter) -> Void
+
+final class HomeViewController: UIViewController {
+    private var cancellables = Set<AnyCancellable>()
+//    private var compass = Compass()
+    var currentStore: Int?
+    private let mapRootViewController = LDRootViewController()
+    private var pinDropEventEmitterHandler: PinDropEventEmitterHandler?
+    private var pinClickedEventEmitterHandler: PinClickedEventEmitterHandler?
+    private var aislePinDropEventEmitterHandler: PinDropEventEmitterHandler?
+    private var bootstrapEventEmitterHandler: EventEmitterDescriptionHandler?
+    private var updateEventListEmitterHandler: EventEmitterDescriptionHandler?
+    private var errorEventEmitterHandler: ErrorEventEmitterHandler?
+    private var enableManualPinDrop = true
+    private var shouldZoomOnPins = true
+    private var resetZoom = false
+    private var isPositionLocked = false
+    private let contentStackView = UIStackView()
+    private let positionStackView = UIStackView()
+
+    private var displayPinConfig: DisplayPinConfig {
+        DisplayPinConfig(enableManualPinDrop: enableManualPinDrop, resetZoom: resetZoom, shouldZoomOnPins: shouldZoomOnPins)
+    }
+
+    private lazy var calibrationProgressView: UIProgressView = {
+        let progressView = UIProgressView(progressViewStyle: .default)
+        progressView.trackTintColor = #colorLiteral(red: 0.9254902005, green: 0.2352941185, blue: 0.1019607857, alpha: 1)
+        progressView.progressTintColor = #colorLiteral(red: 0.9254902005, green: 0.2352941185, blue: 0.1019607857, alpha: 1)
+        progressView.layer.cornerRadius = 2.5
+        progressView.layer.opacity = 0.66
+        progressView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+        progressView.layer.zPosition = CGFloat(Int.max)
+        let progressViewLabel = UILabel(frame: CGRect(x: 0, y: 0, width: progressView.frame.size.width, height: 10))
+        progressViewLabel.text = " ∞ Calibration"
+        progressViewLabel.textAlignment = .left
+        progressViewLabel.font = .boldSystemFont(ofSize: 10)
+        progressView.addSubview(progressViewLabel)
+        progressView.translatesAutoresizingMaskIntoConstraints = false
+        return progressView
+    }()
+
+    private lazy var positioningProgressView: UIProgressView = {
+        let progressView = UIProgressView(progressViewStyle: .default)
+        progressView.trackTintColor = #colorLiteral(red: 0.9254902005, green: 0.2352941185, blue: 0.1019607857, alpha: 1)
+        progressView.progressTintColor = #colorLiteral(red: 0.9254902005, green: 0.2352941185, blue: 0.1019607857, alpha: 1)
+        progressView.layer.cornerRadius = 2.5
+        progressView.layer.opacity = 0.66
+        progressView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+        progressView.layer.zPosition = CGFloat(Int.max)
+        let progressViewLabel = UILabel(frame: CGRect(x: 0, y: 0, width: progressView.frame.size.width, height: 10))
+        progressViewLabel.text = "🚶‍➡️ Position"
+        progressViewLabel.textAlignment = .left
+        progressViewLabel.font = .boldSystemFont(ofSize: 10)
+        progressView.addSubview(progressViewLabel)
+        progressView.translatesAutoresizingMaskIntoConstraints = false
+        return progressView
+    }()
+
+    private lazy var positionLockProgressView: UIProgressView = {
+        let progressView = UIProgressView(progressViewStyle: .default)
+        progressView.trackTintColor = #colorLiteral(red: 0.9254902005, green: 0.2352941185, blue: 0.1019607857, alpha: 1)
+        progressView.progressTintColor = #colorLiteral(red: 0.9254902005, green: 0.2352941185, blue: 0.1019607857, alpha: 1)
+        progressView.layer.cornerRadius = 2.5
+        progressView.layer.opacity = 0.66
+        progressView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+        progressView.layer.zPosition = CGFloat(Int.max)
+        let progressViewLabel = UILabel(frame: CGRect(x: 0, y: 0, width: progressView.frame.size.width, height: 10))
+        progressViewLabel.text = " 🔒 Position Lock"
+        progressViewLabel.textAlignment = .left
+        progressViewLabel.font = .boldSystemFont(ofSize: 10)
+        progressView.addSubview(progressViewLabel)
+        progressView.translatesAutoresizingMaskIntoConstraints = false
+        return progressView
+    }()
+
+
+    private lazy var customView: UIView = {
+        let view = UIView()
+        view.backgroundColor = .systemBackground
+        view.translatesAutoresizingMaskIntoConstraints = false
+        return view
+    }()
+
+    private lazy var storeID: UITextField = {
+        let field = UITextField()
+        field.text = "Enter store ID"
+        field.layer.borderWidth = 1.0
+        field.layer.cornerRadius = 10.0
+        field.layer.borderColor = #colorLiteral(red: 0.501960814, green: 0.501960814, blue: 0.501960814, alpha: 1).cgColor
+        field.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
+        field.textAlignment = .center
+        field.autocorrectionType = .no
+        field.backgroundColor = .systemBackground
+        field.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 8, height: 10))
+        field.rightView = UIView(frame: CGRect(x: 0, y: 0, width: 8, height: 10))
+        field.leftViewMode = .always
+        field.translatesAutoresizingMaskIntoConstraints = false
+        return field
+    }()
+
+    private lazy var initButton: UIButton = {
+        let button = PlainButton(title: "Initialize")
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.heightAnchor.constraint(equalToConstant: 38).isActive = true
+        button.addTarget(self, action: #selector(initialize), for: .touchUpInside)
+        return button
+    }()
+
+    private lazy var buttonCollection: UICollectionView = {
+        let layout = UICollectionViewFlowLayout()
+        let collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        collection.backgroundColor = .systemBackground
+        collection.register(CollectionViewCell.self, forCellWithReuseIdentifier: CollectionViewCell.identifier)
+        collection.translatesAutoresizingMaskIntoConstraints = false
+        return collection
+    }()
+
+    private lazy var optionsButton: UIButton = {
+        let button = PlainButton(title: "Options")
+        button.heightAnchor.constraint(equalToConstant: 38).isActive = true
+        button.addTarget(self, action: #selector(showOptions), for: .touchUpInside)
+        button.menu = optionsMenu
+        button.showsMenuAsPrimaryAction = true
+        return button
+    }()
+
+    private lazy var optionsMenu: UIMenu = {
+        UIMenu(options: [.displayInline], children: [
+            UIAction(title: "Zoom-in on pin drop", discoverabilityTitle: "1", state: .off, handler: { action in
+                self.shouldZoomOnPins = action.state == .off ? true : false
+                (self.optionsButton.menu?.children[0] as? UIAction)?.state = self.shouldZoomOnPins ? .on : .off
+            }),
+            UIAction(title: "Reset zoom on clear map", discoverabilityTitle: "2", state: .off, handler: { action in
+                self.resetZoom = action.state == .off ? true : false
+                (self.optionsButton.menu?.children[1] as? UIAction)?.state = self.resetZoom ? .on : .off
+            }),
+            UIAction(title: "Copy console text", discoverabilityTitle: "3", handler: { _ in
+                UIPasteboard.general.string = self.consoleView.text
+            }),
+            UIAction(title: "Clear console", discoverabilityTitle: "4", handler: { _ in
+                self.consoleView.text = ""
+            }),
+            UIAction(title: "Hide/Show console", discoverabilityTitle: "5", handler: { _ in
+                self.consoleView.isHidden.toggle()
+            }),
+            UIAction(title: "Stop positioning", discoverabilityTitle: "6", handler: { _ in
+                compass?.killSwitch()
+            })
+        ])
+    }()
+
+    private lazy var consoleView: UITextView = {
+        let textView = UITextView()
+        textView.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        textView.backgroundColor = #colorLiteral(red: 0.2549019754, green: 0.2745098174, blue: 0.3019607961, alpha: 1)
+        textView.textColor = #colorLiteral(red: 0.8039215803, green: 0.8039215803, blue: 0.8039215803, alpha: 1)
+        textView.isEditable = false
+        textView.isSelectable = false
+        textView.textContainerInset = UIEdgeInsets(top: 0, left: 8, bottom: 24, right: 8)
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        textView.isHidden.toggle()
+        return textView
+    }()
+
+    @objc func initialize(_ disableAutoZoom: Bool) {
+        reset()
+        self.currentStore = compass?.currentStore
+
+        guard let storeIDText = storeID.text, let site = Int(storeIDText) else {
+            Log.debug("Compass Initialization failed")
+            return
+        }
+
+        guard self.currentStore != site else {
+            compass?.resetPositionStatusEvent()
+            Log.debug("Compass Initialization success")
+            return
+        }
+
+        compass = Compass()
+        guard let compass = compass else {
+            Log.debug("Compass Initialization success")
+            return
+        }
+
+        let authParameter = Environment.authParmeter
+        let configuration = Environment.getConfiguration(for: site)
+
+        var updateStatus = true
+        compass.setEnvironment(Environment.backendEnv)
+
+        cancellables.removeAll()
+        consoleView.text  = ""
+
+        Just(compass.initialize(authParameter: authParameter,
+                                configuration: configuration,
+                                capabilities: [.storeMap],
+                                rootViewController: mapRootViewController))
+        .eraseToAnyPublisher()
+        .flatMap { _ in
+            compass.isFinishedInitialize
+        }
+        .sink { [weak self] isFinishedInitialize in
+            guard let isFinishedInitialize else {
+                self?.consoleLog("Compass waiting initialization")
+                Log.debug("Compass: Compass waiting initialization")
+                return
+            }
+            guard isFinishedInitialize else {
+                Log.debug("Compass: Compass Initialization Failed")
+                DispatchQueue.main.async {
+                    self?.consoleLog("Compass Initialization Failed")
+                }
+                return
+            }
+
+            self?.currentStore = site
+            compass.currentStore = site
+
+            self?.consoleLog("Compass Initialization Succeeded")
+
+            Log.debug("Compass: Compass initialization is success")
+
+            guard updateStatus else {
+                return
+            }
+            updateStatus = false
+            Log.debug("Compass Initialization success")
+        }
+        .store(in: &cancellables)
+
+        let errorEventEmitterCompletionHandler: (ErrorEventEmitter)->Void = { errorEventEmitter in
+            let dict = errorEventEmitter.toDictionary()
+            var event = [String : Any]()
+            if let code = dict["errorCode"] as? Int {
+                event["code"] = code
+            }
+            if let errortype = dict["compassErrorType"] as? String {
+                event["errortype"] = errortype
+            }
+            if let message = dict["errorDescription"] as? String {
+                event["message"] = message
+            }
+            DispatchQueue.main.async {
+                self.consoleLog("ERROR EVENT:\n\(event.toJSONString() ?? "")")
+            }
+            Log.debug("The value of errorEventEmitter is:\(errorEventEmitter)")
+            Log.debug("The value of errorEventEmitter dict is:\(event)")
+            guard updateStatus else { return }
+            updateStatus = false
+            Log.debug("-1 Compass Initialization failed")
+        }
+
+        waitForEventEmitterCompletionHandlerResponse(with: errorEventEmitterCompletionHandler)
+        waitForIsFinishedSettingMapResponse()
+    }
+
+    func consoleLog(_ text: String) {
+        let currentText = consoleView.text ?? ""
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "hh:mm:ss.SSSS"
+        consoleView.text = currentText.appending("\n\n\(dateFormatter.string(from: Date()))\n\(text)")
+        let point = CGPoint(x: 0, y: consoleView.contentSize.height - consoleView.bounds.size.height + consoleView.contentInset.bottom + consoleView.contentInset.top)
+        consoleView.setContentOffset(point, animated: true)
+    }
+
+    @objc func showOptions() {
+        optionsButton.sendActions(for: .primaryActionTriggered)
+    }
+
+    @objc func updateEvent() {
+        Log.debug("Compass: updateEvent called.")
+        compass?.isFinishedInitialize
+            .sink { isInitialize in
+                let uuid =
+                self.storeID.text == DebugData.StoreID.oriient ?
+                DebugData.asset2280List.shuffled() : DebugData.asset3594List.shuffled()
+
+                guard let isInitialize,
+                      isInitialize,
+                      let assetId = uuid.first else {
+                    Log.debug("Compass: isInitialize is not set.")
+                    return
+                }
+
+                let compassEvent = CompassEvent(eventType: "asset_scan",
+                                                eventValue: assetId,
+                                                eventMetadata: [:])
+                compass?.updateEvent(compassEvent: compassEvent)
+            }
+            .store(in: &cancellables)
+
+        var isCancelled = false
+        var updateStatus = true
+
+        //Observe error and progress update
+        bootstrapEventEmitterHandler = { eventEmitterDescription in
+            var dict = eventEmitterDescription.toDictionary()
+            Log.debug("The value of bootstrapEventEmitterHandler dict is:\(dict)")
+            dict["eventType"] = nil
+
+            DispatchQueue.main.async {
+                self.consoleLog("BOOTSTRAP EVENT:\n\(dict.toJSONString() ?? "")")
+            }
+
+            isCancelled = true
+
+            guard updateStatus else {
+                return
+            }
+
+            updateStatus = false
+            Log.debug("Compass updateEvent success")
+        }
+
+        if !isCancelled {
+            errorEventEmitterHandler = { errorEventEmitter in
+                let dict = errorEventEmitter.toDictionary()
+                Log.debug("The value of errorEventEmitterHandler dict is:\(dict)")
+
+                var event = [String : Any]()
+                if let code = dict["errorCode"] as? Int {
+                    event["code"] = code
+                }
+                if let errorType = dict["compassErrorType"] as? String {
+                    event["errortype"] = errorType
+                }
+                if let message = dict["errorDescription"] as? String {
+                    event["message"] = message
+                }
+
+                DispatchQueue.main.async {
+                    self.consoleLog("ERROR EVENT:\n\(event.toJSONString() ?? "")")
+                }
+
+                Log.debug(" sendEvent errorEventEmitter body: \(event)")
+                guard updateStatus else {
+                    return
+                }
+
+                updateStatus = false
+                Log.debug("-1 Compass updateEvent failed")
+            }
         }
     }
-    
-    private var flags: [Flag] = []
-    private var originalBackendConfig: [String: Any]?
-    private var currentStoreId: Int?
-    
+
+    @objc func updateEventList() {
+        Log.debug("Compass: updateEvent List called.")
+
+        var isCancelled = false
+        var updateStatus = true
+
+        updateEventListEmitterHandler = { eventEmitterDescription in
+            var dict = eventEmitterDescription.toDictionary()
+            Log.debug("The value of updateEventListEmitterHandler dict is:\(dict)")
+            dict["eventType"] = nil
+
+            DispatchQueue.main.async {
+                self.consoleLog("UPDATE EVENT LIST:\n\(dict.toJSONString() ?? "")")
+            }
+
+            isCancelled = true
+
+            guard updateStatus else {
+                return
+            }
+
+            updateStatus = false
+            Log.debug("Compass updateEvent list success")
+        }
+        if !isCancelled {
+            errorEventEmitterHandler = { errorEventEmitter in
+                let dict = errorEventEmitter.toDictionary()
+                Log.debug("The value of errorEventEmitterHandler dict is:\(dict)")
+
+                var event = [String : Any]()
+                if let code = dict["errorCode"] as? Int {
+                    event["code"] = code
+                }
+                if let errorType = dict["compassErrorType"] as? String {
+                    event["errortype"] = errorType
+                }
+                if let message = dict["errorDescription"] as? String {
+                    event["message"] = message
+                }
+
+                DispatchQueue.main.async {
+                    self.consoleLog("ERROR EVENT:\n\(event.toJSONString() ?? "")")
+                }
+
+                Log.debug(" sendEvent errorEventEmitter body: \(event)")
+                guard updateStatus else {
+                    return
+                }
+
+                updateStatus = false
+                Log.debug("-1 Compass updateEvent failed")
+            }
+        }
+
+        compass?.isFinishedInitialize
+            .sink { isInitialize in
+                let uuid =
+                self.storeID.text == DebugData.StoreID.oriient ?
+                DebugData.asset2280List.shuffled() : DebugData.asset3594List.shuffled()
+
+                guard let isInitialize,
+                      isInitialize,
+                      let assetId = uuid.first else {
+                    Log.debug("Compass: isInitialize is not set.")
+                    return
+                }
+
+               compass?.updateEventList(
+                    namespace: "MODFLEX",
+                    eventType: "SCAN_FEATURE_LOCATION",
+                    eventValue: "BK4-12",
+                    metaData: [
+                        "keyA": "va",
+                        "keyB": "vb",
+                        "keyC": "vc",
+                        "keyD": "vd",
+                        "keyE": "ve",
+                        "keyF": "vf"
+                    ]
+                )
+            }
+            .store(in: &cancellables)
+
+    }
+
+    @objc func clearMap() {
+        compass?.clearMap(configuration: MapConfig(resetZoom: resetZoom).hashMap)
+    }
+
+    @objc func getLocation(assetId: String) {
+        compass?.getAisle(id: assetId)
+    }
+
+    @objc func killSwitch() {
+        removeCompassAndDestroyRoot()
+    }
+
+    @objc func nextScreen() {
+        let vc = FirstViewController(compass: compass ?? Compass())
+        vc.containerViewController = mapRootViewController
+        show(vc, sender: self)
+    }
+
+    func setUpdateEventButtonMenu(_ button: UIButton) {
+        let closure = { (action : UIAction) in
+            switch action.title {
+            case "Update Event":
+                self.updateEvent()
+            case "Update Event List":
+                self.updateEventList()
+            default:
+                self.updateEvent()
+            }
+        }
+
+        button.menu = UIMenu(title : "Select Update Event API", children : [
+            UIAction(title: "Update Event", handler: closure),
+            UIAction(title: "Update Event List", handler: closure),
+        ])
+        button.showsMenuAsPrimaryAction = true
+    }
+
+    func setOtherAPIsButtonMenu(_ button: UIButton) {
+        let closure = { (action : UIAction) in
+            switch action.title {
+            case "Clear Map":
+                self.clearMap()
+            case "Get Location":
+                self.getLocation(assetId: "1645190")
+            case "Kill Switch":
+                self.killSwitch()
+            default:
+                self.clearMap()
+            }
+        }
+
+        button.menu = UIMenu(title : "Select API", children : [
+            UIAction(title: "Clear Map", handler: closure),
+            UIAction(title: "Get Location", handler: closure),
+            UIAction(title: "Kill Switch", handler: closure),
+        ])
+        button.showsMenuAsPrimaryAction = true
+    }
+
+    func setDisplayButtonMenu(_ button: UIButton) {
+        let closure = { (action : UIAction) in
+            switch action.title {
+            case "Asset Pin":
+                self.displayPins()
+            case "Generic Pin":
+                self.displayPinsFromEncodedString()
+            case "Aisle Pin":
+                self.displayPinsV2()
+            case "Get Distance":
+                self.getUserDistance()
+            case "Test Hardcoded Distance":
+                self.testGetUserDistanceWithHardcodedPin()
+            default:
+                self.displayPins()
+            }
+        }
+
+        button.menu = UIMenu(title : "Select a pin type", children : [
+            UIAction(title: "Asset Pin", handler: closure),
+            UIAction(title: "Generic Pin", handler: closure),
+            UIAction(title: "Aisle Pin", handler: closure),
+            UIAction(title: "Get Distance", handler: closure),
+            UIAction(title: "Test Hardcoded Distance", handler: closure)
+        ])
+        button.showsMenuAsPrimaryAction = true
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        
-        let hasOverrides = compass?.hasOverridesApplied() ?? false
-        title = hasOverrides ? "Feature Flags (Mod)" : "Feature Flags"
-        navigationItem.leftBarButtonItem = UIBarButtonItem(
-            title: "Cancel",
-            style: .plain,
-            target: self,
-            action: #selector(cancelTapped)
-        )
-        
-        navigationItem.rightBarButtonItems = [
-            UIBarButtonItem(
-                title: "Apply",
-                style: .done,
-                target: self,
-                action: #selector(applyTapped)
-            ),
-            UIBarButtonItem(
-                title: "Revert",
-                style: .plain,
-                target: self,
-                action: #selector(revertTapped)
-            )
-        ]
-        
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "Cell")
-        currentStoreId = compass?.currentStore
-        loadFlags()
+        view.backgroundColor = .systemBackground
+        navigationItem.title = "Main Map"
+        view.addSubview(customView)
+        storeID.delegate = self
+        buttonCollection.delegate = self
+        buttonCollection.dataSource = self
+        setUpSubviews()
+        storeID.text = "\(Environment.initialStore)"
+        initialize(false)
     }
-    
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        // Refresh flags when view appears in case store changed
-        if currentStoreId != compass?.currentStore {
-            currentStoreId = compass?.currentStore
-            loadFlags()
+
+    func setUpSubviews() {
+        guard let containerView = mapRootViewController.view else {
+            return
         }
+
+        let initStack: UIStackView = UIStackView(arrangedSubviews: [storeID, initButton, optionsButton])
+        initStack.axis = .horizontal
+        initStack.distribution = .fillEqually
+        initStack.spacing = 8
+        initStack.backgroundColor = .systemBackground
+        initStack.translatesAutoresizingMaskIntoConstraints = false
+
+        positionStackView.axis = .horizontal
+        positionStackView.distribution = .fillProportionally
+        positionStackView.spacing = 8
+        positionStackView.backgroundColor = .systemBackground
+        positionStackView.translatesAutoresizingMaskIntoConstraints = false
+
+        containerView.enclosingScrollView?.isScrollEnabled = false
+        containerView.enclosingScrollView?.canCancelContentTouches = true
+        containerView.backgroundColor = .systemBackground
+        containerView.translatesAutoresizingMaskIntoConstraints = false
+        contentStackView.translatesAutoresizingMaskIntoConstraints = false
+        contentStackView.axis = .vertical
+        contentStackView.spacing = 10.0
+        containerView.clipsToBounds = true
+        addChild(mapRootViewController)
+        mapRootViewController.didMove(toParent: self)
+        customView.addSubview(initStack)
+        customView.addSubview(buttonCollection)
+        customView.addSubview(positionStackView)
+        positionStackView.addArrangedSubview(calibrationProgressView)
+        positionStackView.addArrangedSubview(positioningProgressView)
+        positionStackView.addArrangedSubview(positionLockProgressView)
+
+        customView.addSubview(contentStackView)
+        contentStackView.addArrangedSubview(containerView)
+        contentStackView.addArrangedSubview(consoleView)
+
+        NSLayoutConstraint.activate([
+            customView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            customView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            customView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            customView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            initStack.leadingAnchor.constraint(equalTo: customView.safeAreaLayoutGuide.leadingAnchor, constant: 8),
+            initStack.trailingAnchor.constraint(equalTo: customView.safeAreaLayoutGuide.trailingAnchor, constant: -8),
+            initStack.topAnchor.constraint(equalTo: customView.safeAreaLayoutGuide.topAnchor),
+            initStack.bottomAnchor.constraint(equalTo: buttonCollection.topAnchor, constant: -8),
+            buttonCollection.leadingAnchor.constraint(equalTo: customView.safeAreaLayoutGuide.leadingAnchor, constant: 8),
+            buttonCollection.trailingAnchor.constraint(equalTo: customView.safeAreaLayoutGuide.trailingAnchor, constant: -8),
+            buttonCollection.topAnchor.constraint(equalTo: initStack.bottomAnchor, constant: 8),
+            buttonCollection.bottomAnchor.constraint(equalTo: positionStackView.topAnchor, constant: -8),
+            buttonCollection.heightAnchor.constraint(equalToConstant: 90),
+            positionStackView.leadingAnchor.constraint(equalTo: customView.safeAreaLayoutGuide.leadingAnchor, constant: 8),
+            positionStackView.trailingAnchor.constraint(equalTo: customView.safeAreaLayoutGuide.trailingAnchor, constant: -8),
+            positionStackView.topAnchor.constraint(equalTo: buttonCollection.bottomAnchor, constant: 8),
+            positionStackView.bottomAnchor.constraint(equalTo: contentStackView.topAnchor, constant: -8),
+            positionStackView.heightAnchor.constraint(equalToConstant: 12),
+            contentStackView.leadingAnchor.constraint(equalTo: customView.safeAreaLayoutGuide.leadingAnchor, constant: 8),
+            contentStackView.trailingAnchor.constraint(equalTo: customView.safeAreaLayoutGuide.trailingAnchor, constant: -8),
+            contentStackView.bottomAnchor.constraint(equalTo: customView.bottomAnchor),
+            consoleView.heightAnchor.constraint(equalToConstant: 360)
+        ])
     }
-    
-    private func loadFlags() {
-        // Get the current configuration from SDK
-        originalBackendConfig = compass?.getCurrentStoreConfig()
-        guard let config = originalBackendConfig else { return }
-        
-        // Build flags array with current values from SDK
-        flags = [
-            Flag(name: "Blue Dot Enabled", key: "bluedotEnabled",
-                 value: config["bluedotEnabled"] ?? false,
-                 type: .boolean),
-//            Flag(name: "Blue Dot Displayed", key: "bluedotDisplayed",
-//                 value: config["bluedotDisplayed"] ?? false,
-//                 type: .boolean),
-            Flag(name: "Dynamic Map Enabled", key: "dynamicMapEnabled",
-                 value: config["dynamicMapEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Zoom Control Enabled", key: "zoomControlEnabled",
-                 value: config["zoomControlEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Error Screens Enabled", key: "errorScreensEnabled",
-                 value: config["errorScreensEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Dynamic Map Rotation", key: "dynamicMapRotationEnabled",
-                 value: config["dynamicMapRotationEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Spinner Enabled", key: "spinnerEnabled",
-                 value: config["spinnerEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Use Background Service", key: "useBackgroundService",
-                 value: config["useBackgroundService"] ?? false,
-                 type: .boolean),
-            Flag(name: "Background Service Timeout", key: "backgroundServiceTimeout",
-                 value: config["backgroundServiceTimeout"] ?? 300.0,
-                 type: .double),
-            Flag(name: "Geofence Check Timeout", key: "geoFenceCheckTimeout",
-                 value: config["geoFenceCheckTimeout"] ?? 1.0,
-                 type: .double),
-            Flag(name: "Positioning Session Timeout", key: "positioningSessionTimeout",
-                 value: config["positioningSessionTimeout"] ?? 1.0,
-                 type: .double),
-            Flag(name: "Session Refresh Time", key: "sessionRefreshTime",
-                 value: config["sessionRefreshTime"] ?? 900,
-                 type: .integer)
-        ]
-        
-        tableView.reloadData()
-    }
-    
-    @objc private func cancelTapped() {
-        dismiss(animated: true)
-    }
-    
-    @objc private func applyTapped() {
-        var overrides: [String: Any] = [:]
-        for flag in flags {
-            overrides[flag.key] = flag.value
+
+    func displayPins() {
+        setAndGetAssetsEventStatus()
+        let uuids = storeID.text == DebugData.StoreID.oriient ? DebugData.asset2280List.shuffled() : DebugData.asset3594List.shuffled()
+        let idType = PinDropMethod.assets
+        Log.debug("assetList is \(uuids)")
+        var firstUuid = [String]()
+        if let first = uuids.first {
+            firstUuid = [first]
         }
-        
-        // Apply to SDK immediately
-        compass?.applyFeatureFlagOverrides(overrides)
-        
-        // Store in UserDefaults with store-specific key for the session
-        if let storeId = currentStoreId {
-            UserDefaults.standard.set(overrides, forKey: "FeatureFlagOverrides_\(storeId)")
-            UserDefaults.standard.synchronize()
-        }
-        
-        let alert = UIAlertController(
-            title: "Success",
-            message: "Feature flags applied successfully",
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
-            self.dismiss(animated: true)
-        })
-        present(alert, animated: true)
+
+        //        let uuid807 = "2660845"
+        compass?.displayPin(uuidList: firstUuid, idType: idType, config: displayPinConfig.hashMap)
+        Log.debug("uuids: \(uuids), firstUuid: \(firstUuid), type: \(idType.rawValue)")
     }
-    
-    @objc private func revertTapped() {
-        // Clear stored overrides
-        if let storeId = currentStoreId {
-            UserDefaults.standard.removeObject(forKey: "FeatureFlagOverrides_\(storeId)")
-            UserDefaults.standard.synchronize()
-        }
-        
-        // Revert in SDK immediately
-        compass?.revertToOriginalConfig()
-        
-        // Reload the UI with original values
-        loadFlags()
-        
-        let alert = UIAlertController(
-            title: "Reverted",
-            message: "Feature flags reverted to backend defaults",
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "OK", style: .default))
-        present(alert, animated: true)
+
+    func displayPinsFromEncodedString() {
+        setAndGetAssetsEventStatus()
+        //        self.compass?.displayPin(uuidList: ["YzAvWy12SixmWF0vMQ=="], idType: .generic, type: "GENERIC")
+        //        self.compass?.displayPin(uuidList: ["YzAvWy1wSixoOV0vMQ=="], idType: .generic, type: "GENERIC")
+        let encodedString = storeID.text == DebugData.StoreID.oriient ? DebugData.oriientMapEncodedString : DebugData.inStoreMapEncodedString
+        compass?.displayPin(uuidList: [encodedString], idType: .generic)
     }
-    
-    // MARK: - Table view data source
-    
-    override func numberOfSections(in tableView: UITableView) -> Int {
-        return 2
-    }
-    
-    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        return section == 0 ? "Boolean Flags" : "Numeric Flags"
-    }
-    
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        if section == 0 {
-            return flags.filter { $0.type == .boolean }.count
-        } else {
-            return flags.filter { $0.type != .boolean }.count
-        }
-    }
-    
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "Cell", for: indexPath)
-        
-        let sectionFlags = indexPath.section == 0 ?
-            flags.filter { $0.type == .boolean } :
-            flags.filter { $0.type != .boolean }
-        
-        guard indexPath.row < sectionFlags.count else { return cell }
-        
-        let flag = sectionFlags[indexPath.row]
-        let flagIndex = flags.firstIndex { $0.key == flag.key } ?? 0
-        
-        cell.textLabel?.text = flag.name
-        
-        switch flag.type {
-        case .boolean:
-            let switchView = UISwitch()
-            switchView.isOn = flag.value as? Bool ?? false
-            switchView.tag = flagIndex
-            switchView.addTarget(self, action: #selector(switchChanged(_:)), for: .valueChanged)
-            cell.accessoryView = switchView
-            
-        case .double, .integer:
-            let label = UILabel()
-            if flag.type == .double {
-                label.text = String(format: "%.1f", flag.value as? Double ?? 0)
-            } else {
-                label.text = "\(flag.value as? Int ?? 0)"
+
+    func displayPinsV2() {
+        var updateStatus = true
+
+        aislePinDropEventEmitterHandler = { pinDropEventEmitter in
+            var dict = pinDropEventEmitter.toDictionary()
+            dict["eventType"] = nil
+
+            Log.debug("The value of aislePinDropEventEmitterHandler dict is:\(dict)")
+            if let output = dict.toJSONString() {
+                Log.debug("Display Pins Payload for Aisle: \(output)")
+                DispatchQueue.main.async {
+                    self.consoleLog("PIN DROP V2 EVENT:\n\(output)")
+                }
             }
-            label.textColor = .systemBlue
-            label.sizeToFit()
-            cell.accessoryView = label
+
+            guard updateStatus else {
+                return
+            }
+
+            updateStatus = false
+            Log.debug("displaypin success")
         }
-        
+
+        pinClickedEventEmitterHandler = { pinClickedEventEmitter in
+            var dict = pinClickedEventEmitter.toDictionary()
+            dict["eventType"] = nil
+            Log.debug("The value of pinClickedEventEmitterHandler dict is:\(dict)")
+            if let output = dict.toJSONString() {
+                Log.debug("Pin Clicked: \(output)")
+                DispatchQueue.main.async {
+                    self.consoleLog("PIN CLICKED EVENT:\n\(output)")
+                }
+            }
+        }
+
+        // Replica of Compass SDK RN code
+        let pins: [[String: Any]] = [
+            ["type": "test1", "id": 1, "location": ["zone": "A", "aisle": "1", "section": "1"]],
+            ["type": "test2", "id": 2, "location": ["zone": "B", "aisle": "1", "section": "1"]],
+            ["type": "test3", "id": 3, "location": ["zone": "C", "aisle": "1", "section": "1"]],
+            ["type": "test4", "id": 4, "location": ["zone": "D", "aisle": "1", "section": "1"]],
+            ["type": "test5", "id": 5, "location": ["zone": "E", "aisle": "1", "section": "1"]],
+            ["type": "", "id": 6, "location": ["zone": "", "aisle": "", "section": ""]]
+        ]
+
+        guard let pinSelected = pins.shuffled().first else { return }
+
+        var nativePins: [AislePin] = []
+        var isZoomOutRequired = true
+        for pin in [pinSelected] {
+            let type = pin["type"] as? String ?? ""
+            let id = pin["id"] as? String ?? ""
+            let location = pin["location"] as? HashMap
+            let zone = location?["zone"] as? String ?? ""
+            let aisle = location?["aisle"] as? String ?? ""
+            let section = location?["section"] as? String ?? ""
+
+            if !zone.isEmpty, !aisle.isEmpty, !section.isEmpty {
+                isZoomOutRequired = false
+            }
+
+            let aisleLocation = compass_sdk_ios.AisleLocation(zone: zone, aisle: aisle, section: section, selected: true)
+            let pin = compass_sdk_ios.AislePin(type: type, id: id, location: aisleLocation)
+            nativePins.append(pin)
+        }
+
+        compass?.displayPinV2(pins: nativePins, config: displayPinConfig.hashMap, isZoomOutRequired: isZoomOutRequired)
+    }
+
+    func getUserDistance() {
+        var updateStatus = true
+
+        aislePinDropEventEmitterHandler = { pinDropEventEmitter in
+            var dict = pinDropEventEmitter.toDictionary()
+            dict["eventType"] = nil
+
+            Log.debug("The value of aislePinDropEventEmitterHandler dict is:\(dict)")
+            if let output = dict.toJSONString() {
+                Log.debug("Display Pins Payload for Aisle: \(output)")
+                DispatchQueue.main.async {
+                    self.consoleLog("PIN DROP V2 EVENT:\n\(output)")
+                }
+            }
+
+            guard updateStatus else {
+                return
+            }
+
+            updateStatus = false
+            Log.debug("displaypin success")
+        }
+
+        pinClickedEventEmitterHandler = { pinClickedEventEmitter in
+            var dict = pinClickedEventEmitter.toDictionary()
+            dict["eventType"] = nil
+            Log.debug("The value of pinClickedEventEmitterHandler dict is:\(dict)")
+            if let output = dict.toJSONString() {
+                Log.debug("Pin Clicked: \(output)")
+                DispatchQueue.main.async {
+                    self.consoleLog("PIN CLICKED EVENT:\n\(output)")
+                }
+            }
+        }
+
+        // Replica of Compass SDK RN code
+        let pins: [[String: Any]] = [
+            ["type": "test1", "id": 1, "location": ["zone": "A", "aisle": "7", "section": "1"]],
+//            ["type": "test2", "id": 2, "location": ["zone": "B", "aisle": "1", "section": "1"]],
+//            ["type": "test3", "id": 3, "location": ["zone": "C", "aisle": "1", "section": "1"]],
+//            ["type": "test4", "id": 4, "location": ["zone": "D", "aisle": "1", "section": "1"]],
+//            ["type": "test5", "id": 5, "location": ["zone": "E", "aisle": "1", "section": "1"]],
+//            ["type": "", "id": 6, "location": ["zone": "", "aisle": "", "section": ""]]
+        ]
+
+        guard let pinSelected = pins.shuffled().first else { return }
+
+        var nativePins: [AislePin] = []
+        var isZoomOutRequired = true
+        for pin in [pinSelected] {
+            let type = pin["type"] as? String ?? ""
+            let id = pin["id"] as? String ?? ""
+            let location = pin["location"] as? HashMap
+            let zone = location?["zone"] as? String ?? ""
+            let aisle = location?["aisle"] as? String ?? ""
+            let section = location?["section"] as? String ?? ""
+
+            if !zone.isEmpty, !aisle.isEmpty, !section.isEmpty {
+                isZoomOutRequired = false
+            }
+
+            let aisleLocation = compass_sdk_ios.AisleLocation(zone: zone, aisle: aisle, section: section, selected: true)
+            let pin = compass_sdk_ios.AislePin(type: type, id: id, location: aisleLocation)
+            nativePins.append(pin)
+        }
+
+        compass?.getUserDistance(pins: nativePins) { responses in
+            responses.forEach { print("User distance response is: \($0.toDictionary())") }
+        }
+    }
+    
+    // TEST: Hardcoded valid pin for getUserDistance
+    @objc func testGetUserDistanceWithHardcodedPin() {
+        let pin = compass_sdk_ios.AislePin(
+            type: "item",
+            id: "123",
+            location: compass_sdk_ios.AisleLocation(zone: "A", aisle: "1", section: "1", selected: true)
+        )
+        print("nativePins: \(pin)")
+        compass?.getUserDistance(pins: [pin])
+        Log.debug("Called getUserDistance with hardcoded pin: \(pin)")
+        DispatchQueue.main.async {
+            self.consoleLog("Called getUserDistance with hardcoded pin: \(pin)")
+        }
+    }
+
+    func setAndGetAssetsEventStatus() {
+        var updateStatus = true
+
+        pinDropEventEmitterHandler = { pinDropEventEmitter in
+            var dict = pinDropEventEmitter.toDictionary()
+            dict["eventType"] = nil
+            Log.debug("The value of pinDropEventEmitterHandler dict is:\(dict)")
+            if let output = dict.toJSONString() {
+                Log.debug("Display Pins Payload for Asset or Generic: \(output)")
+                DispatchQueue.main.async {
+                    self.consoleLog("PIN DROP EVENT:\n\(output)")
+                }
+            }
+
+            guard updateStatus else {
+                return
+            }
+
+            updateStatus = false
+            Log.debug("displaypin success")
+        }
+
+        errorEventEmitterHandler = { errorEventEmitter in
+            let dict = errorEventEmitter.toDictionary()
+            Log.debug("The value of errorEventEmitterHandler dict is:\(dict)")
+
+            var event = [String : Any]()
+            if let code = dict["errorCode"] as? Int {
+                event["code"] = code
+            }
+            if let errortype = dict["compassErrorType"] as? String {
+                event["errortype"] = errortype
+            }
+            if let message = dict["errorDescription"] as? String {
+                event["message"] = message
+            }
+            Log.debug("SendEvent wih errorEventEmitter and body \(event)")
+            DispatchQueue.main.async {
+                self.consoleLog("ERROR EVENT:\n\(event.toJSONString() ?? "")")
+            }
+            guard updateStatus else {
+                return
+            }
+
+            updateStatus = false
+            Log.debug("-1 Compass displayPins failed")
+        }
+    }
+
+    func reset() {
+        cancellables.removeAll()
+    }
+}
+
+extension HomeViewController: UITextFieldDelegate {
+    func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
+        let isNumber = CharacterSet.decimalDigits.isSuperset(of: CharacterSet(charactersIn: string))
+        let withDecimal = (
+            string == NumberFormatter().decimalSeparator &&
+            textField.text?.contains(string) == false
+        )
+        return isNumber || withDecimal
+    }
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        textField.resignFirstResponder()
+        return true
+    }
+}
+
+extension HomeViewController: UICollectionViewDataSource, UICollectionViewDelegate {
+    func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
+        return 6
+    }
+
+    func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+        guard let cell = collectionView.dequeueReusableCell(withReuseIdentifier: CollectionViewCell.identifier, for: indexPath) as? CollectionViewCell else {
+            fatalError("Failed to dequeue CollectionViewCell in HomeViewController")
+        }
+
+        switch indexPath.row {
+        case 0:
+            cell.configure(buttonTitle: "Update Event", disableTap: false)
+            setUpdateEventButtonMenu(cell.button)
+        case 1:
+            cell.configure(buttonTitle: "Display Pin", disableTap: false)
+            setDisplayButtonMenu(cell.button)
+        case 2:
+            cell.configure(buttonTitle: "Other APIs", disableTap: false)
+            setOtherAPIsButtonMenu(cell.button)
+        case 3:
+            cell.configure(buttonTitle: "Next Screen")
+        case 4:
+            cell.configure(buttonTitle: "Re-Mount")
+        case 5:
+            cell.configure(buttonTitle: "Feature Flags")
+        default:
+            break
+        }
+
         return cell
     }
-    
-    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        tableView.deselectRow(at: indexPath, animated: true)
-        
-        let sectionFlags = indexPath.section == 0 ?
-            flags.filter { $0.type == .boolean } :
-            flags.filter { $0.type != .boolean }
-        
-        guard indexPath.row < sectionFlags.count else { return }
-        
-        let flag = sectionFlags[indexPath.row]
-        let flagIndex = flags.firstIndex { $0.key == flag.key } ?? 0
-        
-        // Show input dialog for numeric values
-        if flag.type == .double || flag.type == .integer {
-            showInputDialog(for: flagIndex)
+
+    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        switch indexPath.row {
+        case 0, 1, 2:
+            break
+        case 3:
+            nextScreen()
+        case 4:
+            displayPins()
+        case 5:
+            showFeatureFlags()
+        default:
+            Log.debug("Button tap for index: \(indexPath.row) not implemented")
         }
+        buttonCollection.deselectItem(at: indexPath, animated: true)
     }
     
-    private func showInputDialog(for index: Int) {
-        let flag = flags[index]
-        
-        let alert = UIAlertController(
-            title: flag.name,
-            message: "Enter new value",
-            preferredStyle: .alert
-        )
-        
-        alert.addTextField { textField in
-            if flag.type == .double {
-                textField.text = String(format: "%.1f", flag.value as? Double ?? 0)
-                textField.keyboardType = .decimalPad
-            } else {
-                textField.text = "\(flag.value as? Int ?? 0)"
-                textField.keyboardType = .numberPad
-            }
-        }
-        
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
-            if let text = alert.textFields?.first?.text {
-                if flag.type == .double {
-                    self.flags[index].value = Double(text) ?? 0
-                } else {
-                    self.flags[index].value = Int(text) ?? 0
+    @objc func showFeatureFlags() {
+        let featureFlagsVC = FeatureFlagsTableViewController()
+        let navController = UINavigationController(rootViewController: featureFlagsVC)
+        navController.modalPresentationStyle = .fullScreen
+        present(navController, animated: true)
+    }
+}
+
+extension HomeViewController: UICollectionViewDelegateFlowLayout {
+    func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize {
+        let cellWidth = (customView.frame.width - 32)/3
+        return CGSize(width: cellWidth, height: 38)
+    }
+
+    func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, minimumLineSpacingForSectionAt section: Int) -> CGFloat {
+        return 8
+    }
+
+    func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, minimumInteritemSpacingForSectionAt section: Int) -> CGFloat {
+        return 8
+    }
+}
+
+private extension HomeViewController {
+
+    func waitForEventEmitterCompletionHandlerResponse(with errorEventEmitterCompletionHandler: @escaping (ErrorEventEmitter) -> Void) {
+        var statusService = compass?.getStatusService()
+        statusService?.eventEmitterHandler = { [weak self] eventEmitter in
+            guard let self else { return }
+            switch eventEmitter.eventType {
+            case .showMapEventEmitter:
+                guard let eventEmitterDescription = eventEmitter as? EventEmitterDescription else {
+                    return
                 }
-                self.tableView.reloadData()
+
+                var hashMap = eventEmitterDescription.toDictionary()
+                hashMap["eventType"] = nil
+                DispatchQueue.main.async {
+                    self.consoleLog("SHOW MAP EVENT:\n\(hashMap.toJSONString() ?? "")")
+                }
+                Log.debug("The value of mapButtonEventEmitter is:\(eventEmitterDescription)")
+                Log.debug("The value of mapButtonEventEmitter dict is:\(hashMap)")
+            case .mapStatusEventEmitter:
+                guard let mapStatusEventEmitter = eventEmitter as? MapStatusEventEmitter else { return }
+
+                var hashMap = mapStatusEventEmitter.toDictionary()
+                hashMap["eventType"] = nil
+                DispatchQueue.main.async {
+                    self.consoleLog("MAP STATUS EVENT:\n\(hashMap.toJSONString() ?? "")")
+                }
+                Log.debug("The value of mapStatusEventEmitter is:\(mapStatusEventEmitter)")
+                Log.debug("The value of mapStatusEventEmitter dict is:\(hashMap)")
+            case .bootstrapEventEmitter:
+                guard let eventEmitterDescription = eventEmitter as? EventEmitterDescription else { return }
+                self.bootstrapEventEmitterHandler?(eventEmitterDescription)
+                Log.debug("The value of bootstrapEventEmitter is:\(eventEmitterDescription)")
+            case .updateEventListEventEmitter:
+                guard let eventEmitterDescription = eventEmitter as? EventEmitterDescription else { return }
+                self.updateEventListEmitterHandler?(eventEmitterDescription)
+                Log.debug("The value of bootstrapEventEmitter is:\(eventEmitterDescription)")
+            case .pinListEventEmitter:
+                guard let pinDropEventEmitter = eventEmitter as? PinDropEventEmitter else {
+                    return
+                }
+
+                self.pinDropEventEmitterHandler?(pinDropEventEmitter)
+                Log.debug("The value of pinListEventEmitter is:\(pinDropEventEmitter)")
+
+            case .pinClickedEventEmitter:
+                guard let pinClickedEventEmitter = eventEmitter as? PinClickedEventEmitter else {
+                    return
+                }
+
+                self.pinClickedEventEmitterHandler?(pinClickedEventEmitter)
+                Log.debug("The value of pinClickedEventEmitter is:\(pinClickedEventEmitter)")
+
+            case .aislesPinListEventEmitter:
+                guard let pinDropEventEmitter = eventEmitter as? PinDropEventEmitter else {
+                    return
+                }
+                self.aislePinDropEventEmitterHandler?(pinDropEventEmitter)
+                Log.debug("The value of aislesPinListEventEmitter is:\(pinDropEventEmitter)")
+            case .errorEventEmitter:
+                guard let errorEventEmitter = eventEmitter as? ErrorEventEmitter else {
+                    return
+                }
+
+                self.errorEventEmitterHandler?(errorEventEmitter)
+                Log.debug("The value of errorEventEmitter is:\(errorEventEmitter)")
+            case .positioningStateEventEmitter:
+                guard let positioningStateEventEmitter = eventEmitter as? PositioningStateEventEmitter else {
+                    return
+                }
+                DispatchQueue.main.async {
+                    self.calibrationProgressView.setProgress(positioningStateEventEmitter.calibrationProgress / 100, animated: true)
+                    self.positioningProgressView.setProgress(positioningStateEventEmitter.positioningProgress / 100, animated: true)
+                    if positioningStateEventEmitter.isPositionLocked, !self.isPositionLocked {
+                        self.isPositionLocked = true
+                        self.positionLockProgressView.setProgress(1, animated: true)
+                        self.consoleLog("**** POSITION LOCKED ****")
+                    }
+                    if self.calibrationProgressView.progress == 1.0 {
+                        self.calibrationProgressView.trackTintColor = #colorLiteral(red: 0.4666666687, green: 0.7647058964, blue: 0.2666666806, alpha: 1)
+                        self.calibrationProgressView.progressTintColor = #colorLiteral(red: 0.4666666687, green: 0.7647058964, blue: 0.2666666806, alpha: 1)
+
+                    }
+                    if self.positionLockProgressView.progress == 1.0 {
+                        self.positionLockProgressView.trackTintColor = #colorLiteral(red: 0.4666666687, green: 0.7647058964, blue: 0.2666666806, alpha: 1)
+                        self.positionLockProgressView.progressTintColor = #colorLiteral(red: 0.4666666687, green: 0.7647058964, blue: 0.2666666806, alpha: 1)
+                    }
+                    if self.positioningProgressView.progress == 1.0 {
+                        self.positioningProgressView.trackTintColor = #colorLiteral(red: 0.4666666687, green: 0.7647058964, blue: 0.2666666806, alpha: 1)
+                        self.positioningProgressView.progressTintColor = #colorLiteral(red: 0.4666666687, green: 0.7647058964, blue: 0.2666666806, alpha: 1)
+                    }
+                }
+
+            case .positionEventEmitter:
+                guard let positionEventEmitter = eventEmitter as? PositionEventEmitter else {
+                    return
+                }
+                if let positionType = positionEventEmitter.positionType {
+                    var event = [String : Any]()
+
+                    event["EventType"] = positionType
+                    event["EventCode"] = positionEventEmitter.positionCode
+                    DispatchQueue.main.async {
+                        self.consoleLog("POSITIONING EVENT:\n\(event.toJSONString() ?? "")")
+                    }
+                    Log.debug("The value of positionEventEmitter dict is:\(event)")
+                }
+
+                if let position = positionEventEmitter.positionCode, position == 0 {
+                    self.updateEvent()
+                }
+                Log.debug("The value of positionEventEmitter is:\(positionEventEmitter)")
+            case .initErrorEventEmitter:
+                guard let errorEventEmitter = eventEmitter as? ErrorEventEmitter else {
+                    return
+                }
+
+                errorEventEmitterCompletionHandler(errorEventEmitter)
+            default:
+                break
             }
-        })
-        
-        present(alert, animated: true)
+        }
     }
-    
-    @objc private func switchChanged(_ sender: UISwitch) {
-        flags[sender.tag].value = sender.isOn
+
+    func waitForIsFinishedSettingMapResponse() {
+        compass?.isFinishedSettingMap
+            .sink { [weak self] isInitialize in
+                guard isInitialize else {
+                    Log.debug("Compass: isInitialize is not set.")
+                    return
+                }
+                compass?.displayMap(workflow: Workflow(id: "sample_app_id", type: "sample_app_flow", value: "sa_val"))
+            }
+            .store(in: &cancellables)
+    }
+
+    func removeCompassAndDestroyRoot() {
+        compass?.killSwitch()
+
+        // Remove the compass from RootViewController if it's a child
+        if let compass = compass {
+            compass.willMove(toParent: nil)
+            compass.view.removeFromSuperview()
+            compass.removeFromParent()
+            // Remove all subviews from the root view (optional if you need)
+            mapRootViewController.view.subviews.forEach { $0.removeFromSuperview() }
+        }
+
+        compass = nil
+
+        // If you want to destroy RootViewController itself, remove it from the parent
+        mapRootViewController.willMove(toParent: nil)
+        mapRootViewController.view.removeFromSuperview()
+        mapRootViewController.removeFromParent()
     }
 }
