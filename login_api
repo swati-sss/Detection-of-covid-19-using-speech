@@ -1,122 +1,35 @@
-import Foundation
+//
+//  AppDelegate.swift
+//  Compass_ios
+//
+//  Created by Rakesh Shetty on 2/18/23.
+//
+
+import UIKit
 import compass_sdk_ios
-import Combine
 
-// MARK: - Feature Flag Support Extension
-extension Compass {
-    
-    /// Gets the current feature flag values from the stored configuration
-    /// This is used by the sample app to display current backend feature flag states
-    /// - Parameter completion: Callback with the current feature flag values
-    func getCurrentFeatureFlags(completion: @escaping (FeatureFlagValues) -> Void) {
-        // Access the configuration service to get the current store config
-        let configurationService = serviceLocator.getConfigurationService()
-        
-        // Get the stored configuration
-        configurationService.getStoreConfiguration()
-            .sink { storeConfiguration in
-                // If we have a valid configuration, extract the feature flag values
-                if let configuration = storeConfiguration {
-                    // For now we'll set a default value, but we need to get the actual StoreConfig
-                    // The StoreConfig contains the actual feature flags from the backend
-                    self.getStoreConfig { storeConfig in
-                        let featureFlags = FeatureFlagValues(
-                            zoomControlEnabled: storeConfig?.zoomControlEnabled ?? false
-                        )
-                        completion(featureFlags)
-                    }
-                } else {
-                    // If no configuration available, return default values
-                    let defaultFlags = FeatureFlagValues(zoomControlEnabled: false)
-                    completion(defaultFlags)
-                }
+@main
+class AppDelegate: UIResponder, UIApplicationDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        // clear all feature flag overrides on app launch
+        let userDefaults = UserDefaults.standard
+        for key in userDefaults.dictionaryRepresentation().keys {
+            if key.starts(with: "FeatureFlagOverrides_") {
+                userDefaults.removeObject(forKey: key)
             }
-            .store(in: &Set<AnyCancellable>()) // We need to manage this subscription
-    }
-    
-    /// Private helper method to get the current StoreConfig
-    /// This accesses the configuration that was fetched from the backend
-    private func getStoreConfig(completion: @escaping (StoreConfig?) -> Void) {
-        // Access the configuration service
-        let configurationService = serviceLocator.getConfigurationService()
-        
-        // Get the current store ID
-        guard let currentStore = currentStore else {
-            completion(nil)
-            return
         }
+        userDefaults.synchronize()
         
-        // Fetch the configuration data for the current store
-        configurationService.getConfigData(for: String(currentStore))
-            .sink { configResponse in
-                // Extract the store config from the response
-                let storeConfig = configResponse?.storeConfig
-                completion(storeConfig)
-            }
-            .store(in: &Set<AnyCancellable>())
+        return true
     }
-}
 
-// MARK: - Alternative approach using stored values
-extension Compass {
-    
-    /// Alternative method that tries to get feature flags from the already initialized map view
-    /// This might be more reliable since it uses the values that are currently active
-    func getCurrentFeatureFlagsFromMapView(completion: @escaping (FeatureFlagValues) -> Void) {
-        // We can try to access the current map configuration through the view model
-        // This is a bit of a workaround since the SDK doesn't expose this directly
-        
-        // For now, let's provide a simple implementation that gets the configuration
-        // and extracts what we need
-        DispatchQueue.main.async {
-            // Try to get the store configuration that was used during initialization
-            let configurationService = self.serviceLocator.getConfigurationService()
-            
-            configurationService.getStoreConfiguration()
-                .sink { configuration in
-                    if let _ = configuration {
-                        // Since the compass was already initialized, we can try to get the
-                        // feature flag values that were used during initialization
-                        
-                        // For now, we'll make a simple call to get the config data
-                        if let currentStore = self.currentStore {
-                            configurationService.getConfigData(for: String(currentStore))
-                                .sink { configResponse in
-                                    let storeConfig = configResponse?.storeConfig
-                                    let featureFlags = FeatureFlagValues(
-                                        zoomControlEnabled: storeConfig?.zoomControlEnabled ?? false
-                                    )
-                                    completion(featureFlags)
-                                }
-                                .store(in: &Set<AnyCancellable>())
-                        } else {
-                            // Return default values if no store is set
-                            completion(FeatureFlagValues(zoomControlEnabled: false))
-                        }
-                    } else {
-                        // Return default values if no configuration
-                        completion(FeatureFlagValues(zoomControlEnabled: false))
-                    }
-                }
-                .store(in: &Set<AnyCancellable>())
-        }
+    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        // Called when a new scene session is being created.
+        // Use this method to select a configuration to create the new scene with.
+        return UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
     }
-}
 
-// MARK: - Simple approach with direct access
-extension Compass {
-    
-    /// Simplified approach to get feature flag values
-    /// This version tries to be more straightforward and reliable
-    func getFeatureFlags() -> FeatureFlagValues {
-        // Since accessing the internal configuration might be complex,
-        // let's start with a simple approach that can be expanded later
-        
-        // For the initial implementation, we'll return default values
-        // and later we can hook this up to the actual configuration
-        
-        // TODO: Connect this to the actual StoreConfig values
-        // For now, returning a hardcoded value so we can test the UI
-        return FeatureFlagValues(zoomControlEnabled: true)
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String) async {
+        Compass.handleEventsForBackgroundURLSession(identifier: identifier, application: application)
     }
 }
