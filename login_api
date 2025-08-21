@@ -1,273 +1,44 @@
-import UIKit
-import compass_sdk_ios
+import SwiftUI
+import UniformTypeIdentifiers
 
-class FeatureFlagsTableViewController: UITableViewController {
+struct TestView: View {
+    let fn = "log.zip"
     
-    struct Flag {
-        let name: String
-        let key: String
-        var value: Any
-        let type: FlagType
-        
-        enum FlagType {
-            case boolean
-            case double
-            case integer
-        }
-    }
-    
-    private var flags: [Flag] = []
-    private var originalBackendConfig: [String: Any]?
-    private var currentStoreId: Int?
-    
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        
-        title = "Feature Flags"
-        navigationItem.leftBarButtonItem = UIBarButtonItem(
-            title: "Cancel",
-            style: .plain,
-            target: self,
-            action: #selector(cancelTapped)
-        )
-        
-        navigationItem.rightBarButtonItems = [
-            UIBarButtonItem(
-                title: "Apply",
-                style: .done,
-                target: self,
-                action: #selector(applyTapped)
-            ),
-            UIBarButtonItem(
-                title: "Revert",
-                style: .plain,
-                target: self,
-                action: #selector(revertTapped)
-            )
-        ]
-        
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "Cell")
-        currentStoreId = compass?.currentStore
-        loadFlags()
-    }
-    
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        // Refresh flags when view appears in case store changed
-        if currentStoreId != compass?.currentStore {
-            currentStoreId = compass?.currentStore
-            loadFlags()
-        }
-    }
-    
-    private func loadFlags() {
-        // Get the current configuration from SDK
-        originalBackendConfig = compass?.getCurrentStoreConfig()
-        guard let config = originalBackendConfig else { return }
-        
-        // Build flags array with current values from SDK
-        flags = [
-            Flag(name: "Blue Dot Enabled", key: "bluedotEnabled",
-                 value: config["bluedotEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Blue Dot Displayed", key: "bluedotDisplayed",
-                 value: config["bluedotDisplayed"] ?? false,
-                 type: .boolean),
-            Flag(name: "Dynamic Map Enabled", key: "dynamicMapEnabled",
-                 value: config["dynamicMapEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Zoom Control Enabled", key: "zoomControlEnabled",
-                 value: config["zoomControlEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Error Screens Enabled", key: "errorScreensEnabled",
-                 value: config["errorScreensEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Dynamic Map Rotation", key: "dynamicMapRotationEnabled",
-                 value: config["dynamicMapRotationEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Spinner Enabled", key: "spinnerEnabled",
-                 value: config["spinnerEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Use Background Service", key: "useBackgroundService",
-                 value: config["useBackgroundService"] ?? false,
-                 type: .boolean),
-            Flag(name: "Background Service Timeout", key: "backgroundServiceTimeout",
-                 value: config["backgroundServiceTimeout"] ?? 300.0,
-                 type: .double),
-            Flag(name: "Geofence Check Timeout", key: "geoFenceCheckTimeout",
-                 value: config["geoFenceCheckTimeout"] ?? 1.0,
-                 type: .double),
-            Flag(name: "Positioning Session Timeout", key: "positioningSessionTimeout",
-                 value: config["positioningSessionTimeout"] ?? 1.0,
-                 type: .double),
-            Flag(name: "Session Refresh Time", key: "sessionRefreshTime",
-                 value: config["sessionRefreshTime"] ?? 900,
-                 type: .integer)
-        ]
-        
-        tableView.reloadData()
-    }
-    
-    @objc private func cancelTapped() {
-        dismiss(animated: true)
-    }
-    
-    @objc private func applyTapped() {
-        var overrides: [String: Any] = [:]
-        for flag in flags {
-            overrides[flag.key] = flag.value
-        }
-        
-        // Apply to SDK immediately
-        compass?.applyFeatureFlagOverrides(overrides)
-        
-        // Store in UserDefaults with store-specific key for the session
-        if let storeId = currentStoreId {
-            UserDefaults.standard.set(overrides, forKey: "FeatureFlagOverrides_\(storeId)")
-            UserDefaults.standard.synchronize()
-        }
-        
-        let alert = UIAlertController(
-            title: "Success",
-            message: "Feature flags applied successfully",
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
-            self.dismiss(animated: true)
-        })
-        present(alert, animated: true)
-    }
-    
-    @objc private func revertTapped() {
-        // Clear stored overrides
-        if let storeId = currentStoreId {
-            UserDefaults.standard.removeObject(forKey: "FeatureFlagOverrides_\(storeId)")
-            UserDefaults.standard.synchronize()
-        }
-        
-        // Revert in SDK immediately
-        compass?.revertToOriginalConfig()
-        
-        // Reload the UI with original values
-        loadFlags()
-        
-        let alert = UIAlertController(
-            title: "Reverted",
-            message: "Feature flags reverted to backend defaults",
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "OK", style: .default))
-        present(alert, animated: true)
-    }
-    
-    // MARK: - Table view data source
-    
-    override func numberOfSections(in tableView: UITableView) -> Int {
-        return 2
-    }
-    
-    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        return section == 0 ? "Boolean Flags" : "Numeric Flags"
-    }
-    
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        if section == 0 {
-            return flags.filter { $0.type == .boolean }.count
-        } else {
-            return flags.filter { $0.type != .boolean }.count
-        }
-    }
-    
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "Cell", for: indexPath)
-        
-        let sectionFlags = indexPath.section == 0 ? 
-            flags.filter { $0.type == .boolean } : 
-            flags.filter { $0.type != .boolean }
-        
-        guard indexPath.row < sectionFlags.count else { return cell }
-        
-        let flag = sectionFlags[indexPath.row]
-        let flagIndex = flags.firstIndex { $0.key == flag.key } ?? 0
-        
-        cell.textLabel?.text = flag.name
-        
-        switch flag.type {
-        case .boolean:
-            let switchView = UISwitch()
-            switchView.isOn = flag.value as? Bool ?? false
-            switchView.tag = flagIndex
-            switchView.addTarget(self, action: #selector(switchChanged(_:)), for: .valueChanged)
-            cell.accessoryView = switchView
+    var body: some View {
+        VStack {
+            Text("test")
+                .font(.title)
+                .padding()
             
-        case .double, .integer:
-            let label = UILabel()
-            if flag.type == .double {
-                label.text = String(format: "%.1f", flag.value as? Double ?? 0)
-            } else {
-                label.text = "\(flag.value as? Int ?? 0)"
+            Button(action: {
+                testfn()
+            }) {
+                HStack {
+                    Text("test \(fn)")
+                }
+                .padding()
+                .background(Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(8)
             }
-            label.textColor = .systemBlue
-            label.sizeToFit()
-            cell.accessoryView = label
-        }
-        
-        return cell
-    }
-    
-    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        tableView.deselectRow(at: indexPath, animated: true)
-        
-        let sectionFlags = indexPath.section == 0 ? 
-            flags.filter { $0.type == .boolean } : 
-            flags.filter { $0.type != .boolean }
-        
-        guard indexPath.row < sectionFlags.count else { return }
-        
-        let flag = sectionFlags[indexPath.row]
-        let flagIndex = flags.firstIndex { $0.key == flag.key } ?? 0
-        
-        // Show input dialog for numeric values
-        if flag.type == .double || flag.type == .integer {
-            showInputDialog(for: flagIndex)
         }
     }
     
-    private func showInputDialog(for index: Int) {
-        let flag = flags[index]
+    func testfn() {
+        guard let fur = Bundle.main.url(forResource: fn.components(separatedBy: ".").first,
+                                              withExtension: "zip") else {
+            print("error")
+            return
+        }
         
-        let alert = UIAlertController(
-            title: flag.name,
-            message: "Enter new value",
-            preferredStyle: .alert
+        let activityViewController = UIActivityViewController(
+            activityItems: [fur],
+            applicationActivities: nil
         )
         
-        alert.addTextField { textField in
-            if flag.type == .double {
-                textField.text = String(format: "%.1f", flag.value as? Double ?? 0)
-                textField.keyboardType = .decimalPad
-            } else {
-                textField.text = "\(flag.value as? Int ?? 0)"
-                textField.keyboardType = .numberPad
-            }
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootViewController = windowScene.windows.first?.rootViewController {
+            rootViewController.present(activityViewController, animated: true, completion: nil)
         }
-        
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
-            if let text = alert.textFields?.first?.text {
-                if flag.type == .double {
-                    self.flags[index].value = Double(text) ?? 0
-                } else {
-                    self.flags[index].value = Int(text) ?? 0
-                }
-                self.tableView.reloadData()
-            }
-        })
-        
-        present(alert, animated: true)
-    }
-    
-    @objc private func switchChanged(_ sender: UISwitch) {
-        flags[sender.tag].value = sender.isOn
     }
 }
