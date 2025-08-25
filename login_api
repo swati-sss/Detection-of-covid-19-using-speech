@@ -1,1 +1,26 @@
-
+override func viewWillAppear(_ animated: Bool) {
+    super.viewWillAppear(animated)
+    
+    // Check if mapRootViewController has been removed (no parent)
+    if mapRootViewController.parent == nil {
+        // Re-add it to the view hierarchy
+        addChild(mapRootViewController)
+        mapRootViewController.didMove(toParent: self)
+        
+        // Re-add the view to contentStackView if it's not already there
+        if let containerView = mapRootViewController.view,
+           !contentStackView.arrangedSubviews.contains(containerView) {
+            // Remove consoleView temporarily if it's in the stack
+            if contentStackView.arrangedSubviews.contains(consoleView) {
+                contentStackView.removeArrangedSubview(consoleView)
+                consoleView.removeFromSuperview()
+            }
+            
+            // Add containerView back
+            contentStackView.addArrangedSubview(containerView)
+            
+            // Re-add consoleView
+            contentStackView.addArrangedSubview(consoleView)
+        }
+    }
+}
