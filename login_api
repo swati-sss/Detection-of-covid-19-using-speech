@@ -1,26 +1,79 @@
 override func viewWillAppear(_ animated: Bool) {
     super.viewWillAppear(animated)
     
-    // Check if mapRootViewController has been removed (no parent)
-    if mapRootViewController.parent == nil {
-        // Re-add it to the view hierarchy
-        addChild(mapRootViewController)
-        mapRootViewController.didMove(toParent: self)
+    print("=== HomeViewController viewWillAppear ===")
+    print("mapRootViewController.parent: \(mapRootViewController.parent?.description ?? "nil")")
+    print("mapRootViewController.view.superview: \(mapRootViewController.view?.superview?.description ?? "nil")")
+    print("contentStackView.arrangedSubviews.count: \(contentStackView.arrangedSubviews.count)")
+    print("contentStackView.arrangedSubviews: \(contentStackView.arrangedSubviews)")
+    
+    // Check if map view needs to be restored
+    if let containerView = mapRootViewController.view {
+        print("containerView exists")
         
-        // Re-add the view to contentStackView if it's not already there
-        if let containerView = mapRootViewController.view,
-           !contentStackView.arrangedSubviews.contains(containerView) {
-            // Remove consoleView temporarily if it's in the stack
-            if contentStackView.arrangedSubviews.contains(consoleView) {
-                contentStackView.removeArrangedSubview(consoleView)
-                consoleView.removeFromSuperview()
+        // Remove from previous parent if needed
+        if mapRootViewController.parent != nil && mapRootViewController.parent != self {
+            print("Removing from previous parent: \(mapRootViewController.parent!)")
+            mapRootViewController.willMove(toParent: nil)
+            mapRootViewController.removeFromParent()
+        }
+        
+        // Remove view from its current superview if it's not in our contentStackView
+        if containerView.superview != nil && !contentStackView.arrangedSubviews.contains(containerView) {
+            print("Removing view from current superview")
+            containerView.removeFromSuperview()
+        }
+        
+        // Re-add as child if needed
+        if mapRootViewController.parent != self {
+            print("Re-adding as child view controller")
+            addChild(mapRootViewController)
+            mapRootViewController.didMove(toParent: self)
+        }
+        
+        // Re-add to contentStackView if needed
+        if !contentStackView.arrangedSubviews.contains(containerView) {
+            print("Re-adding to contentStackView")
+            
+            // Find the index where consoleView is
+            if let consoleIndex = contentStackView.arrangedSubviews.firstIndex(of: consoleView) {
+                print("Console view found at index: \(consoleIndex)")
+                contentStackView.insertArrangedSubview(containerView, at: consoleIndex)
+            } else {
+                print("Console view not found, inserting at index 0")
+                contentStackView.insertArrangedSubview(containerView, at: 0)
             }
             
-            // Add containerView back
-            contentStackView.addArrangedSubview(containerView)
-            
-            // Re-add consoleView
-            contentStackView.addArrangedSubview(consoleView)
+            // Re-apply constraints
+            containerView.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                containerView.leadingAnchor.constraint(equalTo: contentStackView.leadingAnchor),
+                containerView.trailingAnchor.constraint(equalTo: contentStackView.trailingAnchor)
+            ])
         }
+        
+        // Force layout update
+        contentStackView.setNeedsLayout()
+        contentStackView.layoutIfNeeded()
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        
+        print("=== After restoration ===")
+        print("mapRootViewController.parent: \(mapRootViewController.parent?.description ?? "nil")")
+        print("containerView.superview: \(containerView.superview?.description ?? "nil")")
+        print("contentStackView.arrangedSubviews.count: \(contentStackView.arrangedSubviews.count)")
     }
+}
+
+
+
+
+
+override func viewWillDisappear(_ animated: Bool) {
+    super.viewWillDisappear(animated)
+    
+    print("=== FirstViewController viewWillDisappear ===")
+    print("containerViewController: \(containerViewController)")
+    print("containerViewController.parent: \(containerViewController.parent?.description ?? "nil")")
+    print("containerViewController.view.superview: \(containerViewController.view?.superview?.description ?? "nil")")
 }
