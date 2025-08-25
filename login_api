@@ -1,44 +1,81 @@
-import SwiftUI
-import UniformTypeIdentifiers
-
-struct TestView: View {
-    let fn = "log.zip"
+#if DEBUG
+extension Compass {
+    // ... existing code ...
     
-    var body: some View {
-        VStack {
-            Text("test")
-                .font(.title)
-                .padding()
-            
-            Button(action: {
-                testfn()
-            }) {
-                HStack {
-                    Text("test \(fn)")
+    // Apply feature flag overrides for testing
+    public func applyFeatureFlagOverrides(_ overrides: [String: Any]) {
+        guard let assetService = serviceLocator.getAssetService() as? AssetServiceImpl,
+              var storeConfig = assetService.lastStoreConfig else { return }
+        
+        // Store original config if this is the first override
+        if !hasAppliedOverrides {
+            originalStoreConfig = storeConfig
+            hasAppliedOverrides = true
+        }
+        
+        // Store the current blue dot state before applying changes
+        let previousBlueDotEnabled = storeConfig.bluedotEnabled
+        
+        // Apply overrides
+        if let bluedotEnabled = overrides["bluedotEnabled"] as? Bool {
+            storeConfig.bluedotEnabled = bluedotEnabled
+            // Also set bluedotDisplayed to match for consistency
+            storeConfig.bluedotDisplayed = bluedotEnabled
+        }
+        // ... rest of your override applications ...
+        
+        assetService.lastStoreConfig = storeConfig
+        
+        // Only update if blue dot state actually changed
+        if let bluedotEnabled = overrides["bluedotEnabled"] as? Bool,
+           bluedotEnabled != previousBlueDotEnabled {
+            // Stop positioning first if disabling
+            if !bluedotEnabled {
+                serviceLocator.getUserPositionManager().stopPositioning()
+                // Give it time to clean up
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    self?.viewModel.updateStoreConfiguration(storeConfig)
+                    .sink(receiveValue: { _ in })
+                    .store(in: &self?.cancellables ?? Set<AnyCancellable>())
                 }
-                .padding()
-                .background(Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(8)
+            } else {
+                // Enable blue dot
+                viewModel.updateStoreConfiguration(storeConfig)
+                .sink(receiveValue: { _ in })
+                .store(in: &cancellables)
             }
+        } else {
+            // For non-blue-dot changes, just update the config
+            updateNonBlueDotFeatures(storeConfig)
         }
     }
     
-    func testfn() {
-        guard let fur = Bundle.main.url(forResource: fn.components(separatedBy: ".").first,
-                                              withExtension: "zip") else {
-            print("error")
-            return
+    // Add this new method to update only non-blue-dot features
+    private func updateNonBlueDotFeatures(_ storeConfig: StoreConfig) {
+        // Update only the features that don't require map recreation
+        if let mapHostViewModel = viewModel as? CompassViewModel,
+           let mapHost = mapHostViewModel.mapHostViewModel as? InStoreMapViewModel {
+            // Update map view options directly without recreation
+            DispatchQueue.main.async {
+                mapHost.mapView.options = StoreMapView.Options(
+                    dynamicMapEnabled: storeConfig.dynamicMapEnabled ?? false,
+                    zoomControlEnabled: storeConfig.zoomControlEnabled ?? false,
+                    errorScreensEnabled: storeConfig.errorScreensEnabled ?? false,
+                    spinnerEnabled: storeConfig.spinnerEnabled ?? false,
+                    dynamicMapRotationEnabled: storeConfig.dynamicMapRotationEnabled ?? false
+                )
+                // Update UI elements visibility
+                mapHost.mapView.zoomControlStackView.isHidden = !(storeConfig.zoomControlEnabled ?? false)
+            }
         }
         
-        let activityViewController = UIActivityViewController(
-            activityItems: [fur],
-            applicationActivities: nil
-        )
-        
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootViewController = windowScene.windows.first?.rootViewController {
-            rootViewController.present(activityViewController, animated: true, completion: nil)
+        // Update timeouts and intervals
+        if let insideGeoFenceTimeout = storeConfig.backgroundServiceTimeout {
+            serviceLocator.getIndoorPositioningService().insideGeoFenceTimeout = Int(insideGeoFenceTimeout)
+        }
+        if let outsideGeoFenceTimeOut = storeConfig.geoFenceCheckTimeout {
+            serviceLocator.getIndoorPositioningService().outsideGeoFenceTimeOut = Int(outsideGeoFenceTimeOut)
         }
     }
 }
+#endif
