@@ -1,10 +1,49 @@
 override func viewWillAppear(_ animated: Bool) {
     super.viewWillAppear(animated)
     
-    // If returning from another screen and compass exists
-    if compass != nil && compass?.currentStore == currentStore {
-        // Simply re-trigger the position status and map display
-        compass?.resetPositionStatusEvent()
-        compass?.displayMap(workflow: Workflow(id: "sample_app_id", type: "sample_app_flow", value: "sa_val"))
+    // Check if map view needs to be restored
+    if let containerView = mapRootViewController.view {
+        
+        // Remove from previous parent if needed
+        if mapRootViewController.parent != nil && mapRootViewController.parent != self {
+            mapRootViewController.willMove(toParent: nil)
+            mapRootViewController.removeFromParent()
+        }
+        
+        // Remove view from its current superview
+        if containerView.superview != nil {
+            containerView.removeFromSuperview()
+        }
+        
+        // Re-add as child if needed
+        if mapRootViewController.parent != self {
+            addChild(mapRootViewController)
+            mapRootViewController.didMove(toParent: self)
+        }
+        
+        // Re-add to contentStackView if needed
+        if !contentStackView.arrangedSubviews.contains(containerView) {
+            // Find where to insert (before console view)
+            if let consoleIndex = contentStackView.arrangedSubviews.firstIndex(of: consoleView) {
+                contentStackView.insertArrangedSubview(containerView, at: consoleIndex)
+            } else {
+                contentStackView.insertArrangedSubview(containerView, at: 0)
+            }
+        }
+        
+        // Force layout update
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        
+        // CRITICAL FIX: Clear the map and re-display it in original state
+        if compass?.currentStore == currentStore {
+            // Clear any pins that might be on the map from FirstViewController
+            compass?.clearMap(configuration: MapConfig(resetZoom: true).hashMap)
+            
+            // Re-display the clean map with the same workflow
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                compass?.displayMap(workflow: Workflow(id: "sample_app_id", type: "sample_app_flow", value: "sa_val"))
+            }
+        }
     }
 }
