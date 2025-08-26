@@ -1,9 +1,9 @@
-class GenericPinInputViewController: UIViewController, UITextViewDelegate {
+class AssetPinInputViewController: UIViewController, UITextFieldDelegate {
     var onDisplayPin: (([String]) -> Void)?
     
     private let scrollView = UIScrollView()
     private let contentStack = UIStackView()
-    private let textView = UITextView()
+    private let assetIDField = UITextField()
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -43,37 +43,38 @@ class GenericPinInputViewController: UIViewController, UITextViewDelegate {
         
         // Title label
         let titleLabel = UILabel()
-        titleLabel.text = "Enter Encoded Location String"
+        titleLabel.text = "Enter Asset ID"
         titleLabel.font = .boldSystemFont(ofSize: 18)
         titleLabel.textAlignment = .center
         contentStack.addArrangedSubview(titleLabel)
         
         // Description label
         let descriptionLabel = UILabel()
-        descriptionLabel.text = "Paste or type the encoded location string\n(e.g., eHMvW1pKLEFHXS8x)"
+        descriptionLabel.text = "Enter the asset ID to display on the map\n(e.g., 836445)"
         descriptionLabel.font = .systemFont(ofSize: 14)
         descriptionLabel.textColor = .secondaryLabel
         descriptionLabel.numberOfLines = 0
         descriptionLabel.textAlignment = .center
         contentStack.addArrangedSubview(descriptionLabel)
         
-        // Text view setup
-        textView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
-        textView.layer.borderColor = UIColor.systemGray4.cgColor
-        textView.layer.borderWidth = 1
-        textView.layer.cornerRadius = 8
-        textView.delegate = self
-        textView.heightAnchor.constraint(equalToConstant: 100).isActive = true
+        // Asset ID text field
+        assetIDField.placeholder = "Enter asset ID"
+        assetIDField.borderStyle = .roundedRect
+        assetIDField.keyboardType = .numberPad
+        assetIDField.font = .monospacedSystemFont(ofSize: 16, weight: .regular)
+        assetIDField.textAlignment = .center
+        assetIDField.delegate = self
+        assetIDField.heightAnchor.constraint(equalToConstant: 44).isActive = true
         
-        // Add toolbar with done button
+        // Add toolbar with done button for number pad
         let toolbar = UIToolbar()
         toolbar.sizeToFit()
         let flexSpace = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
         let doneButton = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(dismissKeyboard))
         toolbar.items = [flexSpace, doneButton]
-        textView.inputAccessoryView = toolbar
+        assetIDField.inputAccessoryView = toolbar
         
-        contentStack.addArrangedSubview(textView)
+        contentStack.addArrangedSubview(assetIDField)
         
         // Add some spacing
         let spacer = UIView()
@@ -106,13 +107,19 @@ class GenericPinInputViewController: UIViewController, UITextViewDelegate {
     }
     
     @objc private func displayPinTapped() {
-        guard let text = textView.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
-            let alert = UIAlertController(title: "Error", message: "Please enter an encoded location string", preferredStyle: .alert)
+        guard let text = assetIDField.text?.trimmingCharacters(in: .whitespacesAndNewlines), 
+              !text.isEmpty else {
+            let alert = UIAlertController(
+                title: "Error", 
+                message: "Please enter an asset ID", 
+                preferredStyle: .alert
+            )
             alert.addAction(UIAlertAction(title: "OK", style: .default))
             present(alert, animated: true)
             return
         }
         
+        // Return as an array with single element to maintain compatibility
         onDisplayPin?([text])
         dismiss(animated: true)
     }
@@ -123,8 +130,18 @@ class GenericPinInputViewController: UIViewController, UITextViewDelegate {
     
     // Keyboard handling
     private func registerForKeyboardNotifications() {
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillShow(_:)), name: UIResponder.keyboardWillShowNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, 
+            selector: #selector(keyboardWillShow(_:)), 
+            name: UIResponder.keyboardWillShowNotification, 
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, 
+            selector: #selector(keyboardWillHide(_:)), 
+            name: UIResponder.keyboardWillHideNotification, 
+            object: nil
+        )
     }
     
     @objc private func keyboardWillShow(_ notification: Notification) {
@@ -138,5 +155,11 @@ class GenericPinInputViewController: UIViewController, UITextViewDelegate {
     @objc private func keyboardWillHide(_ notification: Notification) {
         scrollView.contentInset.bottom = 0
         scrollView.verticalScrollIndicatorInsets.bottom = 0
+    }
+    
+    // UITextFieldDelegate
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        textField.resignFirstResponder()
+        return true
     }
 }
