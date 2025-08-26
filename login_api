@@ -1,53 +1,44 @@
-override func viewWillAppear(_ animated: Bool) {
-    super.viewWillAppear(animated)
-    
-    // Check if we're returning from SecondViewController
-    if let containerView = containerViewController.view {
-        
-        // Remove from previous parent if needed
-        if containerViewController.parent != nil && containerViewController.parent != self {
-            containerViewController.willMove(toParent: nil)
-            containerViewController.removeFromParent()
-        }
-        
-        // Remove view from its current superview
-        if containerView.superview != nil {
-            containerView.removeFromSuperview()
-        }
-        
-        // Re-add as child if needed
-        if containerViewController.parent != self {
-            addChild(containerViewController)
-            containerViewController.didMove(toParent: self)
-        }
-        
-        // Re-add the view to the customView if needed
-        if containerView.superview != customView {
-            customView.addSubview(containerView)
-            
-            // Re-apply the constraints (important!)
-            NSLayoutConstraint.activate([
-                containerView.leadingAnchor.constraint(equalTo: customView.safeAreaLayoutGuide.leadingAnchor, constant: 8),
-                containerView.trailingAnchor.constraint(equalTo: customView.safeAreaLayoutGuide.trailingAnchor, constant: -8),
-                containerView.topAnchor.constraint(equalTo: buttonCollection.bottomAnchor, constant: 8),
-                containerView.bottomAnchor.constraint(equalTo: customView.safeAreaLayoutGuide.bottomAnchor, constant: -20),
-            ])
-        }
-        
-        // Force layout update
-        view.setNeedsLayout()
-        view.layoutIfNeeded()
-        
-        // Re-display the pins that were shown in FirstViewController
-        let aislePin1 = AislePin(type: "location", id: "7874235201", location:
-                                    AisleLocation(zone: "B", aisle: "5", section: "1", selected: true))
-        let aislePin2 = AislePin(type: "location", id: "7874235201", location:
-                                    AisleLocation(zone: "B", aisle: "5", section: "2", selected: true))
-        let aislePin3 = AislePin(type: "location", id: "7874235201", location:
-                                    AisleLocation(zone: "B", aisle: "5", section: "3", selected: true))
-        let aislePin4 = AislePin(type: "location", id: "7874235201", location:
-                                    AisleLocation(zone: "B", aisle: "5", section: "4", selected: true))
+import SwiftUI
+import UniformTypeIdentifiers
 
-        compass?.displayPinV2(pins: [aislePin1, aislePin2, aislePin3, aislePin4], config: displayPinConfig.hashMap)
+struct TestView: View {
+    let fn = "log.zip"
+    
+    var body: some View {
+        VStack {
+            Text("test")
+                .font(.title)
+                .padding()
+            
+            Button(action: {
+                testfn()
+            }) {
+                HStack {
+                    Text("test \(fn)")
+                }
+                .padding()
+                .background(Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(8)
+            }
+        }
+    }
+    
+    func testfn() {
+        guard let fur = Bundle.main.url(forResource: fn.components(separatedBy: ".").first,
+                                              withExtension: "zip") else {
+            print("error")
+            return
+        }
+        
+        let activityViewController = UIActivityViewController(
+            activityItems: [fur],
+            applicationActivities: nil
+        )
+        
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootViewController = windowScene.windows.first?.rootViewController {
+            rootViewController.present(activityViewController, animated: true, completion: nil)
+        }
     }
 }
