@@ -1,44 +1,323 @@
-import SwiftUI
-import UniformTypeIdentifiers
-
-struct TestView: View {
-    let fn = "log.zip"
+class AssetPinInputViewController: UIViewController, UITextFieldDelegate {
+    var onDisplayPin: (([String]) -> Void)?
     
-    var body: some View {
-        VStack {
-            Text("test")
-                .font(.title)
-                .padding()
+    private let scrollView = UIScrollView()
+    private let contentStack = UIStackView()
+    private var assetIDFields: [UITextField] = []
+    private let maxAssets = 5
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        setupUI()
+        registerForKeyboardNotifications()
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+    
+    private func setupUI() {
+        let titleLabel = UILabel()
+        titleLabel.text = "Enter Asset IDs (up to 5)"
+        titleLabel.font = .boldSystemFont(ofSize: 18)
+        titleLabel.textAlignment = .center
+        
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(scrollView)
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16),
+            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            scrollView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -100)
+        ])
+        
+        contentStack.axis = .vertical
+        contentStack.spacing = 16
+        contentStack.alignment = .fill
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.addSubview(contentStack)
+        NSLayoutConstraint.activate([
+            contentStack.topAnchor.constraint(equalTo: scrollView.topAnchor),
+            contentStack.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
+            contentStack.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
+            contentStack.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
+            contentStack.widthAnchor.constraint(equalTo: scrollView.widthAnchor)
+        ])
+        
+        contentStack.addArrangedSubview(titleLabel)
+        
+        // Add first field by default
+        addAssetIDField()
+        
+        let addMoreButton = UIButton(type: .system)
+        addMoreButton.setTitle("Add More Asset IDs", for: .normal)
+        addMoreButton.addTarget(self, action: #selector(addMoreTapped), for: .touchUpInside)
+        addMoreButton.backgroundColor = .systemGray5
+        addMoreButton.layer.cornerRadius = 8
+        addMoreButton.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        addMoreButton.tag = 999
+        contentStack.addArrangedSubview(addMoreButton)
+        
+        let buttonStack = createButtonStack()
+        view.addSubview(buttonStack)
+        NSLayoutConstraint.activate([
+            buttonStack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            buttonStack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+            buttonStack.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24),
+            buttonStack.heightAnchor.constraint(equalToConstant: 44)
+        ])
+    }
+    
+    private func addAssetIDField() {
+        guard assetIDFields.count < maxAssets else { return }
+        
+        let fieldContainer = UIView()
+        fieldContainer.translatesAutoresizingMaskIntoConstraints = false
+        
+        let label = UILabel()
+        label.text = "Asset ID \(assetIDFields.count + 1):"
+        label.font = .systemFont(ofSize: 14)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        
+        let textField = UITextField()
+        textField.placeholder = "e.g., 836445"
+        textField.borderStyle = .roundedRect
+        textField.keyboardType = .numberPad
+        textField.returnKeyType = .done
+        textField.delegate = self
+        textField.translatesAutoresizingMaskIntoConstraints = false
+        
+        fieldContainer.addSubview(label)
+        fieldContainer.addSubview(textField)
+        
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: fieldContainer.leadingAnchor),
+            label.centerYAnchor.constraint(equalTo: fieldContainer.centerYAnchor),
+            label.widthAnchor.constraint(equalToConstant: 80),
             
-            Button(action: {
-                testfn()
-            }) {
-                HStack {
-                    Text("test \(fn)")
-                }
-                .padding()
-                .background(Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(8)
+            textField.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 8),
+            textField.trailingAnchor.constraint(equalTo: fieldContainer.trailingAnchor),
+            textField.topAnchor.constraint(equalTo: fieldContainer.topAnchor),
+            textField.bottomAnchor.constraint(equalTo: fieldContainer.bottomAnchor),
+            textField.heightAnchor.constraint(equalToConstant: 40)
+        ])
+        
+        assetIDFields.append(textField)
+        
+        // Insert before the add more button
+        if let addButton = contentStack.arrangedSubviews.first(where: { $0.tag == 999 }) {
+            let idx = contentStack.arrangedSubviews.firstIndex(of: addButton) ?? contentStack.arrangedSubviews.count
+            contentStack.insertArrangedSubview(fieldContainer, at: idx)
+        } else {
+            contentStack.addArrangedSubview(fieldContainer)
+        }
+        
+        // Hide add button if max reached
+        if assetIDFields.count == maxAssets {
+            if let addButton = contentStack.arrangedSubviews.first(where: { $0.tag == 999 }) {
+                addButton.isHidden = true
             }
         }
     }
     
-    func testfn() {
-        guard let fur = Bundle.main.url(forResource: fn.components(separatedBy: ".").first,
-                                              withExtension: "zip") else {
-            print("error")
+    @objc private func addMoreTapped() {
+        addAssetIDField()
+    }
+    
+    @objc private func displayPinsTapped() {
+        let assetIDs = assetIDFields.compactMap { field -> String? in
+            guard let text = field.text, !text.isEmpty else { return nil }
+            return text
+        }
+        
+        if assetIDs.isEmpty {
+            let alert = UIAlertController(title: "Error", message: "Please enter at least one Asset ID", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            present(alert, animated: true)
             return
         }
         
-        let activityViewController = UIActivityViewController(
-            activityItems: [fur],
-            applicationActivities: nil
-        )
+        onDisplayPin?(assetIDs)
+        dismiss(animated: true)
+    }
+    
+    @objc private func cancelTapped() {
+        dismiss(animated: true)
+    }
+    
+    private func createButtonStack() -> UIStackView {
+        let displayButton = UIButton(type: .system)
+        displayButton.setTitle("Display Pins", for: .normal)
+        displayButton.addTarget(self, action: #selector(displayPinsTapped), for: .touchUpInside)
+        displayButton.backgroundColor = .systemBlue
+        displayButton.setTitleColor(.white, for: .normal)
+        displayButton.layer.cornerRadius = 8
         
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootViewController = windowScene.windows.first?.rootViewController {
-            rootViewController.present(activityViewController, animated: true, completion: nil)
-        }
+        let cancelButton = UIButton(type: .system)
+        cancelButton.setTitle("Cancel", for: .normal)
+        cancelButton.addTarget(self, action: #selector(cancelTapped), for: .touchUpInside)
+        cancelButton.backgroundColor = .systemGray
+        cancelButton.setTitleColor(.white, for: .normal)
+        cancelButton.layer.cornerRadius = 8
+        
+        let stack = UIStackView(arrangedSubviews: [displayButton, cancelButton])
+        stack.axis = .horizontal
+        stack.spacing = 16
+        stack.distribution = .fillEqually
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return stack
+    }
+    
+    // Keyboard handling methods
+    private func registerForKeyboardNotifications() {
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillShow(_:)), name: UIResponder.keyboardWillShowNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
+    }
+    
+    @objc private func keyboardWillShow(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let keyboardFrame = userInfo[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+        let keyboardHeight = keyboardFrame.height
+        scrollView.contentInset.bottom = keyboardHeight + 20
+    }
+    
+    @objc private func keyboardWillHide(_ notification: Notification) {
+        scrollView.contentInset.bottom = 0
+    }
+    
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        textField.resignFirstResponder()
+        return true
     }
 }
+
+
+
+
+class GenericPinInputViewController: UIViewController, UITextFieldDelegate {
+    var onDisplayPin: (([String]) -> Void)?
+    
+    private let textView = UITextView()
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        setupUI()
+    }
+    
+    private func setupUI() {
+        let titleLabel = UILabel()
+        titleLabel.text = "Enter Encoded Location String"
+        titleLabel.font = .boldSystemFont(ofSize: 18)
+        titleLabel.textAlignment = .center
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        
+        let descriptionLabel = UILabel()
+        descriptionLabel.text = "Paste or type the encoded location string (e.g., eHMvW1pKLEFHXS8x)"
+        descriptionLabel.font = .systemFont(ofSize: 14)
+        descriptionLabel.textColor = .secondaryLabel
+        descriptionLabel.numberOfLines = 0
+        descriptionLabel.translatesAutoresizingMaskIntoConstraints = false
+        
+        textView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
+        textView.layer.borderColor = UIColor.systemGray4.cgColor
+        textView.layer.borderWidth = 1
+        textView.layer.cornerRadius = 8
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        
+        let displayButton = UIButton(type: .system)
+        displayButton.setTitle("Display Pin", for: .normal)
+        displayButton.addTarget(self, action: #selector(displayPinTapped), for: .touchUpInside)
+        displayButton.backgroundColor = .systemBlue
+        displayButton.setTitleColor(.white, for: .normal)
+        displayButton.layer.cornerRadius = 8
+        displayButton.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        
+        let cancelButton = UIButton(type: .system)
+        cancelButton.setTitle("Cancel", for: .normal)
+        cancelButton.addTarget(self, action: #selector(cancelTapped), for: .touchUpInside)
+        cancelButton.backgroundColor = .systemGray
+        cancelButton.setTitleColor(.white, for: .normal)
+        cancelButton.layer.cornerRadius = 8
+        cancelButton.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        
+        view.addSubview(titleLabel)
+        view.addSubview(descriptionLabel)
+        view.addSubview(textView)
+        view.addSubview(displayButton)
+        view.addSubview(cancelButton)
+        
+        NSLayoutConstraint.activate([
+            titleLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 24),
+            titleLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            titleLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+            
+            descriptionLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 12),
+            descriptionLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            descriptionLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+            
+            textView.topAnchor.constraint(equalTo: descriptionLabel.bottomAnchor, constant: 16),
+            textView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            textView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+            textView.heightAnchor.constraint(equalToConstant: 100),
+            
+            displayButton.topAnchor.constraint(equalTo: textView.bottomAnchor, constant: 24),
+            displayButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            displayButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+            
+            cancelButton.topAnchor.constraint(equalTo: displayButton.bottomAnchor, constant: 12),
+            cancelButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            cancelButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24)
+        ])
+    }
+    
+    @objc private func displayPinTapped() {
+        guard let text = textView.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+            let alert = UIAlertController(title: "Error", message: "Please enter an encoded location string", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            present(alert, animated: true)
+            return
+        }
+        
+        onDisplayPin?([text])
+        dismiss(animated: true)
+    }
+    
+    @objc private func cancelTapped() {
+        dismiss(animated: true)
+    }
+}
+
+
+
+
+
+// Replace the existing displayPins() method with:
+func displayPins() {
+    let vc = AssetPinInputViewController()
+    vc.modalPresentationStyle = .formSheet
+    vc.onDisplayPin = { [weak self] assetIDs in
+        guard let self = self else { return }
+        self.setAndGetAssetsEventStatus()
+        let idType = PinDropMethod.assets
+        Log.debug("User entered asset IDs: \(assetIDs)")
+        compass?.displayPin(uuidList: assetIDs, idType: idType, config: self.displayPinConfig.hashMap)
+    }
+    present(vc, animated: true)
+}
+
+// Replace the existing displayPinsFromEncodedString() method with:
+func displayPinsFromEncodedString() {
+    let vc = GenericPinInputViewController()
+    vc.modalPresentationStyle = .formSheet
+    vc.onDisplayPin = { [weak self] encodedStrings in
+        guard let self = self, let encodedString = encodedStrings.first else { return }
+        self.setAndGetAssetsEventStatus()
+        Log.debug("User entered encoded string: \(encodedString)")
+        compass?.displayPin(uuidList: [encodedString], idType: .generic)
+    }
+    present(vc, animated: true)
+}
+
+
