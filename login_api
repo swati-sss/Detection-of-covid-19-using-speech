@@ -1,165 +1,40 @@
-class AssetPinInputViewController: UIViewController, UITextFieldDelegate {
-    var onDisplayPin: (([String]) -> Void)?
+// Add this new method to handle the toggle
+private func toggleLocalMapConfig() {
+    // Toggle the flag
+    useLocalMapConfig.toggle()
     
-    private let scrollView = UIScrollView()
-    private let contentStack = UIStackView()
-    private let assetIDField = UITextField()
+    // Save to UserDefaults so StoreMapView can read it
+    UserDefaults.standard.set(useLocalMapConfig, forKey: "useLocalMapConfig")
+    UserDefaults.standard.synchronize()
     
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = .systemBackground
-        setupUI()
-        registerForKeyboardNotifications()
+    // Update the menu to reflect the new state
+    if let otherAPIsButton = getOtherAPIsButton() {
+        setOtherAPIsButtonMenu(otherAPIsButton)
     }
     
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-    }
+    // Show confirmation to user
+    let message = useLocalMapConfig ? 
+        "Local map config ENABLED\n(Store number changes won't work)" : 
+        "Local map config DISABLED\n(Store number changes will work)"
     
-    private func setupUI() {
-        // Setup scroll view
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(scrollView)
-        NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)
-        ])
-        
-        // Setup content stack
-        contentStack.axis = .vertical
-        contentStack.spacing = 16
-        contentStack.alignment = .fill
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.addSubview(contentStack)
-        NSLayoutConstraint.activate([
-            contentStack.topAnchor.constraint(equalTo: scrollView.topAnchor, constant: 24),
-            contentStack.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor, constant: 24),
-            contentStack.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor, constant: -24),
-            contentStack.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: -24),
-            contentStack.widthAnchor.constraint(equalTo: scrollView.widthAnchor, constant: -48)
-        ])
-        
-        // Title label
-        let titleLabel = UILabel()
-        titleLabel.text = "Enter Asset ID"
-        titleLabel.font = .boldSystemFont(ofSize: 18)
-        titleLabel.textAlignment = .center
-        contentStack.addArrangedSubview(titleLabel)
-        
-        // Description label
-        let descriptionLabel = UILabel()
-        descriptionLabel.text = "Enter the asset ID to display on the map\n(e.g., 836445)"
-        descriptionLabel.font = .systemFont(ofSize: 14)
-        descriptionLabel.textColor = .secondaryLabel
-        descriptionLabel.numberOfLines = 0
-        descriptionLabel.textAlignment = .center
-        contentStack.addArrangedSubview(descriptionLabel)
-        
-        // Asset ID text field
-        assetIDField.placeholder = "Enter asset ID"
-        assetIDField.borderStyle = .roundedRect
-        assetIDField.keyboardType = .numberPad
-        assetIDField.font = .monospacedSystemFont(ofSize: 16, weight: .regular)
-        assetIDField.textAlignment = .center
-        assetIDField.delegate = self
-        assetIDField.heightAnchor.constraint(equalToConstant: 44).isActive = true
-        
-        // Add toolbar with done button for number pad
-        let toolbar = UIToolbar()
-        toolbar.sizeToFit()
-        let flexSpace = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
-        let doneButton = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(dismissKeyboard))
-        toolbar.items = [flexSpace, doneButton]
-        assetIDField.inputAccessoryView = toolbar
-        
-        contentStack.addArrangedSubview(assetIDField)
-        
-        // Add some spacing
-        let spacer = UIView()
-        spacer.heightAnchor.constraint(equalToConstant: 20).isActive = true
-        contentStack.addArrangedSubview(spacer)
-        
-        // Display button
-        let displayButton = UIButton(type: .system)
-        displayButton.setTitle("Display Pin", for: .normal)
-        displayButton.addTarget(self, action: #selector(displayPinTapped), for: .touchUpInside)
-        displayButton.backgroundColor = .systemBlue
-        displayButton.setTitleColor(.white, for: .normal)
-        displayButton.layer.cornerRadius = 8
-        displayButton.heightAnchor.constraint(equalToConstant: 44).isActive = true
-        contentStack.addArrangedSubview(displayButton)
-        
-        // Cancel button
-        let cancelButton = UIButton(type: .system)
-        cancelButton.setTitle("Cancel", for: .normal)
-        cancelButton.addTarget(self, action: #selector(cancelTapped), for: .touchUpInside)
-        cancelButton.backgroundColor = .systemGray
-        cancelButton.setTitleColor(.white, for: .normal)
-        cancelButton.layer.cornerRadius = 8
-        cancelButton.heightAnchor.constraint(equalToConstant: 44).isActive = true
-        contentStack.addArrangedSubview(cancelButton)
+    let alert = UIAlertController(
+        title: "Map Configuration",
+        message: message,
+        preferredStyle: .alert
+    )
+    alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
+        // Optionally reinitialize the map with current settings
+        self.initialize(false)
+    })
+    present(alert, animated: true)
+}
+
+// Helper method to get the Other APIs button from the collection view
+private func getOtherAPIsButton() -> UIButton? {
+    // Index 2 is the "Other APIs" button based on your collection view setup
+    let indexPath = IndexPath(row: 2, section: 0)
+    if let cell = buttonCollection.cellForItem(at: indexPath) as? CollectionViewCell {
+        return cell.button
     }
-    
-    @objc private func dismissKeyboard() {
-        view.endEditing(true)
-    }
-    
-    @objc private func displayPinTapped() {
-        guard let text = assetIDField.text?.trimmingCharacters(in: .whitespacesAndNewlines), 
-              !text.isEmpty else {
-            let alert = UIAlertController(
-                title: "Error", 
-                message: "Please enter an asset ID", 
-                preferredStyle: .alert
-            )
-            alert.addAction(UIAlertAction(title: "OK", style: .default))
-            present(alert, animated: true)
-            return
-        }
-        
-        // Return as an array with single element to maintain compatibility
-        onDisplayPin?([text])
-        dismiss(animated: true)
-    }
-    
-    @objc private func cancelTapped() {
-        dismiss(animated: true)
-    }
-    
-    // Keyboard handling
-    private func registerForKeyboardNotifications() {
-        NotificationCenter.default.addObserver(
-            self, 
-            selector: #selector(keyboardWillShow(_:)), 
-            name: UIResponder.keyboardWillShowNotification, 
-            object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self, 
-            selector: #selector(keyboardWillHide(_:)), 
-            name: UIResponder.keyboardWillHideNotification, 
-            object: nil
-        )
-    }
-    
-    @objc private func keyboardWillShow(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let keyboardFrame = userInfo[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
-        let keyboardHeight = keyboardFrame.height
-        scrollView.contentInset.bottom = keyboardHeight + 20
-        scrollView.verticalScrollIndicatorInsets.bottom = keyboardHeight + 20
-    }
-    
-    @objc private func keyboardWillHide(_ notification: Notification) {
-        scrollView.contentInset.bottom = 0
-        scrollView.verticalScrollIndicatorInsets.bottom = 0
-    }
-    
-    // UITextFieldDelegate
-    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        textField.resignFirstResponder()
-        return true
-    }
+    return nil
 }
