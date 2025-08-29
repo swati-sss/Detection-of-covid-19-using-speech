@@ -12,29 +12,37 @@ private func toggleLocalMapConfig() {
         setOtherAPIsButtonMenu(otherAPIsButton)
     }
     
-    // Show confirmation to user
-    let message = useLocalMapConfig ? 
-        "Local map config ENABLED\n(Store number changes won't work)" : 
-        "Local map config DISABLED\n(Store number changes will work)"
-    
-    let alert = UIAlertController(
-        title: "Map Configuration",
-        message: message,
-        preferredStyle: .alert
-    )
-    alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
-        // Optionally reinitialize the map with current settings
-        self.initialize(false)
-    })
-    present(alert, animated: true)
-}
-
-// Helper method to get the Other APIs button from the collection view
-private func getOtherAPIsButton() -> UIButton? {
-    // Index 2 is the "Other APIs" button based on your collection view setup
-    let indexPath = IndexPath(row: 2, section: 0)
-    if let cell = buttonCollection.cellForItem(at: indexPath) as? CollectionViewCell {
-        return cell.button
+    // Handle the map loading based on toggle state
+    if useLocalMapConfig {
+        // When enabling local config, set store to 2119 and initialize
+        storeID.text = "2119"
+        
+        // Show confirmation and then load the local map
+        let alert = UIAlertController(
+            title: "Map Configuration",
+            message: "Local map config ENABLED\nLoading store 2119 from local bundle\n(Store number changes won't work)",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
+            // Initialize with store 2119 to load the local config
+            self.initialize(false)
+        })
+        present(alert, animated: true)
+    } else {
+        // When disabling local config, we can optionally reload the current store
+        // or let the user keep whatever store is currently in the field
+        let currentStore = storeID.text ?? "\(Environment.initialStore)"
+        
+        let alert = UIAlertController(
+            title: "Map Configuration",
+            message: "Local map config DISABLED\nStore number changes will now work\nCurrent store: \(currentStore)",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "Reload Current Store", style: .default) { _ in
+            // Reload with the current store number to ensure remote loading
+            self.initialize(false)
+        })
+        alert.addAction(UIAlertAction(title: "Keep Current Map", style: .cancel))
+        present(alert, animated: true)
     }
-    return nil
 }
