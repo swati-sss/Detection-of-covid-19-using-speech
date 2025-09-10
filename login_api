@@ -1,48 +1,356 @@
-// Add this new method to handle the toggle
-private func toggleLocalMapConfig() {
-    // Toggle the flag
-    useLocalMapConfig.toggle()
+
+import UIKit
+import compass_sdk_ios
+import Combine
+import LivingDesign
+
+// This protocol allows SwiftUI to communicate with our UIKit map controller
+protocol MapHostViewControllerDelegate: AnyObject {
+    func mapDidInitialize(success: Bool)
+    func mapDidReceiveError(_ error: String)
+    func consoleLogReceived(_ message: String)
+    func mapDidDropPin(_ pinInfo: [String: Any])
+}
+
+class MapHostViewController: UIViewController {
     
-    // Save to UserDefaults so StoreMapView can read it
-    UserDefaults.standard.set(useLocalMapConfig, forKey: "useLocalMapConfig")
-    UserDefaults.standard.synchronize()
+    // MARK: - Properties (Extracted from HomeViewController)
     
-    // Update the menu to reflect the new state
-    if let otherAPIsButton = getOtherAPIsButton() {
-        setOtherAPIsButtonMenu(otherAPIsButton)
+    // Core map components
+    private let mapRootViewController = LDRootViewController()
+    private var cancellables = Set<AnyCancellable>()
+    
+    // This delegate allows us to communicate back to SwiftUI
+    weak var delegate: MapHostViewControllerDelegate?
+    
+    // Map configuration properties
+    var enableManualPinDrop = true
+    var shouldZoomOnPins = true
+    var resetZoom = false
+    private var isPositionLocked = false
+    
+    // Current store tracking
+    var currentStore: Int? {
+        return compass?.currentStore
     }
     
-    // Handle the map loading based on toggle state
-    if useLocalMapConfig {
-        // When enabling local config, set store to 2119 and initialize
-        storeID.text = "2119"
-        
-        // Show confirmation and then load the local map
-        let alert = UIAlertController(
-            title: "Map Configuration",
-            message: "Local map config ENABLED\nLoading store 2119 from local bundle\n(Store number changes won't work)",
-            preferredStyle: .alert
+    // Display configuration
+    private var displayPinConfig: DisplayPinConfig {
+        DisplayPinConfig(
+            enableManualPinDrop: enableManualPinDrop,
+            resetZoom: resetZoom,
+            shouldZoomOnPins: shouldZoomOnPins
         )
-        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
-            // Initialize with store 2119 to load the local config
-            self.initialize(false)
-        })
-        present(alert, animated: true)
-    } else {
-        // When disabling local config, we can optionally reload the current store
-        // or let the user keep whatever store is currently in the field
-        let currentStore = storeID.text ?? "\(Environment.initialStore)"
+    }
+    
+    // Event handlers (these capture SDK events)
+    private var pinDropEventEmitterHandler: ((PinDropEventEmitter) -> Void)?
+    private var pinClickedEventEmitterHandler: ((PinClickedEventEmitter) -> Void)?
+    private var aislePinDropEventEmitterHandler: ((PinDropEventEmitter) -> Void)?
+    private var bootstrapEventEmitterHandler: ((EventEmitterDescription) -> Void)?
+    private var updateEventListEmitterHandler: ((EventEmitterDescription) -> Void)?
+    private var errorEventEmitterHandler: ((ErrorEventEmitter) -> Void)?
+    
+    // MARK: - View Lifecycle
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        setupMapContainer()
+    }
+    
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // The SDK needs this for positioning
+        compass?.viewWillAppear(animated)
+    }
+    
+    // MARK: - Map Container Setup
+    
+    private func setupMapContainer() {
+        // This is the key setup - we're adding the SDK's container as a child
+        guard let containerView = mapRootViewController.view else { return }
         
-        let alert = UIAlertController(
-            title: "Map Configuration",
-            message: "Local map config DISABLED\nStore number changes will now work\nCurrent store: \(currentStore)",
-            preferredStyle: .alert
+        // Configure the container view
+        containerView.enclosingScrollView?.isScrollEnabled = false
+        containerView.enclosingScrollView?.canCancelContentTouches = true
+        containerView.backgroundColor = .systemBackground
+        containerView.translatesAutoresizingMaskIntoConstraints = false
+        containerView.clipsToBounds = true
+        
+        // Establish parent-child relationship
+        addChild(mapRootViewController)
+        view.addSubview(containerView)
+        mapRootViewController.didMove(toParent: self)
+        
+        // Setup constraints to fill the entire view
+        NSLayoutConstraint.activate([
+            containerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            containerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            containerView.topAnchor.constraint(equalTo: view.topAnchor),
+            containerView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+    }
+    
+    // MARK: - Map Initialization (Core functionality from HomeViewController)
+    
+    func initializeMap(for storeID: Int) {
+        // Clear any existing state
+        reset()
+        
+        // Check if we're already showing this store
+        guard currentStore != storeID else {
+            compass?.resetPositionStatusEvent()
+            delegate?.mapDidInitialize(success: true)
+            return
+        }
+        
+        // Create new Compass instance
+        compass = Compass()
+        guard let compass = compass else {
+            delegate?.mapDidInitialize(success: false)
+            return
+        }
+        
+        // Set up authentication and configuration
+        let authParameter = Environment.authParmeter
+        let configuration = Environment.getConfiguration(for: storeID)
+        
+        // Set environment
+        compass.setEnvironment(Environment.backendEnv)
+        
+        // Clear existing subscriptions
+        cancellables.removeAll()
+        
+        // Initialize the SDK with reactive chain
+        Just(compass.initialize(
+            authParameter: authParameter,
+            configuration: configuration,
+            capabilities: [.storeMap],
+            rootViewController: mapRootViewController
+        ))
+        .eraseToAnyPublisher()
+        .flatMap { _ in
+            compass.isFinishedInitialize
+        }
+        .sink { [weak self] isFinishedInitialize in
+            guard let self = self else { return }
+            
+            guard let isFinishedInitialize = isFinishedInitialize else {
+                self.consoleLog("Compass waiting initialization")
+                return
+            }
+            
+            if isFinishedInitialize {
+                compass.currentStore = storeID
+                self.consoleLog("Compass Initialization Succeeded")
+                self.delegate?.mapDidInitialize(success: true)
+            } else {
+                self.consoleLog("Compass Initialization Failed")
+                self.delegate?.mapDidInitialize(success: false)
+            }
+        }
+        .store(in: &cancellables)
+        
+        // Set up event handlers
+        setupEventHandlers()
+        
+        // Wait for map to be ready
+        waitForIsFinishedSettingMapResponse()
+    }
+    
+    // MARK: - Event Setup (Extracted from HomeViewController)
+    
+    private func setupEventHandlers() {
+        let errorEventEmitterCompletionHandler: (ErrorEventEmitter) -> Void = { [weak self] errorEventEmitter in
+            let dict = errorEventEmitter.toDictionary()
+            var event = [String: Any]()
+            
+            if let code = dict["errorCode"] as? Int {
+                event["code"] = code
+            }
+            if let errortype = dict["compassErrorType"] as? String {
+                event["errortype"] = errortype
+            }
+            if let message = dict["errorDescription"] as? String {
+                event["message"] = message
+            }
+            
+            self?.consoleLog("ERROR EVENT:\n\(event.toJSONString() ?? "")")
+            self?.delegate?.mapDidReceiveError(message as? String ?? "Unknown error")
+        }
+        
+        waitForEventEmitterCompletionHandlerResponse(with: errorEventEmitterCompletionHandler)
+    }
+    
+    private func waitForEventEmitterCompletionHandlerResponse(with errorEventEmitterCompletionHandler: @escaping (ErrorEventEmitter) -> Void) {
+        var statusService = compass?.getStatusService()
+        statusService?.eventEmitterHandler = { [weak self] eventEmitter in
+            guard let self = self else { return }
+            
+            switch eventEmitter.eventType {
+            case .showMapEventEmitter:
+                guard let eventEmitterDescription = eventEmitter as? EventEmitterDescription else { return }
+                self.consoleLog("Map shown: \(eventEmitterDescription.description)")
+                
+            case .pinDropEventEmitter:
+                guard let pinDropEventEmitter = eventEmitter as? PinDropEventEmitter else { return }
+                self.pinDropEventEmitterHandler?(pinDropEventEmitter)
+                
+            case .pinClickedEventEmitter:
+                guard let pinClickedEventEmitter = eventEmitter as? PinClickedEventEmitter else { return }
+                self.pinClickedEventEmitterHandler?(pinClickedEventEmitter)
+                
+            case .positionEventEmitter:
+                guard let positionEventEmitter = eventEmitter as? PositionEventEmitter else { return }
+                if let positionType = positionEventEmitter.positionType {
+                    var event = [String: Any]()
+                    event["EventType"] = positionType
+                    event["EventCode"] = positionEventEmitter.positionCode
+                    self.consoleLog("POSITIONING EVENT:\n\(event.toJSONString() ?? "")")
+                }
+                
+                if let position = positionEventEmitter.positionCode, position == 0 {
+                    self.updateEvent()
+                }
+                
+            case .initErrorEventEmitter:
+                guard let errorEventEmitter = eventEmitter as? ErrorEventEmitter else { return }
+                errorEventEmitterCompletionHandler(errorEventEmitter)
+                
+            default:
+                break
+            }
+        }
+    }
+    
+    private func waitForIsFinishedSettingMapResponse() {
+        compass?.isFinishedSettingMap
+            .sink { [weak self] isInitialize in
+                guard isInitialize else { return }
+                compass?.displayMap(workflow: Workflow(
+                    id: "sample_app_id",
+                    type: "sample_app_flow",
+                    value: "sa_val"
+                ))
+            }
+            .store(in: &cancellables)
+    }
+    
+    // MARK: - Map Operations (All the public functions we'll call from SwiftUI)
+    
+    func displayPins(uuidList: [String], idType: PinDropMethod) {
+        compass?.displayPin(
+            uuidList: uuidList,
+            idType: idType,
+            config: displayPinConfig.hashMap
         )
-        alert.addAction(UIAlertAction(title: "Reload Current Store", style: .default) { _ in
-            // Reload with the current store number to ensure remote loading
-            self.initialize(false)
-        })
-        alert.addAction(UIAlertAction(title: "Keep Current Map", style: .cancel))
-        present(alert, animated: true)
+        setAndGetAssetsEventStatus()
+    }
+    
+    func displayPinsV2(pins: [AislePin]) {
+        var isZoomOutRequired = true
+        
+        for pin in pins {
+            if let location = pin.location,
+               !location.zone.isEmpty,
+               !location.aisle.isEmpty,
+               !location.section.isEmpty {
+                isZoomOutRequired = false
+                break
+            }
+        }
+        
+        compass?.displayPinV2(
+            pins: pins,
+            config: displayPinConfig.hashMap,
+            isZoomOutRequired: isZoomOutRequired
+        )
+    }
+    
+    func clearMap() {
+        compass?.clearMap(configuration: MapConfig(resetZoom: resetZoom).hashMap)
+    }
+    
+    func getAisle(id: String) {
+        compass?.getAisle(id: id)
+    }
+    
+    func getUserDistance(pins: [AislePin]) {
+        compass?.getUserDistance(pins: pins) { [weak self] responses in
+            responses.forEach { 
+                self?.consoleLog("User distance response: \($0.toDictionary())")
+            }
+        }
+    }
+    
+    func updateEvent() {
+        // Implementation from HomeViewController's updateEvent
+        compass?.isFinishedSettingMap
+            .sink { [weak self] isInitialize in
+                guard isInitialize else { return }
+                
+                compass?.updateEventList(
+                    namespace: "MODFLEX",
+                    eventType: "SCAN_FEATURE_LOCATION",
+                    eventValue: "BK4-12",
+                    metaData: [
+                        "keyA": "va",
+                        "keyB": "vb",
+                        "keyC": "vc",
+                        "keyD": "vd",
+                        "keyE": "ve",
+                        "keyF": "vf"
+                    ]
+                )
+            }
+            .store(in: &cancellables)
+    }
+    
+    // MARK: - Event Status Setup (From HomeViewController)
+    
+    private func setAndGetAssetsEventStatus() {
+        pinDropEventEmitterHandler = { [weak self] pinDropEventEmitter in
+            var dict = pinDropEventEmitter.toDictionary()
+            dict["eventType"] = nil
+            
+            if let output = dict.toJSONString() {
+                self?.consoleLog("PIN DROP EVENT:\n\(output)")
+                self?.delegate?.mapDidDropPin(dict)
+            }
+        }
+    }
+    
+    // MARK: - Helper Functions
+    
+    private func reset() {
+        // Clear any existing map state
+        removeCompassAndDestroyRoot()
+    }
+    
+    private func removeCompassAndDestroyRoot() {
+        compass?.killSwitch()
+        
+        if let compass = compass {
+            compass.willMove(toParent: nil)
+            compass.view.removeFromSuperview()
+            compass.removeFromParent()
+            mapRootViewController.view.subviews.forEach { $0.removeFromSuperview() }
+        }
+        
+        compass = nil
+    }
+    
+    private func consoleLog(_ message: String) {
+        // Send console messages to SwiftUI for display
+        DispatchQueue.main.async {
+            self.delegate?.consoleLogReceived(message)
+        }
+    }
+    
+    // MARK: - Cleanup
+    
+    deinit {
+        removeCompassAndDestroyRoot()
+        cancellables.removeAll()
     }
 }
