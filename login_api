@@ -1,101 +1,70 @@
 
-import SwiftUI
+import Foundation
+import Combine
 import compass_sdk_ios
 
-struct MapContainerView: UIViewControllerRepresentable {
-    // These bindings allow SwiftUI to control the map
-    @Binding var storeID: String
-    @Binding var isInitialized: Bool
-    @Binding var consoleMessages: [String]
+class MapViewModel: ObservableObject {
+    // Published properties that SwiftUI can observe
+    @Published var isMapInitialized = false
+    @Published var consoleMessages: [String] = []
+    @Published var currentStoreID: String = "\(Environment.initialStore)"
+    @Published var showConsole = false
     
-    // Configuration options
-    var enableManualPinDrop: Bool = true
-    var shouldZoomOnPins: Bool = true
-    var resetZoom: Bool = false
+    // Map configuration
+    @Published var enableManualPinDrop = true
+    @Published var shouldZoomOnPins = true
+    @Published var resetZoom = false
     
-    // Callbacks for map actions (these let SwiftUI respond to map events)
-    var onPinDrop: (([String: Any]) -> Void)?
-    var onError: ((String) -> Void)?
+    // Reference to the map view controller (set by SwiftUI)
+    weak var mapViewController: MapHostViewController?
     
-    func makeUIViewController(context: Context) -> MapHostViewController {
-        let mapVC = MapHostViewController()
-        
-        // Set initial configuration
-        mapVC.enableManualPinDrop = enableManualPinDrop
-        mapVC.shouldZoomOnPins = shouldZoomOnPins
-        mapVC.resetZoom = resetZoom
-        
-        // Set delegate to coordinator for communication
-        mapVC.delegate = context.coordinator
-        
-        return mapVC
+    // Error handling
+    @Published var lastError: String?
+    @Published var showError = false
+    
+    // Initialize with default store
+    init() {
+        currentStoreID = "\(Environment.initialStore)"
     }
     
-    func updateUIViewController(_ uiViewController: MapHostViewController, context: Context) {
-        // This is called when SwiftUI state changes
-        // Check if store ID changed and reinitialize if needed
-        if let newStoreID = Int(storeID),
-           newStoreID != uiViewController.currentStore {
-            uiViewController.initializeMap(for: newStoreID)
+    // Map control functions that SwiftUI buttons can call
+    func initializeMap() {
+        guard let storeID = Int(currentStoreID) else {
+            lastError = "Invalid store ID"
+            showError = true
+            return
         }
         
-        // Update configuration if changed
-        uiViewController.enableManualPinDrop = enableManualPinDrop
-        uiViewController.shouldZoomOnPins = shouldZoomOnPins
-        uiViewController.resetZoom = resetZoom
+        mapViewController?.initializeMap(for: storeID)
     }
     
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
+    func displayAssetPins() {
+        // Example implementation - you'd get these from your data
+        let uuidList = ["asset1", "asset2", "asset3"]
+        mapViewController?.displayPins(uuidList: uuidList, idType: .assets)
     }
     
-    // The Coordinator handles communication from UIKit back to SwiftUI
-    class Coordinator: NSObject, MapHostViewControllerDelegate {
-        var parent: MapContainerView
-        
-        init(_ parent: MapContainerView) {
-            self.parent = parent
-        }
-        
-        func mapDidInitialize(success: Bool) {
-            DispatchQueue.main.async {
-                self.parent.isInitialized = success
-            }
-        }
-        
-        func mapDidReceiveError(_ error: String) {
-            DispatchQueue.main.async {
-                self.parent.onError?(error)
-            }
-        }
-        
-        func consoleLogReceived(_ message: String) {
-            DispatchQueue.main.async {
-                // Add timestamp to message
-                let dateFormatter = DateFormatter()
-                dateFormatter.dateFormat = "hh:mm:ss.SSSS"
-                let timestampedMessage = "\(dateFormatter.string(from: Date()))\n\(message)"
-                self.parent.consoleMessages.append(timestampedMessage)
-            }
-        }
-        
-        func mapDidDropPin(_ pinInfo: [String : Any]) {
-            DispatchQueue.main.async {
-                self.parent.onPinDrop?(pinInfo)
-            }
-        }
+    func displayAislePins() {
+        // Example aisle pins
+        let pins = [
+            AislePin(
+                type: "location",
+                id: "123",
+                location: AisleLocation(zone: "B", aisle: "5", section: "1", selected: true)
+            )
+        ]
+        mapViewController?.displayPinsV2(pins: pins)
     }
     
-    // Public methods that SwiftUI can call to control the map
-    static func displayPins(_ mapVC: MapHostViewController?, uuidList: [String], idType: PinDropMethod) {
-        mapVC?.displayPins(uuidList: uuidList, idType: idType)
+    func clearMap() {
+        mapViewController?.clearMap()
     }
     
-    static func clearMap(_ mapVC: MapHostViewController?) {
-        mapVC?.clearMap()
+    func toggleConsole() {
+        showConsole.toggle()
     }
     
-    static func getUserDistance(_ mapVC: MapHostViewController?, pins: [AislePin]) {
-        mapVC?.getUserDistance(pins: pins)
+    func clearConsole() {
+        consoleMessages.removeAll()
     }
 }
