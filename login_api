@@ -1,29 +1,96 @@
+// AislePinInputSheet.swift
 
-            // Console (SwiftUI-only, auto-scrolls on new logs)
-            ScrollViewReader { proxy in
-                ScrollView {
-                    Text(bridge.consoleText.isEmpty ? "— console —" : bridge.consoleText)
-                        .font(.system(.footnote, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
+import SwiftUI
 
-                    // anchor to scroll to
-                    Color.clear
-                        .frame(height: 1)
-                        .id("BOTTOM")
-                }
-                .frame(height: 160)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.secondary.opacity(0.35))
-                )
-                // whenever the token changes, jump to bottom
-                .onChange(of: bridge.scrollToken) { _ in
-                    withAnimation {
-                        proxy.scrollTo("BOTTOM", anchor: .bottom)
+struct AislePinRow: Identifiable, Equatable {
+    let id = UUID()
+    var zone: String = ""
+    var aisle: String = ""
+    var section: String = ""
+    var selected: Bool = true
+}
+
+struct AislePinInputSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    // Start with one row; you can seed more if you like.
+    @State private var rows: [AislePinRow] = [AislePinRow()]
+    let maxRows: Int = 8
+
+    /// Called when the user taps "Display Pins".
+    /// Matches the tuple type your bridge expects.
+    var onDisplayPin: (_ pins: [(zone: String, aisle: String, section: String, selected: Bool)]) -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 12) {
+                    ForEach($rows) { $row in
+                        HStack(spacing: 8) {
+                            TextField("Zone", text: $row.zone)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 80)
+
+                            TextField("Aisle", text: $row.aisle)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 80)
+
+                            TextField("Section", text: $row.section)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 80)
+
+                            Toggle("Selected", isOn: $row.selected)
+                                .labelsHidden()
+
+                            Button {
+                                removeRow(row)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(rows.count == 1)
+                        }
+                    }
+
+                    HStack {
+                        Button {
+                            addRow()
+                        } label: {
+                            Label("Add Row", systemImage: "plus.circle")
+                        }
+                        .disabled(rows.count >= maxRows)
+
+                        Spacer()
                     }
                 }
+                .padding()
             }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 8)
+            .scrollDismissesKeyboard(.immediately)
+            .navigationTitle("Aisle Pins")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Display Pins") {
+                        let tuples = rows.map { ($0.zone, $0.aisle, $0.section, $0.selected) }
+                        onDisplayPin(tuples)
+                        dismiss()
+                    }
+                    .disabled(rows.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func addRow() {
+        guard rows.count < maxRows else { return }
+        rows.append(AislePinRow())
+    }
+
+    private func removeRow(_ row: AislePinRow) {
+        if let idx = rows.firstIndex(of: row), rows.count > 1 {
+            rows.remove(at: idx)
+        }
+    }
+}
