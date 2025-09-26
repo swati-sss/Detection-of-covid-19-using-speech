@@ -1,29 +1,38 @@
-// SwiftUISuggestedSubView.swift
-
+// MapRootHost.swift
 import SwiftUI
-import compass_sdk_ios
+import LivingDesign
 
-struct SwiftUISuggestedSubView: View {
-    @ObservedObject var bridge: CompassBridge
+struct MapRootHost: UIViewControllerRepresentable {
+    let bridge: CompassBridge
 
-    var body: some View {
-        VStack(spacing: 8) {
-            Button("Display Pin") {
-                // Mirror what your SecondViewController does here.
-                // If that VC dropped a sample generic/asset pin, call the same SDK API:
-                // bridge.compass?.displayPin(uuidList: [...], idType: ..., config: bridge.displayPinConfig.hashMap)
-                bridge.consoleLog("Display Pin tapped on SuggestedSubScreen")
-            }
-            .buttonStyle(.borderedProminent)
-            .padding(.top, 8)
+    func makeUIViewController(context: Context) -> UIViewController {
+        let container = UIViewController()
+        attachMap(into: container)
+        return container
+    }
 
-            MapRootHost(viewController: bridge.mapRootViewController)
-                .background(Color(.systemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .padding(.horizontal, 8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+        // Ensure it's attached to THIS container (navigation can swap containers)
+        attachMap(into: uiViewController)
+    }
+
+    private func attachMap(into container: UIViewController) {
+        let child = bridge.mapRootViewController
+
+        // If the map is already mounted under a different parent, detach first
+        if let oldParent = child.parent, oldParent !== container {
+            child.willMove(toParent: nil)
+            child.view.removeFromSuperview()
+            child.removeFromParent()
         }
-        .navigationTitle("SuggestedSubScreen")
-        .navigationBarTitleDisplayMode(.inline)
+
+        // If not already attached to this container, attach it
+        guard child.parent !== container else { return }
+
+        container.addChild(child)
+        child.view.frame = container.view.bounds
+        child.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        container.view.addSubview(child.view)
+        child.didMove(toParent: container)
     }
 }
