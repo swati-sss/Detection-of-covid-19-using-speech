@@ -1,96 +1,84 @@
-// AislePinInputSheet.swift
+// SwiftUIFirstScreenView.swift
 
 import SwiftUI
+import compass_sdk_ios
 
-struct AislePinRow: Identifiable, Equatable {
-    let id = UUID()
-    var zone: String = ""
-    var aisle: String = ""
-    var section: String = ""
-    var selected: Bool = true
-}
+struct SwiftUIFirstScreenView: View {
+    // Reuse the *same* bridge so Compass + map root are shared
+    @ObservedObject var bridge: CompassBridge
 
-struct AislePinInputSheet: View {
-    @Environment(\.dismiss) private var dismiss
+    // Local navigation to the “suggested sub” (UIKit SecondViewController)
+    @State private var goToSuggestedSub = false
 
-    // Start with one row; you can seed more if you like.
-    @State private var rows: [AislePinRow] = [AislePinRow()]
-    let maxRows: Int = 8
-
-    /// Called when the user taps "Display Pins".
-    /// Matches the tuple type your bridge expects.
-    var onDisplayPin: (_ pins: [(zone: String, aisle: String, section: String, selected: Bool)]) -> Void
+    // A minimal grid to mimic the 3 fixed-height buttons
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .center), count: 3)
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 12) {
-                    ForEach($rows) { $row in
-                        HStack(spacing: 8) {
-                            TextField("Zone", text: $row.zone)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 80)
+        VStack(spacing: 8) {
 
-                            TextField("Aisle", text: $row.aisle)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 80)
-
-                            TextField("Section", text: $row.section)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 80)
-
-                            Toggle("Selected", isOn: $row.selected)
-                                .labelsHidden()
-
-                            Button {
-                                removeRow(row)
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.borderless)
-                            .disabled(rows.count == 1)
-                        }
-                    }
-
-                    HStack {
-                        Button {
-                            addRow()
-                        } label: {
-                            Label("Add Row", systemImage: "plus.circle")
-                        }
-                        .disabled(rows.count >= maxRows)
-
-                        Spacer()
-                    }
+            LazyVGrid(columns: cols, spacing: 8) {
+                // 1) Display Pin
+                Button("Display Pin") {
+                    // UIKit sample only logs; if you want to actually drop something,
+                    // call displayDemoPins() again or wire a custom pin drop here.
+                    bridge.consoleLog("next dp")
                 }
-                .padding()
+                .frame(height: 38)
+                .buttonStyle(.bordered)
+
+                // 2) Go to suggested sub
+                Button("Go to suggested sub") {
+                    goToSuggestedSub = true
+                }
+                .frame(height: 38)
+                .buttonStyle(.bordered)
+
+                // 3) Re mount
+                Button("Re mount") {
+                    // UIKit sample only logs; if you want a real remount:
+                    // bridge.remountMap()
+                    bridge.consoleLog("next remount")
+                }
+                .frame(height: 38)
+                .buttonStyle(.bordered)
             }
-            .scrollDismissesKeyboard(.immediately)
-            .navigationTitle("Aisle Pins")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Display Pins") {
-                        let tuples = rows.map { ($0.zone, $0.aisle, $0.section, $0.selected) }
-                        onDisplayPin(tuples)
-                        dismiss()
-                    }
-                    .disabled(rows.isEmpty)
-                }
-            }
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity)
+
+            // Map container (fills the rest), same VC instance as Home
+            MapRootHost(viewController: bridge.mapRootViewController)
+                .background(Color(.systemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .navigationTitle("Next Screen")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            // Mirror UIKit viewDidAppear: show 4 aisle pins on B-5, sections 1..4
+            displayDemoPinsOnAppear()
+        }
+        // Navigate to the SwiftUI substitute for SecondViewController
+        .navigationDestination(isPresented: $goToSuggestedSub) {
+            SwiftUISuggestedSubView(bridge: bridge)
         }
     }
 
-    private func addRow() {
-        guard rows.count < maxRows else { return }
-        rows.append(AislePinRow())
-    }
-
-    private func removeRow(_ row: AislePinRow) {
-        if let idx = rows.firstIndex(of: row), rows.count > 1 {
-            rows.remove(at: idx)
+    private func displayDemoPinsOnAppear() {
+        let pins: [AislePin] = (1...4).map { section in
+            AislePin(
+                type: "location",
+                id: "7874235201",
+                location: AisleLocation(zone: "B", aisle: "5", section: "\(section)", selected: true)
+            )
         }
+
+        // Use the *same* config FirstViewController used:
+        let cfg = DisplayPinConfig(enableManualPinDrop: false, resetZoom: true, shouldZoomOnPins: false)
+        bridge.compass?.displayPinV2(
+            pins: pins,
+            config: cfg.hashMap,
+            isZoomOutRequired: false // First VC didn’t force zoom-out here
+        )
     }
 }
