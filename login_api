@@ -1,38 +1,33 @@
-// MapRootHost.swift
-import SwiftUI
-import LivingDesign
+import UserNotifications
+import UIKit
 
-struct MapRootHost: UIViewControllerRepresentable {
-    let bridge: CompassBridge
+final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = NotificationManager()
 
-    func makeUIViewController(context: Context) -> UIViewController {
-        let container = UIViewController()
-        attachMap(into: container)
-        return container
-    }
-
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        // Ensure it's attached to THIS container (navigation can swap containers)
-        attachMap(into: uiViewController)
-    }
-
-    private func attachMap(into container: UIViewController) {
-        let child = bridge.mapRootViewController
-
-        // If the map is already mounted under a different parent, detach first
-        if let oldParent = child.parent, oldParent !== container {
-            child.willMove(toParent: nil)
-            child.view.removeFromSuperview()
-            child.removeFromParent()
+    func configure() {
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, err in
+            // Optional: log to your console
         }
+    }
 
-        // If not already attached to this container, attach it
-        guard child.parent !== container else { return }
+    func post(title: String, body: String, id: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body  = body
+        content.sound = .default
 
-        container.addChild(child)
-        child.view.frame = container.view.bounds
-        child.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        container.view.addSubview(child.view)
-        child.didMove(toParent: container)
+        // Fire immediately (small delay to avoid “recently delivered” coalescing)
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.25, repeats: false)
+        let req = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
+        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
+    }
+
+    // Show banners while app is in foreground
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .list, .sound])
     }
 }
