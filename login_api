@@ -1,84 +1,29 @@
-// SwiftUIFirstScreenView.swift
+// SwiftUISuggestedSubView.swift
 
 import SwiftUI
 import compass_sdk_ios
 
-struct SwiftUIFirstScreenView: View {
-    // Reuse the *same* bridge so Compass + map root are shared
+struct SwiftUISuggestedSubView: View {
     @ObservedObject var bridge: CompassBridge
-
-    // Local navigation to the “suggested sub” (UIKit SecondViewController)
-    @State private var goToSuggestedSub = false
-
-    // A minimal grid to mimic the 3 fixed-height buttons
-    private let cols = Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .center), count: 3)
 
     var body: some View {
         VStack(spacing: 8) {
-
-            LazyVGrid(columns: cols, spacing: 8) {
-                // 1) Display Pin
-                Button("Display Pin") {
-                    // UIKit sample only logs; if you want to actually drop something,
-                    // call displayDemoPins() again or wire a custom pin drop here.
-                    bridge.consoleLog("next dp")
-                }
-                .frame(height: 38)
-                .buttonStyle(.bordered)
-
-                // 2) Go to suggested sub
-                Button("Go to suggested sub") {
-                    goToSuggestedSub = true
-                }
-                .frame(height: 38)
-                .buttonStyle(.bordered)
-
-                // 3) Re mount
-                Button("Re mount") {
-                    // UIKit sample only logs; if you want a real remount:
-                    // bridge.remountMap()
-                    bridge.consoleLog("next remount")
-                }
-                .frame(height: 38)
-                .buttonStyle(.bordered)
+            Button("Display Pin") {
+                // Mirror what your SecondViewController does here.
+                // If that VC dropped a sample generic/asset pin, call the same SDK API:
+                // bridge.compass?.displayPin(uuidList: [...], idType: ..., config: bridge.displayPinConfig.hashMap)
+                bridge.consoleLog("Display Pin tapped on SuggestedSubScreen")
             }
-            .padding(.horizontal, 8)
-            .frame(maxWidth: .infinity)
+            .buttonStyle(.borderedProminent)
+            .padding(.top, 8)
 
-            // Map container (fills the rest), same VC instance as Home
             MapRootHost(viewController: bridge.mapRootViewController)
                 .background(Color(.systemBackground))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .padding(.horizontal, 8)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .navigationTitle("Next Screen")
+        .navigationTitle("SuggestedSubScreen")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            // Mirror UIKit viewDidAppear: show 4 aisle pins on B-5, sections 1..4
-            displayDemoPinsOnAppear()
-        }
-        // Navigate to the SwiftUI substitute for SecondViewController
-        .navigationDestination(isPresented: $goToSuggestedSub) {
-            SwiftUISuggestedSubView(bridge: bridge)
-        }
-    }
-
-    private func displayDemoPinsOnAppear() {
-        let pins: [AislePin] = (1...4).map { section in
-            AislePin(
-                type: "location",
-                id: "7874235201",
-                location: AisleLocation(zone: "B", aisle: "5", section: "\(section)", selected: true)
-            )
-        }
-
-        // Use the *same* config FirstViewController used:
-        let cfg = DisplayPinConfig(enableManualPinDrop: false, resetZoom: true, shouldZoomOnPins: false)
-        bridge.compass?.displayPinV2(
-            pins: pins,
-            config: cfg.hashMap,
-            isZoomOutRequired: false // First VC didn’t force zoom-out here
-        )
     }
 }
