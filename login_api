@@ -1,33 +1,61 @@
-import UserNotifications
-import UIKit
+struct AssetPinInputSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var assetId = ""
+    let onDisplay: (String) -> Void
 
-final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
-    static let shared = NotificationManager()
-
-    func configure() {
-        let center = UNUserNotificationCenter.current()
-        center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, err in
-            // Optional: log to your console
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Asset ID", text: $assetId)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+            .navigationTitle("Asset Pin")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Display Pin") {
+                        onDisplay(assetId)
+                        dismiss()
+                    }
+                    .disabled(assetId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
         }
     }
+}
 
-    func post(title: String, body: String, id: String) {
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body  = body
-        content.sound = .default
+struct GenericPinInputSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var encodedId = ""
+    @State private var type = "GENERIC"   // optional; keep default
+    let onDisplay: (_ encodedId: String, _ type: String?) -> Void
 
-        // Fire immediately (small delay to avoid “recently delivered” coalescing)
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.25, repeats: false)
-        let req = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
-        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
-    }
-
-    // Show banners while app is in foreground
-    func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                willPresent notification: UNNotification,
-                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([.banner, .list, .sound])
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Encoded ID", text: $encodedId)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("Type (optional)", text: $type)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+            .navigationTitle("Generic Pin")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Display Pin") {
+                        onDisplay(encodedId, type.isEmpty ? nil : type)
+                        dismiss()
+                    }
+                    .disabled(encodedId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
     }
 }
