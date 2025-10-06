@@ -1,63 +1,243 @@
 import SwiftUI
-import LivingDesign
+import compass_sdk_ios
 
-final class MapContainerViewController: UIViewController {
-    let mapRoot: LDRootViewController
-
-    init(mapRoot: LDRootViewController) {
-        self.mapRoot = mapRoot
-        super.init(nibName: nil, bundle: nil)
+struct FeatureFlagsView: View {
+    @ObservedObject var bridge: HomeViewModel
+    @State private var flags: [Flag] = []
+    @State private var originalBackendConfig: [String: Any]?
+    @State private var currentStoreId: Int?
+    @State private var showSuccessAlert = false
+    @State private var showRevertAlert = false
+    @State private var editingFlag: Flag?
+    @Environment(\.dismiss) private var dismiss
+    
+    struct Flag: Identifiable {
+        let id = UUID()
+        let name: String
+        let key: String
+        var value: Any
+        let type: FlagType
+        
+        enum FlagType {
+            case boolean
+            case double
+            case integer
+        }
     }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        rehostIfNeeded()
+    
+    var body: some View {
+        NavigationView {
+            List {
+                Section(header: Text("Boolean Flags")) {
+                    ForEach(flags.filter { $0.type == .boolean }) { flag in
+                        HStack {
+                            Text(flag.name)
+                                .font(.subheadline)
+                            Spacer()
+                            Toggle("", isOn: Binding(
+                                get: { flag.value as? Bool ?? false },
+                                set: { newValue in
+                                    if let index = flags.firstIndex(where: { $0.id == flag.id }) {
+                                        flags[index].value = newValue
+                                    }
+                                }
+                            ))
+                        }
+                    }
+                }
+                
+                Section(header: Text("Numeric Flags")) {
+                    ForEach(flags.filter { $0.type != .boolean }) { flag in
+                        HStack {
+                            Text(flag.name)
+                                .font(.subheadline)
+                            Spacer()
+                            Text(formatValue(flag))
+                                .foregroundColor(.blue)
+                                .onTapGesture {
+                                    editingFlag = flag
+                                }
+                        }
+                    }
+                }
+            }
+            .navigationTitle(hasOverridesApplied() ? "Feature Flags (Mod)" : "Feature Flags")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    Button("Revert") {
+                        revertTapped()
+                    }
+                    
+                    Button("Apply") {
+                        applyTapped()
+                    }
+                    .fontWeight(.bold)
+                }
+            }
+            .onAppear {
+                loadFlags()
+            }
+            .alert("Success", isPresented: $showSuccessAlert) {
+                Button("OK") {
+                    dismiss()
+                }
+            } message: {
+                Text("Feature flags applied successfully")
+            }
+            .alert("Reverted", isPresented: $showRevertAlert) {
+                Button("OK") { }
+            } message: {
+                Text("Feature flags reverted to backend defaults")
+            }
+            .sheet(item: $editingFlag) { flag in
+                NumericInputSheet(flag: flag) { newValue in
+                    if let index = flags.firstIndex(where: { $0.id == flag.id }) {
+                        flags[index].value = newValue
+                    }
+                }
+            }
+        }
     }
-
-    func rehostIfNeeded() {
-        let child = mapRoot
-
-        // If the map VC already belongs to someone else, detach it.
-        if let parent = child.parent, parent !== self {
-            child.willMove(toParent: nil)
-            child.view.removeFromSuperview()
-            child.removeFromParent()
+    
+    private func loadFlags() {
+        currentStoreId = bridge.compass?.currentStore
+        originalBackendConfig = bridge.compass?.getCurrentStoreConfig()
+        guard let config = originalBackendConfig else { return }
+        
+        flags = [
+            Flag(name: "Blue Dot Enabled", key: "bluedotEnabled",
+                 value: config["bluedotEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Dynamic Map Enabled", key: "dynamicMapEnabled",
+                 value: config["dynamicMapEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Zoom Control Enabled", key: "zoomControlEnabled",
+                 value: config["zoomControlEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Error Screens Enabled", key: "errorScreensEnabled",
+                 value: config["errorScreensEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Dynamic Map Rotation", key: "dynamicMapRotationEnabled",
+                 value: config["dynamicMapRotationEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Spinner Enabled", key: "spinnerEnabled",
+                 value: config["spinnerEnabled"] ?? false,
+                 type: .boolean),
+            Flag(name: "Use Background Service", key: "useBackgroundService",
+                 value: config["useBackgroundService"] ?? false,
+                 type: .boolean),
+            Flag(name: "Background Service Timeout", key: "backgroundServiceTimeout",
+                 value: config["backgroundServiceTimeout"] ?? 300.0,
+                 type: .double),
+            Flag(name: "Geofence Check Timeout", key: "geoFenceCheckTimeout",
+                 value: config["geoFenceCheckTimeout"] ?? 1.0,
+                 type: .double),
+            Flag(name: "Positioning Session Timeout", key: "positioningSessionTimeout",
+                 value: config["positioningSessionTimeout"] ?? 1.0,
+                 type: .double),
+            Flag(name: "Session Refresh Time", key: "sessionRefreshTime",
+                 value: config["sessionRefreshTime"] ?? 900,
+                 type: .integer)
+        ]
+    }
+    
+    private func formatValue(_ flag: Flag) -> String {
+        switch flag.type {
+        case .double:
+            return String(format: "%.1f", flag.value as? Double ?? 0)
+        case .integer:
+            return "\(flag.value as? Int ?? 0)"
+        default:
+            return ""
         }
-
-        // Ensure we are its parent.
-        if child.parent !== self {
-            addChild(child)
-            child.didMove(toParent: self)
+    }
+    
+    private func hasOverridesApplied() -> Bool {
+        return bridge.compass?.hasOverridesApplied() ?? false
+    }
+    
+    private func applyTapped() {
+        var overrides: [String: Any] = [:]
+        for flag in flags {
+            overrides[flag.key] = flag.value
         }
-
-        // Ensure the map view is in our view hierarchy with constraints.
-        if child.view.superview !== view {
-            let v = child.view!
-            v.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(v)
-            NSLayoutConstraint.activate([
-                v.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-                v.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-                v.topAnchor.constraint(equalTo: view.topAnchor),   // or safeArea top if you prefer
-                v.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)
-            ])
+        
+        bridge.compass?.applyFeatureFlagOverrides(overrides)
+        
+        if let storeId = currentStoreId {
+            UserDefaults.standard.set(overrides, forKey: "FeatureFlagOverrides_\(storeId)")
+            UserDefaults.standard.synchronize()
         }
-
-        view.setNeedsLayout()
-        view.layoutIfNeeded()
+        
+        showSuccessAlert = true
+    }
+    
+    private func revertTapped() {
+        if let storeId = currentStoreId {
+            UserDefaults.standard.removeObject(forKey: "FeatureFlagOverrides_\(storeId)")
+            UserDefaults.standard.synchronize()
+        }
+        
+        bridge.compass?.revertToOriginalConfig()
+        loadFlags()
+        showRevertAlert = true
     }
 }
 
-struct MapRootHost: UIViewControllerRepresentable {
-    let viewController: LDRootViewController
-
-    func makeUIViewController(context: Context) -> MapContainerViewController {
-        MapContainerViewController(mapRoot: viewController)
-    }
-
-    func updateUIViewController(_ uiViewController: MapContainerViewController, context: Context) {
-        // Re-attach every time SwiftUI updates/mounts this host.
-        uiViewController.rehostIfNeeded()
+struct NumericInputSheet: View {
+    let flag: FeatureFlagsView.Flag
+    let onSave: (Any) -> Void
+    @State private var inputText: String = ""
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 20) {
+                Text(flag.name)
+                    .font(.headline)
+                    .padding(.top, 20)
+                
+                TextField("Enter value", text: $inputText)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .keyboardType(flag.type == .double ? .decimalPad : .numberPad)
+                    .padding(.horizontal)
+                
+                Spacer()
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("OK") {
+                        if flag.type == .double {
+                            onSave(Double(inputText) ?? 0)
+                        } else {
+                            onSave(Int(inputText) ?? 0)
+                        }
+                        dismiss()
+                    }
+                    .fontWeight(.bold)
+                }
+            }
+            .onAppear {
+                if flag.type == .double {
+                    inputText = String(format: "%.1f", flag.value as? Double ?? 0)
+                } else {
+                    inputText = "\(flag.value as? Int ?? 0)"
+                }
+            }
+        }
     }
 }
