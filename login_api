@@ -1,243 +1,258 @@
-import SwiftUI
-import compass_sdk_ios
+#if DEBUG
+extension Compass {
+    private struct AssociatedKeys {
+        static var originalStoreConfig = "originalStoreConfig"
+        static var hasAppliedOverrides = "hasAppliedOverrides"
+    }
 
-struct FeatureFlagsView: View {
-    @ObservedObject var bridge: HomeViewModel
-    @State private var flags: [Flag] = []
-    @State private var originalBackendConfig: [String: Any]?
-    @State private var currentStoreId: Int?
-    @State private var showSuccessAlert = false
-    @State private var showRevertAlert = false
-    @State private var editingFlag: Flag?
-    @Environment(\.dismiss) private var dismiss
-    
-    struct Flag: Identifiable {
-        let id = UUID()
-        let name: String
-        let key: String
-        var value: Any
-        let type: FlagType
-        
-        enum FlagType {
-            case boolean
-            case double
-            case integer
+    private var originalStoreConfig: StoreConfig? {
+        get {
+            objc_getAssociatedObject(self, &AssociatedKeys.originalStoreConfig) as? StoreConfig
+        }
+        set {
+            objc_setAssociatedObject(self, &AssociatedKeys.originalStoreConfig, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         }
     }
-    
-    var body: some View {
-        NavigationView {
-            List {
-                Section(header: Text("Boolean Flags")) {
-                    ForEach(flags.filter { $0.type == .boolean }) { flag in
-                        HStack {
-                            Text(flag.name)
-                                .font(.subheadline)
-                            Spacer()
-                            Toggle("", isOn: Binding(
-                                get: { flag.value as? Bool ?? false },
-                                set: { newValue in
-                                    if let index = flags.firstIndex(where: { $0.id == flag.id }) {
-                                        flags[index].value = newValue
-                                    }
-                                }
-                            ))
-                        }
-                    }
-                }
-                
-                Section(header: Text("Numeric Flags")) {
-                    ForEach(flags.filter { $0.type != .boolean }) { flag in
-                        HStack {
-                            Text(flag.name)
-                                .font(.subheadline)
-                            Spacer()
-                            Text(formatValue(flag))
-                                .foregroundColor(.blue)
-                                .onTapGesture {
-                                    editingFlag = flag
-                                }
-                        }
-                    }
-                }
-            }
-            .navigationTitle(hasOverridesApplied() ? "Feature Flags (Mod)" : "Feature Flags")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    Button("Revert") {
-                        revertTapped()
-                    }
-                    
-                    Button("Apply") {
-                        applyTapped()
-                    }
-                    .fontWeight(.bold)
-                }
-            }
-            .onAppear {
-                loadFlags()
-            }
-            .alert("Success", isPresented: $showSuccessAlert) {
-                Button("OK") {
-                    dismiss()
-                }
-            } message: {
-                Text("Feature flags applied successfully")
-            }
-            .alert("Reverted", isPresented: $showRevertAlert) {
-                Button("OK") { }
-            } message: {
-                Text("Feature flags reverted to backend defaults")
-            }
-            .sheet(item: $editingFlag) { flag in
-                NumericInputSheet(flag: flag) { newValue in
-                    if let index = flags.firstIndex(where: { $0.id == flag.id }) {
-                        flags[index].value = newValue
-                    }
-                }
-            }
+
+    private var hasAppliedOverrides: Bool {
+        get {
+            objc_getAssociatedObject(self, &AssociatedKeys.hasAppliedOverrides) as? Bool ?? false
+        }
+        set {
+            objc_setAssociatedObject(self, &AssociatedKeys.hasAppliedOverrides, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         }
     }
-    
-    private func loadFlags() {
-        currentStoreId = bridge.compass?.currentStore
-        originalBackendConfig = bridge.compass?.getCurrentStoreConfig()
-        guard let config = originalBackendConfig else { return }
-        
-        flags = [
-            Flag(name: "Blue Dot Enabled", key: "bluedotEnabled",
-                 value: config["bluedotEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Dynamic Map Enabled", key: "dynamicMapEnabled",
-                 value: config["dynamicMapEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Zoom Control Enabled", key: "zoomControlEnabled",
-                 value: config["zoomControlEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Error Screens Enabled", key: "errorScreensEnabled",
-                 value: config["errorScreensEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Dynamic Map Rotation", key: "dynamicMapRotationEnabled",
-                 value: config["dynamicMapRotationEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Spinner Enabled", key: "spinnerEnabled",
-                 value: config["spinnerEnabled"] ?? false,
-                 type: .boolean),
-            Flag(name: "Use Background Service", key: "useBackgroundService",
-                 value: config["useBackgroundService"] ?? false,
-                 type: .boolean),
-            Flag(name: "Background Service Timeout", key: "backgroundServiceTimeout",
-                 value: config["backgroundServiceTimeout"] ?? 300.0,
-                 type: .double),
-            Flag(name: "Geofence Check Timeout", key: "geoFenceCheckTimeout",
-                 value: config["geoFenceCheckTimeout"] ?? 1.0,
-                 type: .double),
-            Flag(name: "Positioning Session Timeout", key: "positioningSessionTimeout",
-                 value: config["positioningSessionTimeout"] ?? 1.0,
-                 type: .double),
-            Flag(name: "Session Refresh Time", key: "sessionRefreshTime",
-                 value: config["sessionRefreshTime"] ?? 900,
-                 type: .integer)
+
+    public func getCurrentStoreConfig() -> [String: Any]? {
+        guard let assetService = serviceLocator.getAssetService() as? AssetServiceImpl,
+              let storeConfig = assetService.lastStoreConfig else { return nil }
+
+        var config: [String: Any] = [:]
+
+        config["bluedotEnabled"] = storeConfig.bluedotEnabled ?? false
+        config["bluedotDisplayed"] = storeConfig.bluedotDisplayed ?? false
+        config["dynamicMapEnabled"] = storeConfig.dynamicMapEnabled ?? false
+        config["zoomControlEnabled"] = storeConfig.zoomControlEnabled ?? false
+        config["errorScreensEnabled"] = storeConfig.errorScreensEnabled ?? false
+        config["dynamicMapRotationEnabled"] = storeConfig.dynamicMapRotationEnabled ?? false
+        config["spinnerEnabled"] = storeConfig.spinnerEnabled ?? false
+        config["useBackgroundService"] = storeConfig.useBackgroundService ?? false
+        config["heartbeatInLocation"] = storeConfig.heartbeatInLocation ?? false
+        config["heartBeatInUser"] = storeConfig.heartBeatInUser ?? false
+        config["navigationEnabled"] = storeConfig.navigationEnabled ?? false
+        config["valid"] = storeConfig.valid ?? false
+        config["analytics"] = storeConfig.analytics ?? false
+
+        config["backgroundServiceTimeout"] = storeConfig.backgroundServiceTimeout ?? 300.0
+        config["geoFenceCheckTimeout"] = storeConfig.geoFenceCheckTimeout ?? 1.0
+        config["positioningSessionTimeout"] = storeConfig.positioningSessionTimeout ?? 1.0
+        config["geofenceRadius"] = storeConfig.geofenceRadius ?? 0.0
+        config["sessionRefreshTime"] = storeConfig.sessionRefreshTime ?? SessionTime.positionRefreshTime
+        config["heartbeatInterval"] = storeConfig.heartbeatInterval ?? 300_000.0
+        config["batchInterval"] = storeConfig.batchInterval ?? 60_000.0
+        config["latitude"] = storeConfig.latitude ?? 0.0
+        config["longitude"] = storeConfig.longitude ?? 0.0
+        config["createdAt"] = storeConfig.createdAt ?? 0.0
+        config["updatedAt"] = storeConfig.updatedAt ?? 0.0
+
+        config["supportedEventList"] = storeConfig.supportedEventList ?? ""
+        config["storeId"] = storeConfig.storeId ?? 0
+        config["mapType"] = storeConfig.mapType ?? ""
+
+        let offsetConfig = storeConfig.offset ?? StoreConfigOffset(x: 0, y: 0)
+        config["offset"] = [
+            "x": Double(offsetConfig.x),
+            "y": Double(offsetConfig.y)
         ]
-    }
-    
-    private func formatValue(_ flag: Flag) -> String {
-        switch flag.type {
-        case .double:
-            return String(format: "%.1f", flag.value as? Double ?? 0)
-        case .integer:
-            return "\(flag.value as? Int ?? 0)"
-        default:
-            return ""
-        }
-    }
-    
-    private func hasOverridesApplied() -> Bool {
-        return bridge.compass?.hasOverridesApplied() ?? false
-    }
-    
-    private func applyTapped() {
-        var overrides: [String: Any] = [:]
-        for flag in flags {
-            overrides[flag.key] = flag.value
-        }
-        
-        bridge.compass?.applyFeatureFlagOverrides(overrides)
-        
-        if let storeId = currentStoreId {
-            UserDefaults.standard.set(overrides, forKey: "FeatureFlagOverrides_\(storeId)")
-            UserDefaults.standard.synchronize()
-        }
-        
-        showSuccessAlert = true
-    }
-    
-    private func revertTapped() {
-        if let storeId = currentStoreId {
-            UserDefaults.standard.removeObject(forKey: "FeatureFlagOverrides_\(storeId)")
-            UserDefaults.standard.synchronize()
-        }
-        
-        bridge.compass?.revertToOriginalConfig()
-        loadFlags()
-        showRevertAlert = true
-    }
-}
 
-struct NumericInputSheet: View {
-    let flag: FeatureFlagsView.Flag
-    let onSave: (Any) -> Void
-    @State private var inputText: String = ""
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                Text(flag.name)
-                    .font(.headline)
-                    .padding(.top, 20)
-                
-                TextField("Enter value", text: $inputText)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .keyboardType(flag.type == .double ? .decimalPad : .numberPad)
-                    .padding(.horizontal)
-                
-                Spacer()
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("OK") {
-                        if flag.type == .double {
-                            onSave(Double(inputText) ?? 0)
-                        } else {
-                            onSave(Int(inputText) ?? 0)
-                        }
-                        dismiss()
-                    }
-                    .fontWeight(.bold)
-                }
-            }
-            .onAppear {
-                if flag.type == .double {
-                    inputText = String(format: "%.1f", flag.value as? Double ?? 0)
-                } else {
-                    inputText = "\(flag.value as? Int ?? 0)"
-                }
-            }
+        let navigationConfig = storeConfig.navigation ?? NavigationConfig()
+        config["navigation"] = [
+            "enabled": navigationConfig.enabled ?? (storeConfig.navigationEnabled ?? false),
+            "refreshDuration": navigationConfig.refreshDuration ?? 0.0,
+            "isAutomaticNavigation": navigationConfig.isAutomaticNavigation
+        ]
+
+        let mapUiConfig = storeConfig.mapUi ?? MapUiConfig()
+        config["mapUi"] = [
+            "bannerEnabled": mapUiConfig.bannerEnabled,
+            "snackBarEnabled": mapUiConfig.snackBarEnabled,
+            "pinLocationUnavailableBannerEnabled": mapUiConfig.pinLocationUnavailableBannerEnabled
+        ]
+
+        let pinsConfig = storeConfig.pins ?? PinsConfig()
+        config["pins"] = [
+            "actionAlleyEnabled": pinsConfig.actionAlleyEnabled,
+            "groupPinsEnabled": pinsConfig.groupPinsEnabled
+        ]
+
+        return config
+    }
+
+    public func applyFeatureFlagOverrides(_ overrides: [String: Any]) {
+        guard let assetService = serviceLocator.getAssetService() as? AssetServiceImpl,
+              var storeConfig = assetService.lastStoreConfig else { return }
+
+        if !hasAppliedOverrides {
+            originalStoreConfig = storeConfig
+            hasAppliedOverrides = true
         }
+
+        if let bluedotEnabled = overrides["bluedotEnabled"] as? Bool {
+            storeConfig.bluedotEnabled = bluedotEnabled
+//            storeConfig.bluedotDisplayed = bluedotEnabled
+        }
+//        if let bluedotDisplayed = overrides["bluedotDisplayed"] as? Bool {
+//            storeConfig.bluedotDisplayed = bluedotDisplayed
+//        }
+        if let dynamicMapEnabled = overrides["dynamicMapEnabled"] as? Bool {
+            storeConfig.dynamicMapEnabled = dynamicMapEnabled
+        }
+        if let zoomControlEnabled = overrides["zoomControlEnabled"] as? Bool {
+            storeConfig.zoomControlEnabled = zoomControlEnabled
+        }
+        if let errorScreensEnabled = overrides["errorScreensEnabled"] as? Bool {
+            storeConfig.errorScreensEnabled = errorScreensEnabled
+        }
+        if let dynamicMapRotationEnabled = overrides["dynamicMapRotationEnabled"] as? Bool {
+            storeConfig.dynamicMapRotationEnabled = dynamicMapRotationEnabled
+        }
+        if let spinnerEnabled = overrides["spinnerEnabled"] as? Bool {
+            storeConfig.spinnerEnabled = spinnerEnabled
+        }
+        if let useBackgroundService = overrides["useBackgroundService"] as? Bool {
+            storeConfig.useBackgroundService = useBackgroundService
+        }
+        if let heartbeatInLocation = overrides["heartbeatInLocation"] as? Bool {
+            storeConfig.heartbeatInLocation = heartbeatInLocation
+        }
+        if let heartBeatInUser = overrides["heartBeatInUser"] as? Bool {
+            storeConfig.heartBeatInUser = heartBeatInUser
+        }
+        if let backgroundServiceTimeout = overrides["backgroundServiceTimeout"] as? Double {
+            storeConfig.backgroundServiceTimeout = backgroundServiceTimeout
+        }
+        if let geoFenceCheckTimeout = overrides["geoFenceCheckTimeout"] as? Double {
+            storeConfig.geoFenceCheckTimeout = geoFenceCheckTimeout
+        }
+        if let positioningSessionTimeout = overrides["positioningSessionTimeout"] as? Double {
+            storeConfig.positioningSessionTimeout = positioningSessionTimeout
+        }
+        if let geofenceRadius = overrides["geofenceRadius"] as? Double {
+            storeConfig.geofenceRadius = geofenceRadius
+        }
+        if let sessionRefreshTime = overrides["sessionRefreshTime"] as? Int {
+            storeConfig.sessionRefreshTime = sessionRefreshTime
+        }
+        if let heartbeatInterval = overrides["heartbeatInterval"] as? Double {
+            storeConfig.heartbeatInterval = heartbeatInterval
+        }
+        if let batchInterval = overrides["batchInterval"] as? Double {
+            storeConfig.batchInterval = batchInterval
+        }
+        if let latitude = overrides["latitude"] as? Double {
+            storeConfig.latitude = latitude
+        }
+        if let longitude = overrides["longitude"] as? Double {
+            storeConfig.longitude = longitude
+        }
+        if let createdAt = overrides["createdAt"] as? Double {
+            storeConfig.createdAt = createdAt
+        }
+        if let updatedAt = overrides["updatedAt"] as? Double {
+            storeConfig.updatedAt = updatedAt
+        }
+        if let navigationEnabled = overrides["navigationEnabled"] as? Bool {
+            storeConfig.navigationEnabled = navigationEnabled
+        }
+        if let valid = overrides["valid"] as? Bool {
+            storeConfig.valid = valid
+        }
+        if let analytics = overrides["analytics"] as? Bool {
+            storeConfig.analytics = analytics
+        }
+        if let supportedEventList = overrides["supportedEventList"] as? String {
+            storeConfig.supportedEventList = supportedEventList
+        }
+        if let storeId = overrides["storeId"] as? Int {
+            storeConfig.storeId = storeId
+        }
+        if let bluedotDisplayed = overrides["bluedotDisplayed"] as? Bool {
+            storeConfig.bluedotDisplayed = bluedotDisplayed
+        }
+        if let mapType = overrides["mapType"] as? String {
+            storeConfig.mapType = mapType
+        }
+        if let offsetOverrides = overrides["offset"] as? [String: Any] {
+            var offsetConfig = storeConfig.offset ?? StoreConfigOffset(x: 0, y: 0)
+            if let x = offsetOverrides["x"] as? Double {
+                offsetConfig.x = CGFloat(x)
+            }
+            if let y = offsetOverrides["y"] as? Double {
+                offsetConfig.y = CGFloat(y)
+            }
+            storeConfig.offset = offsetConfig
+        }
+        if let navigationOverrides = overrides["navigation"] as? [String: Any] {
+            var navigationConfig = storeConfig.navigation ?? NavigationConfig()
+            if let enabled = navigationOverrides["enabled"] as? Bool {
+                navigationConfig.enabled = enabled
+            }
+            if let refreshDuration = navigationOverrides["refreshDuration"] as? Double {
+                navigationConfig.refreshDuration = refreshDuration
+            }
+            if let isAutomaticNavigation = navigationOverrides["isAutomaticNavigation"] as? Bool {
+                navigationConfig.isAutomaticNavigation = isAutomaticNavigation
+            }
+            storeConfig.navigation = navigationConfig
+        }
+        if let mapUiOverrides = overrides["mapUi"] as? [String: Any] {
+            var mapUiConfig = storeConfig.mapUi ?? MapUiConfig()
+            if let bannerEnabled = mapUiOverrides["bannerEnabled"] as? Bool {
+                mapUiConfig.bannerEnabled = bannerEnabled
+            }
+            if let snackBarEnabled = mapUiOverrides["snackBarEnabled"] as? Bool {
+                mapUiConfig.snackBarEnabled = snackBarEnabled
+            }
+            if let pinLocationUnavailableBannerEnabled =
+                mapUiOverrides["pinLocationUnavailableBannerEnabled"] as? Bool {
+                mapUiConfig.pinLocationUnavailableBannerEnabled = pinLocationUnavailableBannerEnabled
+            }
+            storeConfig.mapUi = mapUiConfig
+        }
+        if let pinsOverrides = overrides["pins"] as? [String: Any] {
+            var pinsConfig = storeConfig.pins ?? PinsConfig()
+            if let actionAlleyEnabled = pinsOverrides["actionAlleyEnabled"] as? Bool {
+                pinsConfig.actionAlleyEnabled = actionAlleyEnabled
+            }
+            if let groupPinsEnabled = pinsOverrides["groupPinsEnabled"] as? Bool {
+                pinsConfig.groupPinsEnabled = groupPinsEnabled
+            }
+            storeConfig.pins = pinsConfig
+        }
+
+        assetService.lastStoreConfig = storeConfig
+
+        viewModel.updateStoreConfiguration(storeConfig)
+    }
+
+    public func revertToOriginalConfig() {
+        guard let originalConfig = originalStoreConfig,
+              let assetService = serviceLocator.getAssetService() as? AssetServiceImpl else { return }
+
+        assetService.lastStoreConfig = originalConfig
+        viewModel.updateStoreConfiguration(originalConfig)
+
+        hasAppliedOverrides = false
+        originalStoreConfig = nil
+    }
+
+    public func hasOverridesApplied() -> Bool {
+        return hasAppliedOverrides
+    }
+
+    public func resetOverrideTracking() {
+        hasAppliedOverrides = false
+        originalStoreConfig = nil
     }
 }
+#endif
