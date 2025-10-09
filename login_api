@@ -1,116 +1,342 @@
+//
+//  SwiftUICompassDemoView.swift
+//  compass-sample-app
+//
+//  Created by p0a0595 on 9/11/25.
+//
+
 import SwiftUI
-import compass_sdk_ios
 
-struct EnvironmentSettingsView: View {
-    @ObservedObject var bridge: HomeViewModel
+struct HomeView: View {
+    @StateObject private var bridge = HomeViewModel()
+    @State private var showAisleSheet = false
+    @State private var showStaticPath = false
+    @State private var showAssetSheet = false
+    @State private var showGenericSheet = false
 
-    @State private var selectedBackend: CompassEnvironment = Environment.backendEnv
-    @State private var selectedTokenType: TokenType = Environment.tokenType
-    @State private var mockUserEnabled: Bool = Environment.mockUser
-    @State private var accountIdText: String = Environment.accountID
-    @State private var initialStoreText: String = String(Environment.initialStore)
-
-    @Environment(\.dismiss) private var dismiss
-
-    private let backendOptions: [CompassEnvironment] = [.staging, .production, .perf, .preProd, .stageGKE]
-    private let tokenOptions: [TokenType] = [.User, .IAM, .Pingfed]
-
+    @State private var goToFirstScreen = false
+    @State private var didAutoInit = false
+    
+    @State private var showFeatureFlags = false
+    @State private var showEnvironmentSheet = false
+    
+    private var controlHeight: CGFloat = 44
+    
     var body: some View {
-        NavigationView {
-            Form {
-                Section("Backend") {
-                    Picker("Environment", selection: $selectedBackend) {
-                        ForEach(backendOptions, id: \.self) { option in
-                            Text(displayName(for: option)).tag(option)
+        VStack(spacing: 5) {
+            
+            // top row
+            HStack(spacing: 8) {
+                TextField("Store ID", text: $bridge.storeIDText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+                
+                Button(action: { bridge.initialize(false) }) {
+                    Text("Initialize")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(.white)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.blue)
+                )
+                
+                Menu {
+                    Button(action: {bridge.shouldZoomOnPins.toggle()}) {
+                        Label("Zoom-in on pin drop", systemImage: bridge.shouldZoomOnPins ? "checkmark.circle.fill" : "circle")
+                    }
+                    
+                    Button(action: {bridge.resetZoom.toggle()}) {
+                        Label("Reset zoom on clear map", systemImage: bridge.resetZoom ? "checkmark.circle.fill" : "circle")
+                    }
+                    
+                    Divider()
+                    
+                    Button("Copy console text") {
+                        bridge.copyConsoleTextToClipboard()
+                    }
+                    
+                    Button("Clear console") {
+                        bridge.clearConsole()
+                    }
+                    
+                    Button(bridge.isConsoleHidden ? "Show console" : "Hide console") {
+                        bridge.toggleConsoleVisibility()
+                    }
+                    
+                    Divider()
+                    
+                    Button("Stop positioning", role: .destructive) {
+                        bridge.stopPositioning()
+                    }
+                    
+                } label: {
+                    Text("Options")
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .background(RoundedRectangle(cornerRadius: 8))
+                    
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 3)
+            
+            // Middle row
+            HStack(spacing: 8) {
+                Menu {
+                    Text("Select Update Event API")
+
+                    Button("Update Event") {
+                        bridge.updateEvent()
+                    }
+                    Button("Update Event List") {
+                        bridge.updateEventList()
+                    }
+                    
+                } label: {
+                    Text("Update Event")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 8))
+                }
+                
+                Menu {
+                    Text("Select a pin type")
+
+                    Button("Asset Pin") {
+                        showAssetSheet = true
+                    }
+                    Button("Generic Pin") {
+                        showGenericSheet = true
+                    }
+                    Button("Aisle Pin") {
+                        showAisleSheet = true
+                    }
+                    Button("Static Path") {
+                        showStaticPath = true
+                        showAisleSheet = true
+                    }
+                    Button("Get Distance") {
+                        bridge.getUserDistance()
+                    }
+                    Button("Test Hardcoded Distance") {
+                        bridge.testGetUserDistanceWithHardcodedPin()
+                    }
+                    
+                } label: {
+                    Text("Display Pin")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 8))
+                }
+                
+                Menu {
+                    Text("Select API")
+
+                    Button("Clear Map") {
+                        bridge.clearMap()
+                    }
+                    Button("Get Location") {
+                        bridge.getLocation(assetId: "1645190")
+                    }
+                    Button("Kill Switch") {
+                        bridge.killSwitch()
+                    }
+                    
+                } label: {
+                    Text("Other APIs")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 3)
+            
+            
+            // last row
+            HStack(spacing: 8) {
+                Button(action: { goToFirstScreen = true }) {
+                    Text("Next Screen")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(.white)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.blue)
+                )
+                
+                Button(action: {  }) {
+                    Text("Re-Mount")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(.white)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.blue)
+                )
+                
+                Menu {
+                    Button("Feature Flags") {
+                        showFeatureFlags = true
+                    }
+                    Button("Environment") {
+                        showEnvironmentSheet = true
+                    }
+                } label: {
+                    Text("Env/Flags")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(.white)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.blue)
+                )
+//                Spacer()
+//                    .frame(maxWidth: .infinity)
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 3)
+            
+            // Progress strip
+            HStack(spacing: 8) {
+                ProgressView(value: bridge.calibrationProgress)
+                    .progressViewStyle(.linear)
+                    .frame(height: 24)
+                    .scaleEffect(y: 3, anchor: .center)
+                    .tint(bridge.calibrationProgress >= 1.0 ? .green : .red)
+                    .overlay(alignment: .leading) {
+                        Text(" ♾️ Calibration")
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.leading, 4)
+                    }
+                    .animation(.easeInOut, value: bridge.calibrationProgress)
+                
+                ProgressView(value: bridge.positioningProgress)
+                    .progressViewStyle(.linear)
+                    .frame(height: 24)
+                    .scaleEffect(y: 3, anchor: .center)
+                    .tint(bridge.positioningProgress >= 1.0 ? .green : .red)
+                    .overlay(alignment: .leading) {
+                        Text(" 🚶🏼 Position")
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.leading, 4)
+                    }
+                    .animation(.easeInOut, value: bridge.positioningProgress)
+                
+                ProgressView(value: bridge.isPositionLocked ? 1.0 : 0.0)
+                    .progressViewStyle(.linear)
+                    .frame(height: 24)
+                    .scaleEffect(y: 3, anchor: .center)
+                    .tint(bridge.isPositionLocked ? .green : .red)
+                    .overlay(alignment: .leading) {
+                        Text(" 🔒 Position Lock")
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.leading, 4)
+                    }
+                    .animation(.easeInOut, value: bridge.isPositionLocked)
+            }
+            .frame(height: 12)
+            .padding(.horizontal, 8)
+            .padding(.top, 3)
+
+            
+            // Map area
+            MapRootHost(viewController: bridge.mapRootViewController)
+                .background(Color(.systemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            
+            
+            if !bridge.isConsoleHidden {
+                // Console
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        Text(bridge.consoleText.isEmpty ? "— console —" : bridge.consoleText)
+                            .font(.system(.footnote, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                        
+                        Color.clear
+                            .frame(height: 1)
+                            .id("BOTTOM")
+                    }
+                    .frame(height: 160)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.secondary.opacity(0.35))
+                    )
+                    .onChange(of: bridge.scrollToken) { _ in
+                        withAnimation {
+                            proxy.scrollTo("BOTTOM", anchor: .bottom)
                         }
                     }
-                    .pickerStyle(.menu)
                 }
-
-                Section("Authentication") {
-                    Picker("Token Type", selection: $selectedTokenType) {
-                        ForEach(tokenOptions, id: \.self) { option in
-                            Text(displayName(for: option)).tag(option)
-                        }
-                    }
-                    .pickerStyle(.menu)
-
-                    Toggle("Mock User", isOn: $mockUserEnabled)
-
-                    TextField("Account ID", text: $accountIdText)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
-                }
-
-                Section("Store Settings", footer: Text("Applying changes will re-initialize the Compass SDK if it is currently running.")) {
-                    TextField("Initial Store", text: $initialStoreText)
-                        .keyboardType(.numberPad)
-                }
-            }
-            .navigationTitle("Environment")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Apply") {
-                        applyChanges()
-                    }
-                    .fontWeight(.bold)
-                    .disabled(!canApply)
-                }
-            }
-            .onAppear {
-                loadDefaults()
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
             }
         }
-    }
-
-    private var canApply: Bool {
-        !accountIdText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func loadDefaults() {
-        selectedBackend = Environment.backendEnv
-        selectedTokenType = Environment.tokenType
-        mockUserEnabled = Environment.mockUser
-        accountIdText = Environment.accountID
-        initialStoreText = String(Environment.initialStore)
-    }
-
-    private func applyChanges() {
-        Environment.backendEnv = selectedBackend
-        Environment.tokenType = selectedTokenType
-        Environment.mockUser = mockUserEnabled
-        Environment.accountID = accountIdText.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if let storeValue = Int(initialStoreText.trimmingCharacters(in: .whitespacesAndNewlines)) {
-            Environment.initialStore = storeValue
+        .onAppear {
+            guard !didAutoInit else { return }
+            didAutoInit = true
+            DispatchQueue.main.async {
+                bridge.initialize(false)
+            }
         }
-
-        bridge.applyEnvironmentChangesAndReinitializeIfNeeded()
-        dismiss()
-    }
-
-    private func displayName(for environment: CompassEnvironment) -> String {
-        switch environment {
-        case .staging: return "Staging"
-        case .production: return "Production"
-        case .perf: return "Perf"
-        case .preProd: return "Pre-Prod"
-        case .stageGKE: return "Stage GKE"
-        @unknown default:
-            return environment.rawValue.capitalized
+        .navigationTitle("Main Map")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showAisleSheet) {
+            AislePinInputSheet { tuples in
+                bridge.displayPinsV2(pins: tuples, isStaticPathVisible: showStaticPath)
+                showStaticPath = false
+            }
+            .presentationDetents([.medium, .large])
         }
-    }
-
-    private func displayName(for tokenType: TokenType) -> String {
-        switch tokenType {
-        case .User: return "User"
-        case .IAM: return "IAM"
-        case .Pingfed: return "PingFed"
+        .sheet(isPresented: $showAssetSheet) {
+            AssetPinInputSheet { assetId in
+                bridge.displayAssetPin(id: assetId)
+            }
+            .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showGenericSheet) {
+            GenericPinInputSheet { encodedId in
+                bridge.displayGenericPin(encodedId: encodedId)
+            }
+            .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showFeatureFlags){
+            FeatureFlagsView(bridge: bridge)
+        }
+        .sheet(isPresented: $showEnvironmentSheet) {
+            EnvironmentSettingsView(bridge: bridge)
+        }
+        .navigationDestination(isPresented: $goToFirstScreen) {
+            FirstScreenView(bridge: bridge)
         }
     }
+}
+
+#Preview {
+    HomeView()
 }
