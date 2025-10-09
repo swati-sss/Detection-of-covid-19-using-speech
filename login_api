@@ -1,144 +1,19 @@
-import Combine
-import compass_sdk_ios
-import Foundation
-
-final class EnvironmentStore: ObservableObject {
-    static let shared = EnvironmentStore()
-
-    @Published var backendEnv: CompassEnvironment = .staging
-    @Published var mockUser: Bool = false
-    @Published var tokenType: TokenType = .User
-    @Published var initialStore: Int = 5447
-    @Published var accountID: String = "988sdd-erer-43434"
-
-    private init() {}
-}
-
-enum Environment {
-    private static var store: EnvironmentStore { EnvironmentStore.shared }
-
-    static var backendEnv: CompassEnvironment {
-        get { store.backendEnv }
-        set { store.backendEnv = newValue }
-    }
-
-    static var mockUser: Bool {
-        get { store.mockUser }
-        set { store.mockUser = newValue }
-    }
-
-    static var tokenType: TokenType {
-        get { store.tokenType }
-        set { store.tokenType = newValue }
-    }
-
-    static var initialStore: Int {
-        get { store.initialStore }
-        set { store.initialStore = newValue }
-    }
-
-    static var accountID: String {
-        get { store.accountID }
-        set { store.accountID = newValue }
-    }
-
-    static var authParmeter: AuthParameter {
-        var token: String
-        var consumerID: String
-
-        switch tokenType {
-        case .User:
-            token = """
-            MTAyOTYyMDE4dSxyrP0t1Jm+zsHDj/m58lYEBSWPPQT0ASxP67P/p/R/XCviMJx6YIyuweMm/D4szCyTMBgQUr8MJWMSm3S2rqgF8Z3\
-            ooqOrbfBJzORYy7wGmKcywYDpRHb13NVCvU9dVoZ2h67qtmWCX5xnAS95ZSpQBIV+q5odNqvzV1gAYlvCveWZ0+3rq3ePWs9LhzZ7tX\
-            oVX6MbrQS+QrPDOp+Ee8FAqtMt7lzQdJSvbzFlrGCMSMVOB6MAabmTP67qQX6SO9FaZQ9xSvIHt7THYc5BH11KK3aFtE5QbXB6Vt5ZA\
-            zN3ltf8skOawMmpueLResLhye4vrf8JNA1nW1zzpx3kxQ==
-            """
-            if backendEnv == .production {
-                consumerID = "069B60DB-4E9C-45B5-AD25-E475C9A0DB7A"
-            } else {
-                consumerID = "573e4372-b4f0-4f01-a58d-3f7aff19e078"
-            }
-        case .Pingfed:
-            token = """
-            eyJhbGciOiJSUzI1NiIsImtpZCI6InBmZWRzdGFnZV9zaWduX01heTIwMjUiLCJwaS5hdG0iOiIzIn0.eyJzY29wZSI6Im9wZW5pZCBmdWxsIiwiYXV0aG9yaXphdGlvbl9kZXRhaWxzIjpbXSwiY2xpZW50X2lkIjoiR0lGMkFQUCIsImd1aWQiOiJFN2QyVnpyR3JTa1Zha2ZVY25sdUF6U0JEM25XUnlYTiIsImlzcyI6Imh0dHBzOi8vcGZlZGNlcnQud2FsLW1hcnQuY29tIiwianRpIjoickZvMElEeFYiLCJhdWQiOiJHSUYyQVBQIiwic3ViIjoiYjBwMDd2NkBob21lb2ZmaWNlLndhbC1tYXJ0LmNvbSIsInVwbiI6ImIwcDA3djZAaG9tZW9mZmljZS53YWwtbWFydC5jb20iLCJuYmYiOjE3MzcxMzQzNjMsImlhdCI6MTczNzEzNDQ4MywidXNlcmlkIjoiYjBwMDd2NiIsIndpbiI6IjIzMDIxMDQyMCIsImV4cCI6MTczNzE3NzY4M30.AOJ7bM7mwNm79zZ0Z_7-HnbeVznAiLLMMba24pzimmGJACR8skMKzoEYFfqZWf_4Ovj2EAjqJMlLZhyp0H1u_Y3KELWpZ-MCwD0ngp6mM84y2KWhk8HszJFAcnTIeEr151sdnRWYLqQm12qIWQ_oJy7PCzqGbHswr262WksgLu_bOTZuS1wph8wT16uq1b3ixp2NeDF8nT3O1hqf_KkZcN5hiZbjgWBvrD5h86s72hOWQdMh6mUzDD8BS-sE5pWCoR9U7BatBrqBkG92KP6DWVuzVrB2F_1xriZFwhn4b69hTHOR_HNCNPPrDri6P3MWCZvH9yFkmMhjgUJsmF_GOksoeCnWZdu6kfIgJXT2aHsjUdKURH2sZvwMJZpFkU-dqEXOgE61suunvXdKTcwSFEjwVEPQcKds1nFsUrXk_k-4q6o_W1_zgTgXg7btw6iAM0Jr928w4GsdcZXtZyCDzGPR1WwYHVI1XHQ2zmGKWIEDwFSZJNecLEvlzz2xQ52Y28s1aRwjlrP3fu3IS_gGI-D2_uh0Q-1LvFFTD06i38P7oYtYAgVqDlHiuVrZOIlvDmQpeImXx1O5CkGYQhXjxqt4cRCzhcPV-Di7C74K92hMxavuWxH6OwSagWl3mLSh2nwi1pL-aBATpAcW-OcRpgOZ08qSDrd0BdW2vQidnAM
-            """
-            if backendEnv == .production {
-                consumerID = "069B60DB-4E9C-45B5-AD25-E475C9A0DB7A"
-            } else {
-                consumerID = "87ef92cb-d52c-4462-b4f7-d2f58046d9c6"
-            }
-        case .IAM:
-            if backendEnv == .production {
-                consumerID = "6032c31d-55fc-4f1a-abb7-76246301c2c3"
-                token = "T3u0ATKtG2Sz3cOOZGnWmDS3AXC7JoOn8I39nxdB-XeCoR1hN1g61dHySkqwCuqm2jQvYDp4UfoAdENPxu_e5g"
-            } else {
-                consumerID = "c061c52a-b978-4ae9-9875-6584e58e8a74"
-                token = "Uhcqt1EBCq3COum7WhGK4b0Pre0TyMndfqMsCslnzyd70Zc5Xy1NI-pyCARRNG0qQvkI2iVv2s7sKGBiTwz_PQ"
-            }
-        default:
-            token = ""
-            consumerID = ""
+    func applyEnvironmentChangesAndReinitializeIfNeeded() {
+        let trimmedStore = storeIDText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if Int(trimmedStore) == nil {
+            storeIDText = String(Environment.initialStore)
         }
 
-        return AuthParameter(authToken: token,
-                             tokenType: tokenType.rawValue,
-                             accountID: accountID,
-                             consumerID: consumerID)
-    }
+        let shouldReinitialize = compass != nil
 
-    static func getConfiguration(for site: Int) -> Configuration {
-        Configuration(country: "US",
-                      site: site,
-                      userId: accountID,
-                      siteType: .Store,
-                      manualPinDrop: true,
-                      navigateToPin: false,
-                      multiPin: false,
-                      searchBar: false,
-                      centerMap: true,
-                      locationIngestion: true,
-                      mockUser: mockUser,
-                      anonymizedUserID: "ANONYMIZEDUSERID",
-                      startPositioning: true,
-                      automaticCalibration: true,
-                      businessUnitType: .WALMART)
-    }
-}
-
-enum DebugData {
-    enum StoreID {
-        static let inStore = "3594"
-        static let oriient = "2119"
-    }
-
-    static let testCompassEventStatus = CurrentValueSubject<Int, Never>(1)
-    static let count = 1
-    static let sensorAssetId = "3452000"
-    static let asset2280List = ["1645190"]
-    static let asset3594List = ["836445", "836446", "2712934", "2556484"]
-
-    static let assetNodFound = "2670713"
-    static let otherStore = "585879"
-
-    static let inStoreMapEncodedString = "eHMvW1pKLEFHXS8x"
-    static let oriientMapEncodedString = "WkovWy0xQ2wsMTddLzE="
-    static let inStoreMapMultipinEncodedString = "eHMvWy1GQixGYyMtSXAsRW1dLzE="
-    static let oriientMapMultipinEncodedString = "YzAvWy1GQyxGZCMtSXEsRW1dLzE="
-}
-
-extension Dictionary {
-    func toJSONString() -> String? {
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: self, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else {
-            Log.debug("Something is wrong while converting dictionary to JSON data.")
-            return nil
+        if shouldReinitialize {
+            removeCompassAndDestroyRoot()
         }
 
-        guard let jsonString = String(data: jsonData, encoding: .utf8) else {
-            Log.debug("Something is wrong while converting JSON data to JSON string.")
-            return nil
-        }
+        compass = nil
+        currentStore = nil
 
-        return jsonString
+        if shouldReinitialize {
+            initialize(false)
+        }
     }
-}
