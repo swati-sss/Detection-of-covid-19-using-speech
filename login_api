@@ -1,137 +1,73 @@
 import SwiftUI
-import compass_sdk_ios
 
-struct EnvironmentSettingsView: View {
-    @ObservedObject var bridge: HomeViewModel
+@main
+struct SampleApp: App {
+    @StateObject private var bridge = HomeViewModel()
 
-    @State private var selectedBackend: CompassEnvironment = Environment.backendEnv
-    @State private var selectedTokenType: TokenType = Environment.tokenType
-    @State private var mockUserEnabled: Bool = Environment.mockUser
-    @State private var accountIdText: String = Environment.accountID
-    @State private var initialStoreText: String = String(Environment.initialStore)
-
-    @Environment(\.dismiss) private var dismiss
-
-    private let backendOptions: [CompassEnvironment] = [.staging, .production, .perf, .preProd, .stageGKE]
-    private let tokenOptions: [TokenType] = [.User, .IAM, .Pingfed]
-
-    var body: some View {
-        NavigationView {
-            Form {
-                Section("Backend") {
-                    Picker("Environment", selection: $selectedBackend) {
-                        ForEach(backendOptions, id: \.self) { option in
-                            Text(displayName(for: option)).tag(option)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                }
-
-                Section("Authentication") {
-                    Picker("Token Type", selection: $selectedTokenType) {
-                        ForEach(tokenOptions, id: \.self) { option in
-                            Text(displayName(for: option)).tag(option)
-                        }
-                    }
-                    .pickerStyle(.menu)
-
-                    Toggle("Mock User", isOn: $mockUserEnabled)
-
-                    TextField("Account ID", text: $accountIdText)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
-                }
-
-                Section {
-                    TextField("Initial Store", text: $initialStoreText)
-                        .keyboardType(.numberPad)
-                } header: {
-                    Text("Store Settings")
-                } footer: {
-                    Text("Applying changes will re-initialize the Compass SDK if it is currently running.")
-                }
+    init() {
+        NotificationManager.shared.configure()
+        
+        let userDefaults = UserDefaults.standard
+        for key in userDefaults.dictionaryRepresentation().keys {
+            if key.starts(with: "FeatureFlagOverrides_") {
+                userDefaults.removeObject(forKey: key)
+            }
+        }
+        userDefaults.synchronize()
+    }
+    
+    var body: some Scene {
+        WindowGroup {
+            NavigationStack {
+                HomeView(bridge: bridge)
+            }
 #if DEBUG
-                Section("Local Map (Debug)") {
-                    if let fileName = bridge.localMapFileName {
-                        Text(fileName)
-                    } else {
-                        Text("No local map selected")
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Button("Clear Local Map") {
-                        bridge.setLocalMapOverride(nil)
-                    }
-                    .disabled(bridge.localMapFileName == nil)
-                } footer: {
-                    Text("Import a .html map via Files → Share → Open in Compass to view it here.")
-                }
+            .onOpenURL { url in
+                handleIncomingMapURL(url)
+            }
 #endif
+        }
+    }
+
+#if DEBUG
+    private func handleIncomingMapURL(_ url: URL) {
+        guard url.isFileURL else { return }
+        let ext = url.pathExtension.lowercased()
+        guard ext == "html" || ext == "htm" else { return }
+
+        let fileManager = FileManager.default
+        let documentsDirectory = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let localMapsDirectory = documentsDirectory.appendingPathComponent("LocalMaps", isDirectory: true)
+
+        do {
+            try fileManager.createDirectory(at: localMapsDirectory, withIntermediateDirectories: true)
+        } catch {
+            print("Failed to create LocalMaps directory: \(error)")
+        }
+
+        let destinationURL = localMapsDirectory.appendingPathComponent(url.lastPathComponent)
+
+        var shouldStopAccessing = false
+        if url.startAccessingSecurityScopedResource() {
+            shouldStopAccessing = true
+        }
+        defer {
+            if shouldStopAccessing {
+                url.stopAccessingSecurityScopedResource()
             }
-            .navigationTitle("Environment")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Apply") {
-                        applyChanges()
-                    }
-                    .fontWeight(.bold)
-                    .disabled(!canApply)
-                }
+        }
+
+        do {
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                try fileManager.removeItem(at: destinationURL)
             }
-            .onAppear {
-                loadDefaults()
+            try fileManager.copyItem(at: url, to: destinationURL)
+            DispatchQueue.main.async {
+                bridge.setLocalMapOverride(destinationURL)
             }
+        } catch {
+            print("Failed to import local map HTML: \(error)")
         }
     }
-
-    private var canApply: Bool {
-        !accountIdText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func loadDefaults() {
-        selectedBackend = Environment.backendEnv
-        selectedTokenType = Environment.tokenType
-        mockUserEnabled = Environment.mockUser
-        accountIdText = Environment.accountID
-        initialStoreText = String(Environment.initialStore)
-    }
-
-    private func applyChanges() {
-        Environment.backendEnv = selectedBackend
-        Environment.tokenType = selectedTokenType
-        Environment.mockUser = mockUserEnabled
-        Environment.accountID = accountIdText.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if let storeValue = Int(initialStoreText.trimmingCharacters(in: .whitespacesAndNewlines)) {
-            Environment.initialStore = storeValue
-        }
-
-        bridge.applyEnvironmentChangesAndReinitializeIfNeeded()
-        dismiss()
-    }
-
-    private func displayName(for environment: CompassEnvironment) -> String {
-        switch environment {
-        case .staging: return "Staging"
-        case .production: return "Production"
-        case .perf: return "Perf"
-        case .preProd: return "Pre-Prod"
-        case .stageGKE: return "Stage GKE"
-        @unknown default:
-            return environment.rawValue.capitalized
-        }
-    }
-
-    private func displayName(for tokenType: TokenType) -> String {
-        switch tokenType {
-        case .User: return "User"
-        case .IAM: return "IAM"
-        case .Pingfed: return "PingFed"
-        }
-    }
+#endif
 }
