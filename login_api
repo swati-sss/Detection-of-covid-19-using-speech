@@ -1,342 +1,761 @@
-//
-//  SwiftUICompassDemoView.swift
-//  compass-sample-app
-//
-//  Created by p0a0595 on 9/11/25.
-//
-
+import Combine
+import CoreData
+import UIKit
+import os.log
+import WebKit
 import SwiftUI
+@_implementationOnly import IPSFramework
+#if DEBUG
+enum CompassDebugOverrides {
+    static var localMapURL: URL?
+}
+#endif
 
-struct HomeView: View {
-    @StateObject private var bridge = HomeViewModel()
-    @State private var showAisleSheet = false
-    @State private var showStaticPath = false
-    @State private var showAssetSheet = false
-    @State private var showGenericSheet = false
-
-    @State private var goToFirstScreen = false
-    @State private var didAutoInit = false
-    
-    @State private var showFeatureFlags = false
-    @State private var showEnvironmentSheet = false
-    
-    private var controlHeight: CGFloat = 44
-    
-    var body: some View {
-        VStack(spacing: 5) {
-            
-            // top row
-            HStack(spacing: 8) {
-                TextField("Store ID", text: $bridge.storeIDText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: .infinity)
-                
-                Button(action: { bridge.initialize(false) }) {
-                    Text("Initialize")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .foregroundStyle(.white)
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.blue)
+public class Compass: UIViewController {
+    private var viewModel: CompassViewModelType!
+    internal let serviceLocator: ServiceLocatorType!
+    private var cancellables = Set<AnyCancellable>()
+    private var capabilities: [CompassCapability] = []
+    private var isMapInitialized: Bool? {
+        didSet {
+            guard isMapInitialized == true else {
+                Analytics.mapInitialization(
+                    payload: BaseAnalytics(success: isMapInitialized,
+                                           errorCode: EventType.errorCode.rawValue,
+                                           errorMessage: EventType.errorMessage.rawValue)
                 )
-                
-                Menu {
-                    Button(action: {bridge.shouldZoomOnPins.toggle()}) {
-                        Label("Zoom-in on pin drop", systemImage: bridge.shouldZoomOnPins ? "checkmark.circle.fill" : "circle")
-                    }
-                    
-                    Button(action: {bridge.resetZoom.toggle()}) {
-                        Label("Reset zoom on clear map", systemImage: bridge.resetZoom ? "checkmark.circle.fill" : "circle")
-                    }
-                    
-                    Divider()
-                    
-                    Button("Copy console text") {
-                        bridge.copyConsoleTextToClipboard()
-                    }
-                    
-                    Button("Clear console") {
-                        bridge.clearConsole()
-                    }
-                    
-                    Button(bridge.isConsoleHidden ? "Show console" : "Hide console") {
-                        bridge.toggleConsoleVisibility()
-                    }
-                    
-                    Divider()
-                    
-                    Button("Stop positioning", role: .destructive) {
-                        bridge.stopPositioning()
-                    }
-                    
-                } label: {
-                    Text("Options")
-                        .font(.subheadline)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .background(RoundedRectangle(cornerRadius: 8))
-                    
-                }
+                return
             }
-            .padding(.horizontal, 8)
-            .padding(.top, 3)
-            
-            // Middle row
-            HStack(spacing: 8) {
-                Menu {
-                    Text("Select Update Event API")
+            Analytics.mapInitialization(
+                payload: BaseAnalytics(success: isMapInitialized)
+            )
+        }
+    }
 
-                    Button("Update Event") {
-                        bridge.updateEvent()
-                    }
-                    Button("Update Event List") {
-                        bridge.updateEventList()
-                    }
-                    
-                } label: {
-                    Text("Update Event")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 8))
-                }
-                
-                Menu {
-                    Text("Select a pin type")
+    public var isFinishedInitialize = CurrentValueSubject<Bool?, Never>(nil)
+    public var isFinishedSettingMap = CurrentValueSubject<Bool, Never>(false)
+    public var currentStore: Int?
+    public let isBlueDotEnabled = CurrentValueSubject<Bool?, Never>(nil)
 
-                    Button("Asset Pin") {
-                        showAssetSheet = true
-                    }
-                    Button("Generic Pin") {
-                        showGenericSheet = true
-                    }
-                    Button("Aisle Pin") {
-                        showAisleSheet = true
-                    }
-                    Button("Static Path") {
-                        showStaticPath = true
-                        showAisleSheet = true
-                    }
-                    Button("Get Distance") {
-                        bridge.getUserDistance()
-                    }
-                    Button("Test Hardcoded Distance") {
-                        bridge.testGetUserDistanceWithHardcodedPin()
-                    }
-                    
-                } label: {
-                    Text("Display Pin")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 8))
-                }
-                
-                Menu {
-                    Text("Select API")
+    /// Initialize the Compass class.
+    /// This is use to create view model.
+    public init() {
+        self.serviceLocator = ServiceLocator.shared
+        self.viewModel = CompassViewModel(serviceLocator: serviceLocator)
+        super.init(nibName: nil, bundle: nil)
+    }
 
-                    Button("Clear Map") {
-                        bridge.clearMap()
-                    }
-                    Button("Get Location") {
-                        bridge.getLocation(assetId: "1645190")
-                    }
-                    Button("Kill Switch") {
-                        bridge.killSwitch()
-                    }
-                    
-                } label: {
-                    Text("Other APIs")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 8))
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.top, 3)
-            
-            
-            // last row
-            HStack(spacing: 8) {
-                Button(action: { goToFirstScreen = true }) {
-                    Text("Next Screen")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .foregroundStyle(.white)
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.blue)
-                )
-                
-                Button(action: {  }) {
-                    Text("Re-Mount")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .foregroundStyle(.white)
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.blue)
-                )
-                
-                Menu {
-                    Button("Feature Flags") {
-                        showFeatureFlags = true
-                    }
-                    Button("Environment") {
-                        showEnvironmentSheet = true
-                    }
-                } label: {
-                    Text("Env/Flags")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .foregroundStyle(.white)
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.blue)
-                )
-//                Spacer()
-//                    .frame(maxWidth: .infinity)
-            }
-            .padding(.horizontal, 8)
-            .padding(.top, 3)
-            
-            // Progress strip
-            HStack(spacing: 8) {
-                ProgressView(value: bridge.calibrationProgress)
-                    .progressViewStyle(.linear)
-                    .frame(height: 24)
-                    .scaleEffect(y: 3, anchor: .center)
-                    .tint(bridge.calibrationProgress >= 1.0 ? .green : .red)
-                    .overlay(alignment: .leading) {
-                        Text(" ♾️ Calibration")
-                            .font(.system(size: 10, weight: .bold))
-                            .padding(.leading, 4)
-                    }
-                    .animation(.easeInOut, value: bridge.calibrationProgress)
-                
-                ProgressView(value: bridge.positioningProgress)
-                    .progressViewStyle(.linear)
-                    .frame(height: 24)
-                    .scaleEffect(y: 3, anchor: .center)
-                    .tint(bridge.positioningProgress >= 1.0 ? .green : .red)
-                    .overlay(alignment: .leading) {
-                        Text(" 🚶🏼 Position")
-                            .font(.system(size: 10, weight: .bold))
-                            .padding(.leading, 4)
-                    }
-                    .animation(.easeInOut, value: bridge.positioningProgress)
-                
-                ProgressView(value: bridge.isPositionLocked ? 1.0 : 0.0)
-                    .progressViewStyle(.linear)
-                    .frame(height: 24)
-                    .scaleEffect(y: 3, anchor: .center)
-                    .tint(bridge.isPositionLocked ? .green : .red)
-                    .overlay(alignment: .leading) {
-                        Text(" 🔒 Position Lock")
-                            .font(.system(size: 10, weight: .bold))
-                            .padding(.leading, 4)
-                    }
-                    .animation(.easeInOut, value: bridge.isPositionLocked)
-            }
-            .frame(height: 12)
-            .padding(.horizontal, 8)
-            .padding(.top, 3)
+    internal init(serviceLocator: ServiceLocatorType, viewModel: CompassViewModelType) {
+        self.serviceLocator = serviceLocator
+        self.viewModel = viewModel
+        super.init(nibName: nil, bundle: nil)
+    }
 
-            
-            // Map area
-            MapRootHost(viewController: bridge.mapRootViewController)
-                .background(Color(.systemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .padding(.horizontal, 8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            
-            
-            if !bridge.isConsoleHidden {
-                // Console
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        Text(bridge.consoleText.isEmpty ? "— console —" : bridge.consoleText)
-                            .font(.system(.footnote, design: .monospaced))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
-                        
-                        Color.clear
-                            .frame(height: 1)
-                            .id("BOTTOM")
-                    }
-                    .frame(height: 160)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.secondary.opacity(0.35))
-                    )
-                    .onChange(of: bridge.scrollToken) { _ in
-                        withAnimation {
-                            proxy.scrollTo("BOTTOM", anchor: .bottom)
-                        }
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 8)
-            }
+    required init?(coder aDecoder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    /// Handle the events for background URL session.
+    /// - Parameters:
+    ///   - identifier: The identifier for the background url session.
+    ///   - application: The current application instance.
+    public static func handleEventsForBackgroundURLSession(identifier: String, application: UIApplication) {
+        _ = IPSCore.application(application,
+                            handleEventsForBackgroundURLSession: identifier,
+                            completionHandler: {})
+    }
+
+    /// Called when the view has appeared. Starts the position session.
+    /// - Parameter animated: Wether the appearance is animated.
+    public override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        viewModel.startPositionSession()
+    }
+
+    /// Initialize the Compass with authentication and configuration paramaters.
+    /// - Parameters:
+    ///   - authParameter: The authentication parameter to use.
+    ///   - configuration: The configuration settings to apply.
+    ///   - rootViewController: The root view controller to use
+    public func initialize(authParameter: AuthParameter,
+                           configuration: Configuration,
+                           capabilities: [CompassCapability],
+                           rootViewController: UIViewController) {
+        var authParameter = authParameter
+        self.currentStore = configuration.site
+        self.capabilities = capabilities
+        viewModel.rootViewController =  rootViewController
+        authParameter.tokenType = authParameter.tokenType.lowercased()
+        Log.info("""
+                Start initialize API with authParameter: \(authParameter)
+                configuration: \(configuration)
+                rootViewController: \(rootViewController)
+                compassVersion: \(DeviceInformation.getCompassSDKVersion())
+                oriientVersion: \(DeviceInformation.getOriientSDKVersion())
+                """)
+        Analytics.initialization(state: .start)
+        rootViewController.add(childVC: self)
+        viewModel.toggleMockUser(configuration.mockUser)
+        Analytics.anonymizedUserID = configuration.anonymizedUserID
+        #if DEBUG
+        resetOverrideTracking()
+        if currentStore != configuration.site {
+            UserDefaults.standard.removeObject(forKey: "FeatureFlagOverrides_\(configuration.site)")
         }
-        .onAppear {
-            guard !didAutoInit else { return }
-            didAutoInit = true
-            DispatchQueue.main.async {
-                bridge.initialize(false)
-            }
+        #endif
+        beginInitialization(authParameter: authParameter, configuration: configuration)
+    }
+
+    /// Display the map with specific workflow.
+    ///
+    /// - Parameters:
+    ///   - workflow: The workflow to use for displaying the map.
+    public func displayMap(workflow: Workflow?) {
+        Log.info("Start displayMap API")
+        Analytics.workflow = workflow
+        DispatchQueue.main.async {
+            self.viewModel.displayMap()
         }
-        .navigationTitle("Main Map")
-        .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showAisleSheet) {
-            AislePinInputSheet { tuples in
-                bridge.displayPinsV2(pins: tuples, isStaticPathVisible: showStaticPath)
-                showStaticPath = false
-            }
-            .presentationDetents([.medium, .large])
+    }
+
+    /// Update the event with a given compass event.
+    ///
+    /// - Parameters:
+    ///   - compassEvent: The compass event to update.
+    public func updateEvent(compassEvent: CompassEvent) {
+        Log.info("Start updateEvent API with compassEvent: \(compassEvent)")
+        viewModel.updateEvent(compassEvent: compassEvent)
+    }
+
+    public func updateEventList(namespace: String, eventType: String, eventValue: String, metaData: HashMap? = nil) {
+        Log.info("""
+                  Start updateEventList API with namespace: \(namespace)
+                  eventType: \(eventType)
+                  eventValue: \(eventValue)
+                  metaData:\(String(describing: metaData))
+                  """)
+
+        viewModel.updateEventList(
+            namespace: namespace,
+            eventType: eventType,
+            eventValue: eventValue,
+            metaData: metaData
+        )
+    }
+
+    /// Displays pins on the map with the given UUID list and configuration.
+    ///
+    /// - Parameters:
+    ///   - uuidList: The list of UUIDs representing the assets or generic IDs
+    ///   - idType: The type of ID used for the UUIDs.
+    ///   - config: The configuration to apply for displaying the pins.
+    public func displayPin(uuidList: [String], idType: PinDropMethod, config: HashMap? = nil) {
+        Log.info("Start displayPin: \(uuidList) type: \(idType) config: \(String(describing: config))")
+        viewModel.displayPin(uuidList: uuidList, idType: idType, config: DisplayPinConfig(hashMap: config))
+    }
+
+    /// Displays pins on the map with the given pins and configuration.
+    ///
+    /// - Parameters:
+    ///   - pins: The list of pins representing the AislePins which contain type, id and location.
+    ///   - config: The configuration to apply for the Pins.
+    public func displayPinV2(pins: [AislePin], config: HashMap? = nil, isZoomOutRequired: Bool = false) {
+        Log.info("Start displayPinV2 API with aisle pins: \(pins), config: \(String(describing: config)), isZoomOutRequired: \(isZoomOutRequired)")
+        viewModel.displayPinV2(pins: pins, config: DisplayPinConfig(hashMap: config), isZoomOutRequired: isZoomOutRequired)
+    }
+
+    public func displayStaticPath(pins: [AislePin], startFromNearbyEntrance: Bool, disableZoomGestures: Bool) {
+        Log.info(
+            """
+            Start displayStaticPath API with aisle pins: \(pins),
+            startFromNearbyEntrance: \(startFromNearbyEntrance),
+            disableZoomGestures: \(disableZoomGestures)
+            """
+        )
+        viewModel.displayStaticPath(pins: pins,
+                                    startFromNearbyEntrance: startFromNearbyEntrance,
+                                    disableZoomGestures: disableZoomGestures)
+    }
+
+    /// Get user disctance on the map from user locatio with the given pins.
+    ///
+    /// - Parameters:
+    ///   - pins: The list of pins representing the AislePins which contain type, id and location.
+    public func getUserDistance(pins: [AislePin], completion: UserDistanceCompleteHandler? = nil) {
+        Log.info("Start getUserDistance API with aisle pins: \(pins)")
+        viewModel.getUserDistance(pins: pins, completion: completion)
+    }
+
+    /// Clear the map with given configuration parmater.
+    ///
+    /// - Parameters:
+    ///   - configuration: The configration to apply for clearing the map.
+    public func clearMap(configuration: HashMap? = nil) {
+        Log.info("Start clearMap API with config:\(String(describing: configuration))")
+        viewModel.clearMap(mapConfig: MapConfig(hashMap: configuration))
+    }
+
+    /// Get aisle location on map with given ID.
+    ///
+    /// - Parameters:
+    ///   - id: The id to get aisle location.
+    public func getAisle(id: String) {
+        Log.info("Start getAisle API with id:\(id)")
+        viewModel.getAisle(id: id)
+    }
+
+    /// Get status of the compass service.
+    /// - Returns: A StatusService indicating the status of the compass service.
+    public func getStatusService() -> StatusService {
+        serviceLocator.getStatusService()
+    }
+
+    /// Set Environment to NetworkManager.
+    /// - Parameter environment: The environment to apply for NetworkManager.
+    public func setEnvironment(_ environment: CompassEnvironment) {
+        Log.info("Setting environment to: \(environment.rawValue)")
+        NetworkManager.environment = environment
+    }
+
+    /// Update Authentication with given token, consumer and account paramaters.
+    ///
+    /// - Parameters:
+    ///   - token: The Authentication token to be used for API cals..
+    ///   - tokenType: The type of the token, typically indicating user or IAM from client application.
+    ///   - consumerID: The Id representing the consumer of the API, often used for identifying the client application.
+    ///   - accountID: The ID of the account associate with the current user or seesion.
+    public func updateAuthParams(token: String, tokenType: String, consumerID: String, accountID: String) {
+        Log.info("Updating auth parameters for consumerID: \(consumerID)")
+        let tokenType = tokenType.lowercased()
+        guard tokenType == TokenType.User.rawValue || tokenType == TokenType.Pingfed.rawValue else {
+            return
         }
-        .sheet(isPresented: $showAssetSheet) {
-            AssetPinInputSheet { assetId in
-                bridge.displayAssetPin(id: assetId)
-            }
-            .presentationDetents([.medium])
-        }
-        .sheet(isPresented: $showGenericSheet) {
-            GenericPinInputSheet { encodedId in
-                bridge.displayGenericPin(encodedId: encodedId)
-            }
-            .presentationDetents([.medium])
-        }
-        .sheet(isPresented: $showFeatureFlags){
-            FeatureFlagsView(bridge: bridge)
-        }
-        .sheet(isPresented: $showEnvironmentSheet) {
-            EnvironmentSettingsView(bridge: bridge)
-        }
-        .navigationDestination(isPresented: $goToFirstScreen) {
-            FirstScreenView(bridge: bridge)
-        }
+
+        let authParameter = AuthParameter(authToken: token,
+                                          tokenType: tokenType,
+                                          accountID: accountID,
+                                          consumerID: consumerID)
+        try? serviceLocator.getKeychainService().saveToken(authParameter)
+    }
+
+    ///  Use this function to refresh the compass position or reset it when needed.
+    public func resetPositionStatusEvent() {
+        viewModel.resetPositionStatusEvent()
+    }
+
+    ///  Use this function to remove all the compass reference.i
+    public func killSwitch() {
+        viewModel.killSwitch()
+    }
+
+    deinit {
+        Log.info("Releasing compass instance.")
     }
 }
 
-#Preview {
-    HomeView()
+private extension Compass {
+    /// Beign the initialization process with provided authentication parameters and configuration.
+    /// - Parameters:
+    ///   - authParameter: The authentication parameter needed for initialization.
+    ///   - configuration: The configuration settings for initialization.
+    func beginInitialization(authParameter: AuthParameter, configuration: Configuration) {
+        // Validate configuration before proceeding
+        guard validateConfiguration(configuration) else { return }
+
+        // Fetch the access token and proceed with the initialization process
+        viewModel.getAccessToken(authParameter: authParameter)
+            .flatMap { [weak self] accessTokenResponse -> AnyPublisher<StoreConfig?, Never> in
+                Log.info("AccessTokenResponse: \(String(describing: accessTokenResponse))")
+                accessTokenResponse == nil ?
+                Analytics.telemetry(
+                    payload: TelemetryAnalytics(
+                        isError: true,
+                        event: CommonErrors.ERROR_INVALID_AUTH.rawValue,
+                        context: CommonErrors.ErrorContext.CONTEXT_INIT.rawValue
+                    )
+                ) : nil
+                return self?.fetchConfigurationDetails(configuration: configuration) ?? Empty().eraseToAnyPublisher()
+            }
+            .flatMap { [weak self] storeConfig -> AnyPublisher<Bool, Never> in
+                guard let self else { return Empty().eraseToAnyPublisher() }
+                if self.capabilities.contains(.storeMap) {
+                    return self.validateAndUpdateStoreConfig(storeConfig)
+                        .flatMap { [weak self ] _ -> AnyPublisher<Void, Never> in
+                            Log.info("Deleting EventStoreService Event")
+                            return self?.deleteAllEvents() ?? Empty().eraseToAnyPublisher()
+                        }
+                        .flatMap { [weak self] _ -> AnyPublisher<Bool, Never> in
+                            self?.completeInitialization() ?? Empty().eraseToAnyPublisher()
+                        }.eraseToAnyPublisher()
+                }
+
+                if capabilities.contains(.productEnrollment) {
+                    self.serviceLocator.getImageUploader().startUploads()
+                    self.isFinishedInitialize.value = true
+                }
+
+                return Just(true).eraseToAnyPublisher()
+            }
+            .sink { [weak self] isFinishedInitialize in
+                guard isFinishedInitialize else {
+                    return
+                }
+
+                Log.info("Finished fetching map. Map is ready to load.")
+                self?.isFinishedSettingMap.value = true
+                // Set map initialization flag
+                self?.isMapInitialized = true
+            }.store(in: &cancellables)
+    }
+
+    /// Validates the provided configuration.
+    /// - Parameter configuration: The configuration to validate.
+    /// - Returns: A Boolean indicating whether the condiguration is valid.
+    private func validateConfiguration(_ configuration: Configuration) -> Bool {
+        guard configuration.site != 0 else {
+            Log.warning("Configuration is not valid")
+            Analytics.telemetry(
+                payload: TelemetryAnalytics(
+                    isError: true,
+                    event: CommonErrors.ERROR_CONFIG_NOT_INITIALIZED.rawValue,
+                    context: CommonErrors.ErrorContext.CONTEXT_INIT.rawValue
+                )
+            )
+            isFinishedInitialize.value = false
+            isMapInitialized = false
+            return false
+        }
+        return true
+    }
+
+    /// Fetch the configurstion details for the provided configuration.
+    /// - Parameter configuration: The configuration settings to fetch details for.
+    /// - Returns: A publisher that outputs the store configuration details.
+    func fetchConfigurationDetails(configuration: Configuration) -> AnyPublisher<StoreConfig?, Never> {
+        return fetchConfiguration(for: String(configuration.site))
+        .flatMap { [weak self] configResponse -> AnyPublisher<StoreConfig?, Never> in
+            guard let self else {
+                Analytics.telemetry(payload: TelemetryAnalytics(
+                    isError: true,
+                    event: Init.INIT_ERROR_CONFIG_AUTH.rawValue
+                ))
+                return Empty(completeImmediately: true).eraseToAnyPublisher()
+            }
+            Analytics.telemetry(payload: TelemetryAnalytics(event: Init.INIT_CONFIG_FETCHED.rawValue))
+            return self.saveConfiguration(configuration)
+                .flatMap { _ in
+                    return Just(configResponse?.storeConfig).eraseToAnyPublisher()
+                }.eraseToAnyPublisher()
+        }.eraseToAnyPublisher()
+    }
+
+    /// Validates the store configuration and updates if valid.
+    /// - Parameter storeConfig: The store configuration to valiidate and update.
+    /// - Returns: A publisher that completes when the store configuration is updated.
+    private func validateAndUpdateStoreConfig(_ storeConfig: StoreConfig?) -> AnyPublisher<Void, Never> {
+        guard let storeConfig, let valid = storeConfig.valid, valid else {
+            Log.warning("Payload storeConfig is not valid")
+            Analytics.telemetry(
+                payload: TelemetryAnalytics(
+                    isError: true,
+                    event: CommonErrors.ERROR_NOT_INITIALIZED.rawValue,
+                    context: CommonErrors.ErrorContext.CONTEXT_INIT.rawValue
+                )
+            )
+            isFinishedInitialize.value = false
+            return Empty().eraseToAnyPublisher()
+        }
+
+        Log.info("StoreConfig: \(storeConfig)")
+        isBlueDotEnabled.send(storeConfig.bluedotEnabled)
+        return viewModel.updateStoreConfiguration(storeConfig)
+    }
+
+    /// Complete the initalization process.
+    /// - Returns: A publisher that completes when the initialization is completed.
+    private func completeInitialization() -> AnyPublisher<Bool, Never> {
+        guard self.children.isEmpty else {
+            return Empty().eraseToAnyPublisher()
+        }
+
+        Log.info("Finished initializing API, now  fetching map.")
+        Analytics.initialization(state: .finish)
+        self.isFinishedInitialize.value = true
+        return self.viewModel.isMapViewReady()
+    }
+
+    /// Will also retrieve configuration based on storeId, consumerId, timestamp and access token.
+    ///
+    /// - Parameters:
+    ///   - storeId: The storeId to be used to get configuration
+    ///   - consumerId: The consumerId to be used to get configuration
+    ///   - timestamp: The timestamp to be used to get configuration
+    ///   - accessTokenResponse: The accessTokenResponse to be used to get configuration
+    func fetchConfiguration(for storeId: String) -> AnyPublisher<ConfigurationPayload?, Never> {
+        serviceLocator.getConfigurationService()
+            .getConfigData(for: storeId)
+            .retry()
+            .catch { [weak self] error -> AnyPublisher<ConfigurationPayload?, Error> in
+                Log.error(error)
+                guard let error = error as? ErrorResponse else {
+                    return Fail(error: error).eraseToAnyPublisher()
+                }
+
+                self?.serviceLocator.getStatusService()
+                    .emitErrorStatusEvent(for: error, isInitError: true)
+                return Fail(error: error).eraseToAnyPublisher()
+            }
+            .replaceError(with: nil)
+            .receive(on: DispatchQueue.main)
+            .eraseToAnyPublisher()
+    }
+
+    func saveConfiguration(_ configuration: Configuration) -> AnyPublisher<ConfigurationDataModel, Never> {
+        serviceLocator.getConfigurationStoreService().setConfiguration(configuration)
+            .retry()
+            .catch { [weak self] error -> AnyPublisher<ConfigurationDataModel, Never> in
+                Log.error(error)
+                self?.isFinishedInitialize.value = false
+                return Empty().eraseToAnyPublisher()
+            }
+            .receive(on: DispatchQueue.main)
+            .eraseToAnyPublisher()
+    }
+
+    func deleteAllEvents() -> AnyPublisher<Void, Never> {
+        serviceLocator.getEventStoreService().deleteAllEvents()
+            .retry()
+            .catch { error -> AnyPublisher<Void, Error> in
+                Log.error("Fail to delete EventStoreService Event from Core Database \(error.localizedDescription)")
+                return Just.void()
+            }
+            .replaceError(with: ())
+            .receive(on: DispatchQueue.main)
+            .eraseToAnyPublisher()
+    }
 }
+
+
+#if DEBUG
+extension Compass {
+    private struct AssociatedKeys {
+        static var originalStoreConfig = "originalStoreConfig"
+        static var hasAppliedOverrides = "hasAppliedOverrides"
+    }
+
+    private var originalStoreConfig: StoreConfig? {
+        get {
+            objc_getAssociatedObject(self, &AssociatedKeys.originalStoreConfig) as? StoreConfig
+        }
+        set {
+            objc_setAssociatedObject(self, &AssociatedKeys.originalStoreConfig, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        }
+    }
+
+    private var hasAppliedOverrides: Bool {
+        get {
+            objc_getAssociatedObject(self, &AssociatedKeys.hasAppliedOverrides) as? Bool ?? false
+        }
+        set {
+            objc_setAssociatedObject(self, &AssociatedKeys.hasAppliedOverrides, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        }
+    }
+
+    public func getCurrentStoreConfig() -> [String: Any]? {
+        guard let assetService = serviceLocator.getAssetService() as? AssetServiceImpl,
+              let storeConfig = assetService.lastStoreConfig else { return nil }
+
+        var config: [String: Any] = [:]
+
+        config["bluedotEnabled"] = storeConfig.bluedotEnabled ?? false
+        config["bluedotDisplayed"] = storeConfig.bluedotDisplayed ?? false
+        config["dynamicMapEnabled"] = storeConfig.dynamicMapEnabled ?? false
+        config["zoomControlEnabled"] = storeConfig.zoomControlEnabled ?? false
+        config["errorScreensEnabled"] = storeConfig.errorScreensEnabled ?? false
+        config["dynamicMapRotationEnabled"] = storeConfig.dynamicMapRotationEnabled ?? false
+        config["spinnerEnabled"] = storeConfig.spinnerEnabled ?? false
+        config["useBackgroundService"] = storeConfig.useBackgroundService ?? false
+        config["heartbeatInLocation"] = storeConfig.heartbeatInLocation ?? false
+        config["heartBeatInUser"] = storeConfig.heartBeatInUser ?? false
+        config["navigationEnabled"] = storeConfig.navigationEnabled ?? false
+        config["valid"] = storeConfig.valid ?? false
+        config["analytics"] = storeConfig.analytics ?? false
+
+        config["backgroundServiceTimeout"] = storeConfig.backgroundServiceTimeout ?? 300.0
+        config["geoFenceCheckTimeout"] = storeConfig.geoFenceCheckTimeout ?? 1.0
+        config["positioningSessionTimeout"] = storeConfig.positioningSessionTimeout ?? 1.0
+        config["geofenceRadius"] = storeConfig.geofenceRadius ?? 0.0
+        config["sessionRefreshTime"] = storeConfig.sessionRefreshTime ?? SessionTime.positionRefreshTime
+        config["heartbeatInterval"] = storeConfig.heartbeatInterval ?? 300_000.0
+        config["batchInterval"] = storeConfig.batchInterval ?? 60_000.0
+        config["latitude"] = storeConfig.latitude ?? 0.0
+        config["longitude"] = storeConfig.longitude ?? 0.0
+        config["createdAt"] = storeConfig.createdAt ?? 0.0
+        config["updatedAt"] = storeConfig.updatedAt ?? 0.0
+
+        config["supportedEventList"] = storeConfig.supportedEventList ?? ""
+        config["storeId"] = storeConfig.storeId ?? 0
+        config["mapType"] = storeConfig.mapType ?? ""
+
+        let offsetConfig = storeConfig.offset ?? StoreConfigOffset(x: 0, y: 0)
+        config["offset"] = [
+            "x": Double(offsetConfig.x),
+            "y": Double(offsetConfig.y)
+        ]
+
+        let navigationConfig = storeConfig.navigation ?? NavigationConfig()
+        config["navigation"] = [
+            "enabled": navigationConfig.enabled ?? (storeConfig.navigationEnabled ?? false),
+            "refreshDuration": navigationConfig.refreshDuration ?? 0.0,
+            "isAutomaticNavigation": navigationConfig.isAutomaticNavigation
+        ]
+
+        let mapUiConfig = storeConfig.mapUi ?? MapUiConfig()
+        config["mapUi"] = [
+            "bannerEnabled": mapUiConfig.bannerEnabled,
+            "snackBarEnabled": mapUiConfig.snackBarEnabled,
+            "pinLocationUnavailableBannerEnabled": mapUiConfig.pinLocationUnavailableBannerEnabled
+        ]
+
+        let pinsConfig = storeConfig.pins ?? PinsConfig()
+        config["pins"] = [
+            "actionAlleyEnabled": pinsConfig.actionAlleyEnabled,
+            "groupPinsEnabled": pinsConfig.groupPinsEnabled
+        ]
+
+        return config
+    }
+
+    public func applyFeatureFlagOverrides(_ overrides: [String: Any]) {
+        guard let assetService = serviceLocator.getAssetService() as? AssetServiceImpl,
+              var storeConfig = assetService.lastStoreConfig else { return }
+
+        if !hasAppliedOverrides {
+            originalStoreConfig = storeConfig
+            hasAppliedOverrides = true
+        }
+
+        applyBooleanOverrides(overrides, to: &storeConfig)
+        applyDoubleOverrides(overrides, to: &storeConfig)
+        applyIntegerOverrides(overrides, to: &storeConfig)
+        applyStringOverrides(overrides, to: &storeConfig)
+        applyNestedOverrides(overrides, to: &storeConfig)
+
+        assetService.lastStoreConfig = storeConfig
+        viewModel.updateStoreConfiguration(storeConfig)
+    }
+
+    private func applyBooleanOverrides(_ overrides: [String: Any], to storeConfig: inout StoreConfig) {
+        let mappings: [String: WritableKeyPath<StoreConfig, Bool?>] = [
+            "bluedotEnabled": \.bluedotEnabled,
+            "bluedotDisplayed": \.bluedotDisplayed,
+            "dynamicMapEnabled": \.dynamicMapEnabled,
+            "zoomControlEnabled": \.zoomControlEnabled,
+            "errorScreensEnabled": \.errorScreensEnabled,
+            "dynamicMapRotationEnabled": \.dynamicMapRotationEnabled,
+            "spinnerEnabled": \.spinnerEnabled,
+            "useBackgroundService": \.useBackgroundService,
+            "heartbeatInLocation": \.heartbeatInLocation,
+            "heartBeatInUser": \.heartBeatInUser,
+            "navigationEnabled": \.navigationEnabled,
+            "valid": \.valid,
+            "analytics": \.analytics
+        ]
+
+        for (key, keyPath) in mappings {
+            if let value = boolValue(overrides[key]) {
+                storeConfig[keyPath: keyPath] = value
+            }
+        }
+    }
+
+    private func applyDoubleOverrides(_ overrides: [String: Any], to storeConfig: inout StoreConfig) {
+        let mappings: [String: WritableKeyPath<StoreConfig, Double?>] = [
+            "backgroundServiceTimeout": \.backgroundServiceTimeout,
+            "geoFenceCheckTimeout": \.geoFenceCheckTimeout,
+            "positioningSessionTimeout": \.positioningSessionTimeout,
+            "geofenceRadius": \.geofenceRadius,
+            "heartbeatInterval": \.heartbeatInterval,
+            "batchInterval": \.batchInterval,
+            "latitude": \.latitude,
+            "longitude": \.longitude,
+            "createdAt": \.createdAt,
+            "updatedAt": \.updatedAt
+        ]
+
+        for (key, keyPath) in mappings {
+            if let value = doubleValue(overrides[key]) {
+                storeConfig[keyPath: keyPath] = value
+            }
+        }
+    }
+
+    private func applyIntegerOverrides(_ overrides: [String: Any], to storeConfig: inout StoreConfig) {
+        let mappings: [String: WritableKeyPath<StoreConfig, Int?>] = [
+            "sessionRefreshTime": \.sessionRefreshTime,
+            "storeId": \.storeId
+        ]
+
+        for (key, keyPath) in mappings {
+            if let value = intValue(overrides[key]) {
+                storeConfig[keyPath: keyPath] = value
+            }
+        }
+    }
+
+    private func applyStringOverrides(_ overrides: [String: Any], to storeConfig: inout StoreConfig) {
+        if let mapType = overrides["mapType"] as? String {
+            storeConfig.mapType = mapType
+        }
+        if let supportedEventList = overrides["supportedEventList"] as? String {
+            storeConfig.supportedEventList = supportedEventList
+        }
+    }
+
+    private func applyNestedOverrides(_ overrides: [String: Any], to storeConfig: inout StoreConfig) {
+        if let offsetOverrides = overrides["offset"] as? [String: Any] {
+            applyOffsetOverrides(offsetOverrides, to: &storeConfig)
+        }
+        if let navigationOverrides = overrides["navigation"] as? [String: Any] {
+            applyNavigationOverrides(navigationOverrides, to: &storeConfig)
+        }
+        if let mapUiOverrides = overrides["mapUi"] as? [String: Any] {
+            applyMapUiOverrides(mapUiOverrides, to: &storeConfig)
+        }
+        if let pinsOverrides = overrides["pins"] as? [String: Any] {
+            applyPinsOverrides(pinsOverrides, to: &storeConfig)
+        }
+    }
+
+    private func applyOffsetOverrides(_ overrides: [String: Any], to storeConfig: inout StoreConfig) {
+        var offsetConfig = storeConfig.offset ?? StoreConfigOffset(x: 0, y: 0)
+
+        if let x = doubleValue(overrides["x"]) {
+            offsetConfig.x = CGFloat(x)
+        }
+        if let y = doubleValue(overrides["y"]) {
+            offsetConfig.y = CGFloat(y)
+        }
+
+        storeConfig.offset = offsetConfig
+    }
+
+    private func applyNavigationOverrides(_ overrides: [String: Any], to storeConfig: inout StoreConfig) {
+        var navigationConfig = storeConfig.navigation ?? NavigationConfig()
+
+        if let enabled = boolValue(overrides["enabled"]) {
+            navigationConfig.enabled = enabled
+            storeConfig.navigationEnabled = enabled
+        }
+        if let refreshDuration = doubleValue(overrides["refreshDuration"]) {
+            navigationConfig.refreshDuration = refreshDuration
+        }
+        if let isAutomaticNavigation = boolValue(overrides["isAutomaticNavigation"]) {
+            navigationConfig.isAutomaticNavigation = isAutomaticNavigation
+        }
+
+        storeConfig.navigation = navigationConfig
+    }
+
+    private func applyMapUiOverrides(_ overrides: [String: Any], to storeConfig: inout StoreConfig) {
+        var mapUiConfig = storeConfig.mapUi ?? MapUiConfig()
+
+        if let bannerEnabled = boolValue(overrides["bannerEnabled"]) {
+            mapUiConfig.bannerEnabled = bannerEnabled
+        }
+        if let snackBarEnabled = boolValue(overrides["snackBarEnabled"]) {
+            mapUiConfig.snackBarEnabled = snackBarEnabled
+        }
+        if let pinLocationUnavailableBannerEnabled =
+            boolValue(overrides["pinLocationUnavailableBannerEnabled"]) {
+            mapUiConfig.pinLocationUnavailableBannerEnabled = pinLocationUnavailableBannerEnabled
+        }
+
+        storeConfig.mapUi = mapUiConfig
+    }
+
+    private func applyPinsOverrides(_ overrides: [String: Any], to storeConfig: inout StoreConfig) {
+        var pinsConfig = storeConfig.pins ?? PinsConfig()
+
+        if let actionAlleyEnabled = boolValue(overrides["actionAlleyEnabled"]) {
+            pinsConfig.actionAlleyEnabled = actionAlleyEnabled
+        }
+        if let groupPinsEnabled = boolValue(overrides["groupPinsEnabled"]) {
+            pinsConfig.groupPinsEnabled = groupPinsEnabled
+        }
+
+        storeConfig.pins = pinsConfig
+    }
+
+    private func boolValue(_ value: Any?) -> Bool? {
+        if let bool = value as? Bool {
+            return bool
+        }
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+        return nil
+    }
+
+    private func doubleValue(_ value: Any?) -> Double? {
+        if let double = value as? Double {
+            return double
+        }
+        if let int = value as? Int {
+            return Double(int)
+        }
+        if let number = value as? NSNumber {
+            return number.doubleValue
+        }
+        if let string = value as? String {
+            return Double(string)
+        }
+        return nil
+    }
+
+    private func intValue(_ value: Any?) -> Int? {
+        if let int = value as? Int {
+            return int
+        }
+        if let number = value as? NSNumber {
+            return number.intValue
+        }
+        if let string = value as? String {
+            return Int(string)
+        }
+        return nil
+    }
+
+    public func revertToOriginalConfig() {
+        guard let originalConfig = originalStoreConfig,
+              let assetService = serviceLocator.getAssetService() as? AssetServiceImpl else { return }
+
+        assetService.lastStoreConfig = originalConfig
+        viewModel.updateStoreConfiguration(originalConfig)
+
+        hasAppliedOverrides = false
+        originalStoreConfig = nil
+    }
+
+    public func hasOverridesApplied() -> Bool {
+        return hasAppliedOverrides
+    }
+
+    public func resetOverrideTracking() {
+        hasAppliedOverrides = false
+        originalStoreConfig = nil
+    }
+
+    public func setLocalMapFileURL(_ url: URL?) {
+        Compass.setLocalMapFileURL(url)
+    }
+
+    public static func setLocalMapFileURL(_ url: URL?) {
+        CompassDebugOverrides.localMapURL = url
+    }
+
+    public static func currentLocalMapFileURL() -> URL? {
+        CompassDebugOverrides.localMapURL
+    }
+}
+#endif
