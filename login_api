@@ -1,8 +1,17 @@
-  PR 1 – Feature flags + environment tuning (no local-map work)
+Here’s how the sample app turns the SDK’s geofence signal into a local iOS notification:
 
-  - Expanded the SwiftUI feature flags screen to cover every StoreConfig field, grouped by category, with nested navigation/map UI/pins support and sheet-based editing.
-  - Refactored Compass’ debug override path to accept all config values (booleans, numbers, nested structs) so the UI and SDK stay in sync.
-  - Made the environment settings editable at runtime (backend env, token type, mock user, account ID, default store), added safety checks, and re-initialize Compass
-    automatically when values change.
-  - Added mock-user toggling logic on the sample side so the blue dot reflects UI state, plus better store-id normalization and cleanup when restarting Compass.
-  - General UX improvements in the sample app (Env/Flags menu, shared HomeViewModel, console log helpers, etc.).
+  1. Permission setup – When the app launches, SampleApp calls NotificationManager.shared.configure(). That just asks the user for alert/sound permission
+     (UNUserNotificationCenter).
+  2. Listening to Compass events – After you initialize Compass, HomeViewModel.waitForEventEmitterCompletionHandlerResponse sets itself as the status service’s event handler. The
+     SDK emits different event types there (map status, bootstrap, errors… and geofence).
+  3. Catching geofence changes – When a .geofenceStateEventEmitter shows up, we cast it to GeofenceStateEventEmitter and read state (“inside”, “outside”, etc.).
+  4. Detecting transitions – We track the last known state in currentGeoFenceState. Only when the new state differs do we react (so you don’t spam notifications on duplicate
+     events).
+      - If you go from outside → inside (or undefined → inside when the app first learns your location), we call sendGeoFenceEnteredNotification().
+      - If you move inside → outside, we fire sendGeoFenceExitedNotification().
+  5. Posting the notification – Those helper methods call NotificationManager.shared.post(...), which schedules a local notification immediately (0.25s trigger) using
+     UNUserNotificationCenter.
+  6. Optional logging – We also write a message to the sample app console (consoleLog("**** ENTERED GEOFENCE…")) so you can see it while testing.
+
+  No extra SDK work was needed—the Compass SDK already emits the geofence event. The sample app simply listens for that event, compares it to the previous state, and pushes a
+  standard iOS local notification whenever the state flips.
