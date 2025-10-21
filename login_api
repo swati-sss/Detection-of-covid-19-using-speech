@@ -1,1 +1,359 @@
+import Combine
+import UIKit
+import compass_sdk_ios
+import os.log
 
+class CompassView: UIView, UIGestureRecognizerDelegate {
+    
+    // MARK: - Logging
+    
+    private let log = OSLog(subsystem: Bundle.main.bundleIdentifier ?? "com.compass.map", category: "CompassView")
+    
+    private func logMessage(_ message: String) {
+        os_log("%{public}@", log: self.log, message)
+    }
+    
+    // MARK: - React Native Property Handling
+    
+    /// React-Native will call this when you pass `customProperty={…}`.
+    @objc var customProperty: NSDictionary? {
+        didSet {
+            guard let dict = customProperty as? [String: Any] else { return }
+            setSrc(src: dict)
+            setNeedsLayout()
+        }
+    }
+
+    // MARK: - Property
+
+    weak var viewController: ViewController?
+    var defaultHeight: CGFloat = 50.0
+    var defaultWidth: CGFloat = 50.0
+    var height: CGFloat
+    var width : CGFloat
+    var workflow: Workflow?
+
+    // MARK: - Private property
+
+    private var panGestureRecognizer: UIPanGestureRecognizer?
+    private var pinchGestureRecognizer: UIPinchGestureRecognizer?
+    private var cancellable: AnyCancellable?
+    private var hasRequestedMapDisplay = false
+    private var hasEmittedMapReady = false
+
+    // MARK: - Init
+
+    override init(frame: CGRect) {
+        self.height = defaultHeight
+        self.width = defaultWidth
+        super.init(frame: frame)
+    }
+
+    required init?(coder aDecoder: NSCoder) {
+        fatalError("nope")
+    }
+
+    // MARK: - Public: Called whenever props (height/width/workflow) change
+
+    @objc func setSrc(src: [String: Any]) {
+        logMessage("CompassView setSrc called with: \(src)")
+        // Update width/height
+        self.height = getHeight(using: src)
+        self.width = getWidth(using: src)
+
+        // Extract workflow parameters if present
+        if let id = src["workflowId"] as? String,
+           let type = src["workflowType"] as? String,
+           let value = src["workflowValue"] as? String {
+            self.workflow = Workflow(id: id, type: type, value: value)
+            logMessage("CompassView workflow set: \(String(describing: self.workflow))")
+        } else {
+            logMessage("CompassView workflow not set - missing workflowId, workflowType, or workflowValue")
+        }
+        hasRequestedMapDisplay = false
+        hasEmittedMapReady = false
+
+        logMessage("CompassView dimensions: width=\(self.width), height=\(self.height)")
+        self.viewController = nil
+
+        self.setNeedsLayout()
+        self.layoutIfNeeded()
+    }
+
+    // MARK: - Helpers to parse numeric props
+
+    private func getHeight(using src: [String: Any]) -> CGFloat {
+        if let heightNum = src["height"] as? NSNumber {
+            let h = CGFloat(heightNum.doubleValue)
+            return h > 0 ? h : defaultHeight
+        } else if let heightDouble = src["height"] as? Double {
+            let h = CGFloat(heightDouble)
+            return h > 0 ? h : defaultHeight
+        } else if let heightFloat = src["height"] as? Float {
+            let h = CGFloat(heightFloat)
+            return h > 0 ? h : defaultHeight
+        } else if let heightInt = src["height"] as? Int {
+            let h = CGFloat(heightInt)
+            return h > 0 ? h : defaultHeight
+        }
+        return defaultHeight
+    }
+
+    private func getWidth(using src: [String: Any]) -> CGFloat {
+        if let widthNum = src["width"] as? NSNumber {
+            let w = CGFloat(widthNum.doubleValue)
+            return w > 0 ? w : defaultWidth
+        } else if let widthDouble = src["width"] as? Double {
+            let w = CGFloat(widthDouble)
+            return w > 0 ? w : defaultWidth
+        } else if let widthFloat = src["width"] as? Float {
+            let w = CGFloat(widthFloat)
+            return w > 0 ? w : defaultWidth
+        } else if let widthInt = src["width"] as? Int {
+            let w = CGFloat(widthInt)
+            return w > 0 ? w : defaultWidth
+        }
+        return defaultWidth
+    }
+
+    // MARK: - layoutSubviews
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        logMessage("CompassView layoutSubviews called - bounds: \(bounds), frame: \(frame)")
+        self.setupView()
+    }
+}
+
+extension CompassView {
+
+    // MARK: - Bind / Embed Logic
+
+    /// Only embed and bind once `workflow` is non-nil and frame is reasonable.
+    private func setupView() {
+        // If already embedded, just resize
+        if let vc = viewController {
+            vc.view.frame = bounds
+            logMessage("CompassView resizing existing ViewController to: \(bounds)")
+            return
+        }
+
+        // Defer until we have both props *and* a real size
+        guard let _ = workflow else {
+            logMessage("CompassView workflow not set yet, delaying embed")
+            return
+        }
+        
+        if bounds.width < 10 || bounds.height < 10 || parentViewController == nil {
+            logMessage("CompassView frame too small or missing parent, delaying embed. Bounds: \(bounds), Parent: \(String(describing: parentViewController))")
+            return
+        }
+
+        logMessage("CompassView proceeding with embed - workflow exists and frame is adequate")
+        embed()
+        setupBinding()
+        setupGestureRecognizer()
+        attemptDisplayMap(reason: "setupView")
+        logMessage("CompassView setupBinding completed with frame: \(self.width)x\(self.height)")
+    }
+
+    /// Sets up the Combine subscription waiting for `isFinishedSettingMap == true`.
+    /// Once that fires, we call `displayMap(workflow:)`.
+    private func setupBinding() {
+        logMessage("CompassView setupBinding called")
+        // Cancel any existing subscription
+        cancellable?.cancel()
+
+        // Grab the CurrentValueSubject so we can both subscribe and check its current value
+        guard let subject = compass?.isFinishedSettingMap else { 
+            logMessage("CompassView no compass isFinishedSettingMap subject available")
+            return 
+        }
+
+        // Subscribe to future map-ready events
+        cancellable = subject
+            .removeDuplicates()
+            .sink { [weak self] isFinished in
+                guard let self = self else { return }
+                self.logMessage("CompassView observed isFinishedSettingMap: \(isFinished)")
+                if isFinished {
+                    self.handleMapReady(reason: "combineUpdate")
+                }
+            }
+
+        attemptDisplayMap(reason: "setupBinding")
+
+        // If the map was already ready before we subscribed, fire immediately.
+        if subject.value {
+            logMessage("CompassView isFinishedSettingMap was already true")
+            handleMapReady(reason: "initialValue")
+        }
+    }
+
+    /// Embeds the shared `ViewController.shared` into this UIView's parent VC,
+    /// sets up its frame and mask, and stitches into the RN bridge.
+    private func embed() {
+        logMessage("CompassView embed called")
+        guard let parentVC = parentViewController,
+              self.width > 0,
+              self.height > 0 else {
+            logMessage("CompassView embed failed - parentViewController: \(String(describing: self.parentViewController)), dimensions: \(self.width)x\(self.height)")
+            return
+        }
+
+        logMessage("CompassView embed proceeding with dimensions: \(self.width)x\(self.height)")
+        
+        // Remove any existing child VC (just in case)
+        let vc = ViewController.shared
+        parentVC.remove(vc)
+
+        // Size and add as child
+        vc.view.frame = CGRect(x: 0, y: 0, width: self.width, height: self.height)
+        parentVC.addChild(vc)
+        addSubview(vc.view)
+        vc.didMove(toParent: parentVC)
+        self.viewController = vc
+
+        // Keep track of this view in a shared list, so that RN can reference it later if needed
+        ViewController.shared.compassViewList.append(self)
+
+        // Apply a white "mask" so only our desired rect is visible
+        let maskView = UIView(frame: CGRect(x: 0, y: 0, width: self.width, height: self.height))
+        maskView.backgroundColor = .white
+        vc.view.mask = maskView
+        vc.view.clipsToBounds = true
+        vc.view.layer.masksToBounds = true
+
+        logMessage("CompassView embed completed - vc.view.frame: \(vc.view.frame), maskView.frame: \(maskView.frame)")
+    }
+
+    /// Prevents parent scroll-view from hijacking pan/pinch events so that map gestures still work.
+    private func setupGestureRecognizer() {
+        setupPanGestureRecognizer()
+        setupPinchGestureRecognizer()
+    }
+
+    private func setupPanGestureRecognizer() {
+        if panGestureRecognizer == nil {
+            panGestureRecognizer = UIPanGestureRecognizer(target: self, action: #selector(panGestureSelector(_:)))
+            panGestureRecognizer!.delegate = self
+            panGestureRecognizer!.cancelsTouchesInView = false
+            panGestureRecognizer!.delaysTouchesBegan = false
+        }
+        viewController?.view.addGestureRecognizer(panGestureRecognizer!)
+    }
+
+    private func setupPinchGestureRecognizer() {
+        if pinchGestureRecognizer == nil {
+            pinchGestureRecognizer = UIPinchGestureRecognizer(target: self, action: #selector(pinchGestureSelector(_:)))
+            pinchGestureRecognizer!.delegate = self
+            pinchGestureRecognizer!.cancelsTouchesInView = false
+            pinchGestureRecognizer!.delaysTouchesBegan = false
+        }
+        viewController?.view.addGestureRecognizer(pinchGestureRecognizer!)
+    }
+
+    func gestureRecognizer(_ g1: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith g2: UIGestureRecognizer) -> Bool {
+        return true
+    }
+
+    @objc private func panGestureSelector(_ sender: UIPanGestureRecognizer) {
+        validateGesture(sender.state == .ended)
+    }
+
+    @objc private func pinchGestureSelector(_ sender: UIPinchGestureRecognizer) {
+        validateGesture(sender.state == .ended)
+    }
+
+    private func validateGesture(_ isGestureBegan: Bool) {
+        setViewControllerScrollEnable(isGestureBegan)
+    }
+
+    private func setViewControllerScrollEnable(_ isScrollEnabled: Bool) {
+        guard let viewController = viewController else { return }
+        viewController.view.enclosingScrollView?.isScrollEnabled = isScrollEnabled
+    }
+    
+    // MARK: - User Position Indicator
+    func removeUserPositionIndicator() {
+        // TODO: Implement actual logic to remove the user position indicator from the map
+        logMessage("removeUserPositionIndicator called to clear BlueDot")
+    }
+
+    private func attemptDisplayMap(reason: String) {
+        guard !hasRequestedMapDisplay else {
+            logMessage("CompassView attemptDisplayMap skipped (\(reason)) - already requested")
+            return
+        }
+
+        guard let workflow else {
+            logMessage("CompassView attemptDisplayMap skipped (\(reason)) - workflow missing")
+            return
+        }
+
+        guard let compass else {
+            logMessage("CompassView attemptDisplayMap skipped (\(reason)) - compass instance unavailable")
+            return
+        }
+
+        logMessage("CompassView attempting displayMap (\(reason)) with workflow: \(workflow)")
+        hasRequestedMapDisplay = true
+        compass.displayMap(workflow: workflow)
+    }
+
+    private func handleMapReady(reason: String) {
+        guard !hasEmittedMapReady else {
+            logMessage("CompassView handleMapReady ignored (\(reason)) - already emitted")
+            return
+        }
+        hasEmittedMapReady = true
+        if let workflow {
+            logMessage("CompassView map ready (\(reason)); ensuring displayMap with workflow: \(workflow)")
+            compass?.displayMap(workflow: workflow)
+        } else {
+            logMessage("CompassView map ready (\(reason)) but workflow missing")
+        }
+        logMessage("CompassView map ready (\(reason)); emitting status event")
+        compass?.getStatusService().emitMapStatusEvent(isSuccess: true)
+    }
+}
+
+// MARK: - UIViewController extension (for embedding/removal)
+
+extension UIViewController {
+    func addChildVC(_ childVC: UIViewController) {
+        addChild(childVC)
+        view.addSubview(childVC.view)
+        childVC.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addConstraints([
+            childVC.view.topAnchor.constraint(equalTo: view.topAnchor),
+            childVC.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            childVC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            childVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            childVC.view.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            childVC.view.centerYAnchor.constraint(equalTo: view.centerYAnchor)
+        ])
+        childVC.didMove(toParent: self)
+    }
+
+    func remove(_ childVC: UIViewController) {
+        childVC.willMove(toParent: nil)
+        childVC.view.removeFromSuperview()
+        childVC.removeFromParent()
+    }
+}
+
+// MARK: - UIView extension (finding the parent UIViewController)
+
+extension UIView {
+    var parentViewController: UIViewController? {
+        var parentResponder: UIResponder? = self
+        while parentResponder != nil {
+            parentResponder = parentResponder!.next
+            if let vc = parentResponder as? UIViewController {
+                return vc
+            }
+        }
+        return nil
+    }
+}
