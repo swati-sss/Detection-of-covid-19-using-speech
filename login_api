@@ -1,704 +1,334 @@
-import Foundation
-//import UIKit
-import compass_sdk_ios
 import Combine
+import UIKit
+import compass_sdk_ios
 import os.log
 
-var compass: Compass?
-
-typealias PinDropEventEmitterHandler = (PinDropEventEmitter) -> Void
-typealias EventEmitterDescriptionHandler = (EventEmitterDescription) -> Void
-typealias LocationEventEmitterHandler = (LocationEventEmitter) -> Void
-typealias ErrorEventEmitterHandler = (ErrorEventEmitter) -> Void
-
-@objc(CompassSdkRn)
-class CompassSdkRn: RCTEventEmitter {
-  var isListenerRegistered = false
-  private let log = OSLog.init(subsystem: Bundle.main.bundleIdentifier ?? "com.compass.map", category: "compasssdkapi")
-  var currentStore: Int?
-  var statusService: StatusService?
-  private var pinDropEventEmitterHandler: PinDropEventEmitterHandler?
-  private var showMapEventEmitterHandler: EventEmitterDescriptionHandler?
-  private var bootstrapEventEmitterHandler: EventEmitterDescriptionHandler?
-  private var locationEventEmitterHandler: LocationEventEmitterHandler?
-  private var errorEventEmitterHandler: ErrorEventEmitterHandler?
-  private var cancellables = Set<AnyCancellable>()
-  
-  enum Event: String, CaseIterable {
-    case compassStatusEvent = "COMPASS_STATUS_EVENT"
-    case compassErrorEvent = "COMPASS_ERROR_EVENT"
-    case compassLogEvent = "COMPASS_LOG_EVENT"
-    case pinCallbackEvent = "PIN_CALLBACK_EVENT"
-    case compassMapEvent = "COMPASS_MAP_EVENT"
-    case compassAssetsEvent = "COMPASS_ASSETS_EVENT"
-  }
-  
-  override func startObserving() {
-    os_log("Compass: startObserving", log: self.log)
-    isListenerRegistered = true
-    super.startObserving()
-  }
-  
-  override func stopObserving() {
-    os_log("Compass: stopObserving", log: self.log)
-    isListenerRegistered = false
-    super.stopObserving()
-  }
-  
-  override func supportedEvents() -> [String]! {
-    return Event.allCases.map { $0.rawValue }
-  }
-  
-  @objc(initialize:consumerID:accountID:tokenType:storeId:environment:config:resolve:reject:)
-  func initialize(clientSec: String,
-                  consumerID: String,
-                  accountID: String,
-                  tokenType: String,
-                  storeId: Int,
-                  environment: String,
-                  config: AnyObject?,
-                  resolve: @escaping RCTPromiseResolveBlock,
-                  reject: @escaping RCTPromiseRejectBlock) -> Void {
-    DispatchQueue.main.async { [weak self] in
-      self?.currentStore = compass?.currentStore
-      guard let self = self else {
-        let err = NSError(domain: "Bridge file error",
-                          code: -1,
-                          userInfo: ["description":"rn: PresentedViewController is nil"])
-        os_log("Compass: PresentedViewController is nil")
-        reject("\(err.code)", err.debugDescription, err)
-        return
-      }
-      
-      guard self.currentStore != storeId else {
-        resolve("Compass Initialization success")
-        return
-      }
-      
-      compass = Compass()
-      
-      guard let compass = compass else {
-        resolve("Compass Initialization success")
-        return
-      }
-      
-      self.statusService = compass.getStatusService()
-      // Do any additional setup after loading the view.
-      let timestamp = String(Int(1000 * Date().timeIntervalSince1970))
-      let authParameter = AuthParameter(authToken: clientSec,
-                                        tokenType: tokenType,
-                                        accountID: accountID,
-                                        consumerID: consumerID)
-      
-      var configuration = Configuration(country: "US",
-                                        site: storeId,
-                                        userId: accountID,
-                                        siteType: SiteType.Store,
-                                        manualPinDrop: true,
-                                        navigateToPin: false,
-                                        multiPin: false,
-                                        searchBar: false,
-                                        centerMap: true,
-                                        locationIngestion: true,
-                                        mockUser: false,
-                                        anonymizedUserID: "ANNONYMIZEDUSER",
-                                        startPositioning: true,
-                                        automaticCalibration: true,
-                                        businessUnitType: BusinessUnitType.WALMART)
-      
-      if let configDict = config as? [String: Bool], let mockUser = configDict["mockUser"] {
-        configuration.mockUser = mockUser
-      }
-      
-      var updateStatus = true
-      let isProdEnv = environment.lowercased().contains("prod") || environment.lowercased().contains("beta")
-      compass.setEnvironment(isProdEnv ? .production : .staging)
-      
-      self.cancellables.removeAll()
-      Just(compass.initialize(authParameter: authParameter,
-                              configuration: configuration,
-                              capabilities: [],
-                              rootViewController: ViewController.shared))
-      .eraseToAnyPublisher()
-      .flatMap { _ in
-        compass.isFinishedInitialize
-      }
-      .sink { isFinishedInitialize in
-        guard let isFinishedInitialize else {
-          os_log("Compass: Compass waiting initialization", log: self.log)
-          return
-        }
-        
-        guard isFinishedInitialize else {
-          Log.debug("Compass: Compass Initialization Failed")
-          let err = NSError(
-            domain: "Unknown error",
-            code: -1,
-            userInfo: ["description": "Unknown error while initializing compass."]
-          )
-          updateStatus = false
-          reject("\(err.code)", err.debugDescription, err)
-          return
-        }
-        
-        self.currentStore = storeId
-        compass.currentStore = storeId
-        os_log("Compass: Compass initialization is success", log: self.log)
-        
-        if updateStatus {
-          updateStatus = false
-          resolve("Compass Initialization success")
-        }
-      }
-      .store(in: &self.cancellables)
-      
-      self.statusService?.eventEmitterHandler = { [weak self] eventEmitter in
-        guard let self else { return }
-        switch eventEmitter.eventType {
-        case .mapStatusEventEmitter:
-          guard let mapStatusEvent = eventEmitter as? MapStatusEventEmitter else {
-            return
-          }
-          var dict = mapStatusEvent.toDictionary()
-          dict["eventType"] = nil
-          self.send(.compassMapEvent, dict: dict)
-        case .positionEventEmitter:
-          guard let positionEvent = eventEmitter as? PositionEventEmitter else {
-            return
-          }
-          
-          var event = [String : Any]()
-          event["EventType"] = positionEvent.positionType
-          event["EventCode"] = positionEvent.positionCode
-          
-          os_log("Compass: compassProgressEvent %{public}@ %{public}@",
-                 log: self.log,
-                 event,
-                 eventEmitter.eventType.rawValue)
-          
-          if self.isListenerRegistered {
-            self.sendEvent(withName: Event.compassStatusEvent.rawValue, body: event)
-          }
-        case .initErrorEventEmitter:
-          guard self.isListenerRegistered, let compassError = eventEmitter as? ErrorEventEmitter else {
-            return
-          }
-          var event = [String : Any]()
-          event["code"] = compassError.errorCode
-          event["errortype"] = compassError.compassErrorType
-          event["message"] = compassError.errorDescription
-          
-          self.sendEvent(withName: Event.compassErrorEvent.rawValue, body: event)
-          
-          if updateStatus {
-            updateStatus = false
-            reject("-1", "Compass Initialization failed", nil)
-          }
-        case .pinListEventEmitter:
-          guard let pinDropEventEmitter = eventEmitter as? PinDropEventEmitter else {
-            return
-          }
-          
-          self.pinDropEventEmitterHandler?(pinDropEventEmitter)
-        case .showMapEventEmitter:
-          guard let eventEmitterDescription = eventEmitter as? EventEmitterDescription else {
-            return
-          }
-          
-          self.showMapEventEmitterHandler?(eventEmitterDescription)
-        case .bootstrapEventEmitter:
-          guard let eventEmitterDescription = eventEmitter as? EventEmitterDescription else {
-            return
-          }
-          
-          self.bootstrapEventEmitterHandler?(eventEmitterDescription)
-        case .locationEventEmitter:
-          guard let locationEventEmitter = eventEmitter as? LocationEventEmitter else {
-            return
-          }
-          
-          self.locationEventEmitterHandler?(locationEventEmitter)
-        case .errorEventEmitter:
-          guard let errorEventEmitter = eventEmitter as? ErrorEventEmitter else {
-            return
-          }
-          
-          self.errorEventEmitterHandler?(errorEventEmitter)
-        default:
-          break
-        }
-      }
-    }
-  }
-  
-  @objc(getCompassStatus:reject:)
-  func getCompassStatus(resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) -> Void {
-    //TODO
-    let err = NSError(domain: "Bridge file error",
-                      code: -1,
-                      userInfo: ["description":"getCompassStatus is not implemented"])
-    reject("\(err.code)", err.debugDescription, err)
-  }
-  
-  @objc(displayPins:type:config:resolve:reject:)
-  func displayPins(uuid: [String],
-                   type: String,
-                   config: [String: Any]?,
-                   resolve: @escaping RCTPromiseResolveBlock,
-                   reject: @escaping RCTPromiseRejectBlock) -> Void {
-    DispatchQueue.main.async { [weak self] in
-      os_log("Compass: displayPins called.")
-      guard let self = self, let compass = compass else {
-        let err = NSError(domain: "Bridge file error",
-                          code: -1,
-                          userInfo: ["description":"rn: PresentedViewController is nil"])
-        reject("\(err.code)", err.debugDescription, err)
-        return
-      }
-      
-      var updateStatus = true
-      
-      compass.isFinishedInitialize
-        .sink { [weak self] isFinishedInitialize in
-          guard let self,
-                self.checkCompassInitialization(isFinishedInitialize, reject: reject) else {
-            return
-          }
-          
-          var firstUuid = [String]()
-          if uuid.count > 0, let first = uuid.first {
-            firstUuid = [first]
-          }
-          var idType: EventConstant.Identifier
-          switch type.lowercased() {
-          case "assets", "asset":
-            idType = EventConstant.Identifier.assets
-          default:
-            idType = EventConstant.Identifier.generic
-          }
-          compass.displayPin(uuidList: firstUuid, idType: idType, config: config)
-          debugPrint("uuid is \(uuid) firstUuid is \(firstUuid) and type is \(type)")
-        }
-        .store(in: &self.cancellables)
-      
-      
-      //Observe error and progress update
-      self.pinDropEventEmitterHandler = { [weak self] pinDropEventEmitter in
-        guard let self else { return }
-        var dict = pinDropEventEmitter.toDictionary()
-        dict["eventType"] = nil
-        os_log("Compass: compassAssetEvent %{public}@ %{public}@",
-               log: self.log,
-               dict,
-               pinDropEventEmitter.eventType.rawValue)
-        
-        self.sendEvent(withName: Event.pinCallbackEvent.rawValue, body: dict)
-        
-        if updateStatus {
-          updateStatus = false
-          resolve("displaypin success")
-        }
-      }
-      
-      self.errorEventEmitterHandler = { [weak self] errorEventEmitter in
-        guard let self, self.isListenerRegistered else {
-          return
-        }
-        var event = [String : Any]()
-        event["code"] = errorEventEmitter.errorCode
-        event["errortype"] = errorEventEmitter.compassErrorType
-        event["message"] = errorEventEmitter.errorDescription
-        os_log("Compass: displayPins error %{public}@ %{public}@",
-               log: self.log,
-               event,
-               errorEventEmitter.eventType.rawValue)
-        
-        self.sendEvent(withName: Event.compassErrorEvent.rawValue,
-                       body: event)
-        
-        if updateStatus {
-          updateStatus = false
-          reject("-1", "Compass displayPins failed", nil)
-        }
-      }
-    }
-  }
-  
-  
-  @objc(displayPinsV2:config:resolve:reject:)
-  func displayPinsV2(pins: [[String: Any]],
-                     config: [String: Any],
-                     resolve: @escaping RCTPromiseResolveBlock,
-                     reject: @escaping RCTPromiseRejectBlock) -> Void {
-    DispatchQueue.main.async { [weak self] in
-      os_log("Compass: displayPinsV2 called.")
-      guard let self = self, let compass = compass else {
-        let err = NSError(domain: "Bridge file error",
-                          code: -1,
-                          userInfo: ["description":"rn: PresentedViewController is nil"])
-        reject("\(err.code)", err.debugDescription, err)
-        return
-      }
-      
-      var updateStatus = true
-      
-      compass.isFinishedInitialize
-        .sink { [weak self] isFinishedInitialize in
-          guard let self,
-                self.checkCompassInitialization(isFinishedInitialize, reject: reject) else {
-            return
-          }
-          
-          var nativePins: [compass_sdk_ios.AislePin] = []
-          for pin in pins {
-            guard let type = pin["type"] as? String,
-                  let id = pin["id"] as? String,
-                  let location = pin["location"] as? [String: Any],
-                  let zone = location["zone"] as? String,
-                  let aisle = location["aisle"] as? String,
-                  let section = location["section"] as? String
-            else {
-              let pinError = NSError(domain: "Bridge file error",
-                                     code: -1,
-                                     userInfo: ["description":"rn: displayPinsV2 failed due to invalid pin data"])
-              reject("\(pinError.code)", pinError.localizedDescription, pinError)
-              return
-            }
-            
-            let aisleLocation = compass_sdk_ios.AisleLocation(zone: zone, aisle: aisle, section: section, selected: true)
-            let nativePin = compass_sdk_ios.AislePin(type: type, id: id, location: aisleLocation)
-            nativePins.append(nativePin)
-          }
-          
-          compass.displayPinV2(pins: nativePins, config: config)
-          debugPrint("Pins: \(pins) \nNativePins: \(nativePins)")
-        }
-        .store(in: &self.cancellables)
-      
-      //Observe error and progress update
-      self.pinDropEventEmitterHandler = { [weak self] pinDropEventEmitter in
-        guard let self else { return }
-        var dict = pinDropEventEmitter.toDictionary()
-        dict["eventType"] = nil
-        os_log("Compass: compassAssetEvent %{public}@ %{public}@",
-               log: self.log,
-               dict,
-               pinDropEventEmitter.eventType.rawValue)
-        
-        self.sendEvent(withName: Event.pinCallbackEvent.rawValue, body: dict)
-        
-        if updateStatus {
-          updateStatus = false
-          resolve("displaypin success")
-        }
-      }
-      
-      self.errorEventEmitterHandler = { [weak self] errorEventEmitter in
-        guard let self, self.isListenerRegistered else {
-          return
-        }
-        var event = [String : Any]()
-        event["code"] = errorEventEmitter.errorCode
-        event["errortype"] = errorEventEmitter.compassErrorType
-        event["message"] = errorEventEmitter.errorDescription
-        os_log("Compass: displayPinsV2 error %{public}@ %{public}@",
-               log: self.log,
-               event,
-               errorEventEmitter.eventType.rawValue)
-        
-        self.sendEvent(withName: Event.compassErrorEvent.rawValue,
-                       body: event)
-        
-        if updateStatus {
-          updateStatus = false
-          reject("-1", "Compass displayPinsV2 failed", nil)
-        }
-      }
-    }
-  }
-  
-  @objc(getUserDistance:resolve:reject:)
-  func getUserDistance(pins: [[String: Any]],
-                       resolve: @escaping RCTPromiseResolveBlock,
-                       reject: @escaping RCTPromiseRejectBlock) -> Void {
-    DispatchQueue.main.async { [weak self] in
-      os_log("Compass: getUserDistance called.")
-      guard let self = self, let compass = compass else {
-        let err = NSError(domain: "Bridge file error",
-                          code: -1,
-                          userInfo: ["description":"rn: PresentedViewController is nil"])
-        reject("\(err.code)", err.debugDescription, err)
-        return
-      }
-      
-      compass.isFinishedInitialize
-        .sink { [weak self] isFinishedInitialize in
-          guard let self,
-                self.checkCompassInitialization(isFinishedInitialize, reject: reject) else {
-            return
-          }
-          
-          var nativePins: [compass_sdk_ios.AislePin] = []
-          for pin in pins {
-            guard let type = pin["type"] as? String,
-                  let id = pin["id"] as? String,
-                  let location = pin["location"] as? [String: Any],
-                  let zone = location["zone"] as? String,
-                  let aisle = location["aisle"] as? String,
-                  let section = location["section"] as? String
-            else {
-              let pinError = NSError(domain: "Bridge file error",
-                                     code: -1,
-                                     userInfo: ["description":"rn: getUserDistance failed due to invalid pin data"])
-              reject("\(pinError.code)", pinError.localizedDescription, pinError)
-              return
-            }
-            
-            let aisleLocation = compass_sdk_ios.AisleLocation(zone: zone, aisle: aisle, section: section, selected: true)
-            let nativePin = compass_sdk_ios.AislePin(type: type, id: id, location: aisleLocation)
-            nativePins.append(nativePin)
-          }
-          
-          compass.getUserDistance(pins: nativePins) { distances in
-            if distances.isEmpty {
-              let distanceError = NSError(domain: "Bridge file error",
-                                          code: -1,
-                                          userInfo: ["description":"rn: getUserDistance failed due to empty distances"])
-              os_log("Compass: getUserDistance failed with empty distances", log: self.log)
-              reject("\(distanceError.code)", distanceError.localizedDescription, distanceError)
-              return
-            }
-            
-            let dictionaryList = distances.map { $0.toDictionary() }
-            resolve(dictionaryList)
-          }
-        }
-        .store(in: &self.cancellables)
-    }
-  }
+class CompassView: UIView, UIGestureRecognizerDelegate {
     
-    @objc(getLocation:resolve:reject:)
-    func getLocation(assetId: String,
-                     resolve: @escaping RCTPromiseResolveBlock,
-                     reject: @escaping RCTPromiseRejectBlock) {
-      DispatchQueue.main.async { [weak self] in
-        guard let self = self, let compass = compass else {
-          let err = NSError(domain: "Bridge file error",
-                            code: -1,
-                            userInfo: ["description":"rn: PresentedViewController is nil"])
-          reject("\(err.code)", err.debugDescription, err)
-          return
-        }
-        
-        compass.isFinishedInitialize.sink { [weak self] isFinishedInitialize in
-          guard let self,
-                self.checkCompassInitialization(isFinishedInitialize, reject: reject) else {
-            return
-          }
-          
-          compass.getAisle(id: assetId)
-        }
-        .store(in: &self.cancellables)
-        
-        var isCancelled = false
-        
-        //Observe error and progress update
-        self.locationEventEmitterHandler = { [weak self] locationEventEmitter in
-          guard let self else { return }
-          
-          os_log("Compass: getAisle %{public}@ %{public}@",
-                 log: self.log,
-                 locationEventEmitter.location,
-                 locationEventEmitter.eventType.rawValue)
-          isCancelled = true
-          resolve(["aisle" : locationEventEmitter.location])
-        }
-        
-        guard !isCancelled else {
-          return
-        }
-        self.errorEventEmitterHandler = { [weak self] errorEventEmitter in
-          guard let self else { return }
-          
-          var event = [String : Any]()
-          event["code"] = errorEventEmitter.errorCode
-          event["errortype"] = errorEventEmitter.compassErrorType
-          event["message"] = errorEventEmitter.errorDescription
-          
-          self.sendEvent(withName: Event.compassErrorEvent.rawValue,
-                         body: event)
-          
-          os_log("Compass: getAisle error %{public}@ %{public}@",
-                 log: self.log,
-                 event,
-                 errorEventEmitter.eventType.rawValue)
-          
-          reject("-1", "Compass getLocation failed", nil)
-        }
-      }
+    // MARK: - Logging
+    
+    private let log = OSLog(subsystem: Bundle.main.bundleIdentifier ?? "com.compass.map", category: "CompassView")
+    
+    private func logMessage(_ message: String) {
+        os_log("%{public}@", log: self.log, message)
     }
     
-  @objc(clearMap:)
-  func clearMap(config: [String: Any]) {
-    DispatchQueue.main.async {
-      os_log("Compass: clearMap called.")
-      compass?.clearMap(configuration: config)
-    }
-  }
-  
-  @objc(centerAndZoom:zoomLevel:)
-  func centerAndZoom(asset: String, zoomLevel: Int) -> Void {}
-  
-  @objc(updateEvent:eventValue:metadata:resolve:reject:)
-  func updateEvent(eventType: String,
-                   eventValue: String,
-                   metadata: [String: Any],
-                   resolve: @escaping RCTPromiseResolveBlock,
-                   reject: @escaping RCTPromiseRejectBlock) -> Void {
-    DispatchQueue.main.async { [weak self] in
-      os_log("Compass: updateEvent called.")
-      
-      guard let self = self, let compass = compass else {
-        let err = NSError(domain: "Bridge file error",
-                          code: -1,
-                          userInfo: ["description":"rn: PresentedViewController is nil"])
-        reject("\(err.code)", err.debugDescription, err)
-        return
-      }
-      
-      compass.isFinishedInitialize.sink { [weak self] isFinishedInitialize in
-        guard let self,
-              self.checkCompassInitialization(isFinishedInitialize, reject: reject) else {
-          return
-        }
-        
-        let compassEvent = CompassEvent(eventType: eventType, eventValue: eventValue, eventMetadata: [:])
-        compass.updateEvent(compassEvent: compassEvent)
-      }
-      .store(in: &self.cancellables)
-      
-      var isCancelled = false
-      var updateStatus = true
-      
-      //Observe error and progress update
-      self.bootstrapEventEmitterHandler = { [weak self] eventEmitterDescription in
-        guard let self else { return }
-        
-        os_log("Compass: compassAddEvent %{public}@ %{public}@",
-               log: self.log,
-               eventEmitterDescription.description,
-               eventEmitterDescription.eventType.rawValue)
-        isCancelled = true
-        if updateStatus {
-          updateStatus = false
-          resolve(eventEmitterDescription.description)
-        }
-      }
-      
-      guard !isCancelled else {
-        return
-      }
-      self.errorEventEmitterHandler = { [weak self] errorEventEmitter in
-        guard let self else { return }
-        
-        var event = [String : Any]()
-        event["code"] = errorEventEmitter.errorCode
-        event["errortype"] = errorEventEmitter.compassErrorType
-        event["message"] = errorEventEmitter.errorDescription
-        os_log("Compass: displayPins error %{public}@ %{public}@",
-               log: self.log,
-               event,
-               errorEventEmitter.eventType.rawValue)
-        
-        self.sendEvent(withName: Event.compassErrorEvent.rawValue, body: event)
-        
-        if updateStatus {
-          updateStatus = false
-          reject("-1", "Compass updateEvent failed", nil)
-        }
-      }
-    }
-  }
-  
-  @objc(displayMap:workflowId:workflowValue:resolve:reject:)
-  func displayMap(workflowType: String,
-                  workflowId: String,
-                  workflowValue: String,
-                  resolve: @escaping RCTPromiseResolveBlock,
-                  reject: @escaping RCTPromiseRejectBlock) -> Void {
-    DispatchQueue.main.async { [weak self] in
-      guard let self = self, let compass = compass else {
-        let err = NSError(domain: "Bridge file error",
-                          code: -1,
-                          userInfo: ["description":"rn: PresentedViewController is nil"])
-        reject("\(err.code)", err.debugDescription, err)
-        return
-      }
-      
-      let workflow = Workflow(id: workflowId, type: workflowType, value: workflowValue)
-      var didResolve = false
-      let resolveOnce: (String) -> Void = { message in
-        guard !didResolve else { return }
-        didResolve = true
-        resolve(message)
-      }
-
-      compass.displayMap(workflow: workflow)
-
-      compass.isFinishedSettingMap
-        .removeDuplicates()
-        .filter { $0 }
-        .prefix(1)
-        .sink { [weak self] _ in
-          guard let self else { return }
-          os_log("Compass: isFinishedSettingMap true - map ready.", log: self.log)
-          compass.displayMap(workflow: workflow)
-          compass.getStatusService().emitMapStatusEvent(isSuccess: true)
-          resolveOnce("Compass map display completed")
-        }
-        .store(in: &self.cancellables)
-      
-      //Observe error and progress update
-      self.showMapEventEmitterHandler = { [weak self] eventEmitterDescription in
-        guard let self else { return }
-        
-        os_log("Compass: compassDisplayMapEvent %{public}@ %{public}@",
-               log: self.log,
-               eventEmitterDescription.description,
-               eventEmitterDescription.eventType.rawValue)
-        resolveOnce(eventEmitterDescription.description)
-      }
-    }
-  }
-
-    @objc(updateAuthParams:consumerID:accountID:)
-    func updateAuthParams(clientSec: String, consumerID: String, accountID: String) -> Void {}
+    // MARK: - React Native Property Handling
     
-    // MARK: - Helper methods
-    func send(_ event: Event, dict: Any) {
-      self.sendEvent(withName: event.rawValue, body: dict)
+    /// React-Native will call this when you pass `customProperty={…}`.
+    @objc var customProperty: NSDictionary? {
+        didSet {
+            guard let dict = customProperty as? [String: Any] else { return }
+            applySrc(dict)
+            setNeedsLayout()
+        }
     }
-  }
-  
-  private extension CompassSdkRn {
-    func checkCompassInitialization(_ isFinishedInitialize: Bool?, reject: @escaping RCTPromiseRejectBlock) -> Bool {
-      guard let isFinishedInitialize else {
-        os_log("Compass: Compass waiting initialization", log: self.log)
-        return false
-      }
-      
-      guard isFinishedInitialize else {
-        Log.debug("Compass: Compass Initialization Failed")
-        let err = NSError(
-          domain: "Unknown error",
-          code: -1,
-          userInfo: ["description": "Compass initialization failed. Please ensure that the comoass has been correctly set up and configured."]
-        )
-        reject("\(err.code)", err.debugDescription, err)
-        return false
+
+    // MARK: - Property
+
+    weak var viewController: ViewController?
+    var defaultHeight: CGFloat = 50.0
+    var defaultWidth: CGFloat = 50.0
+    var height: CGFloat
+    var width : CGFloat
+    var workflow: Workflow?
+
+    // MARK: - Private property
+
+    private var panGestureRecognizer: UIPanGestureRecognizer?
+    private var pinchGestureRecognizer: UIPinchGestureRecognizer?
+    private var cancellable: AnyCancellable?
+
+    // MARK: - Init
+
+    override init(frame: CGRect) {
+        self.height = defaultHeight
+        self.width = defaultWidth
+        super.init(frame: frame)
+    }
+
+    required init?(coder aDecoder: NSCoder) {
+        fatalError("nope")
+    }
+
+    // MARK: - Public: Called whenever props (height/width/workflow) change
+
+    @objc func setSrc(src: [String: Any]) {
+        applySrc(src)
+    }
+
+    /// Objective-C bridge entry point used by the RN view manager.
+    @objc(setSrc:)
+    func setSrc(_ src: NSDictionary) {
+        guard let dict = src as? [String: Any] else {
+            logMessage("CompassView received setSrc with unsupported payload: \(src)")
+            return
+        }
+        applySrc(dict)
+    }
+
+    private func applySrc(_ src: [String: Any]) {
+        logMessage("CompassView setSrc called with: \(src)")
+        // Update width/height
+        self.height = getHeight(using: src)
+        self.width = getWidth(using: src)
+
+        // Extract workflow parameters if present
+        if let id = src["workflowId"] as? String,
+           let type = src["workflowType"] as? String,
+           let value = src["workflowValue"] as? String {
+            self.workflow = Workflow(id: id, type: type, value: value)
+            logMessage("CompassView workflow set: \(String(describing: self.workflow))")
+        } else {
+            logMessage("CompassView workflow not set - missing workflowId, workflowType, or workflowValue")
+        }
+
+        logMessage("CompassView dimensions: width=\(self.width), height=\(self.height)")
+        self.viewController = nil
+
+        self.setNeedsLayout()
+        self.layoutIfNeeded()
+    }
+
+    // MARK: - Helpers to parse numeric props
+
+    private func getHeight(using src: [String: Any]) -> CGFloat {
+        if let heightNum = src["height"] as? NSNumber {
+            let h = CGFloat(heightNum.doubleValue)
+            return h > 0 ? h : defaultHeight
+        } else if let heightDouble = src["height"] as? Double {
+            let h = CGFloat(heightDouble)
+            return h > 0 ? h : defaultHeight
+        } else if let heightFloat = src["height"] as? Float {
+            let h = CGFloat(heightFloat)
+            return h > 0 ? h : defaultHeight
+        } else if let heightInt = src["height"] as? Int {
+            let h = CGFloat(heightInt)
+            return h > 0 ? h : defaultHeight
+        }
+        return defaultHeight
+    }
+
+    private func getWidth(using src: [String: Any]) -> CGFloat {
+        if let widthNum = src["width"] as? NSNumber {
+            let w = CGFloat(widthNum.doubleValue)
+            return w > 0 ? w : defaultWidth
+        } else if let widthDouble = src["width"] as? Double {
+            let w = CGFloat(widthDouble)
+            return w > 0 ? w : defaultWidth
+        } else if let widthFloat = src["width"] as? Float {
+            let w = CGFloat(widthFloat)
+            return w > 0 ? w : defaultWidth
+        } else if let widthInt = src["width"] as? Int {
+            let w = CGFloat(widthInt)
+            return w > 0 ? w : defaultWidth
+        }
+        return defaultWidth
+    }
+
+    // MARK: - layoutSubviews
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        logMessage("CompassView layoutSubviews called - bounds: \(bounds), frame: \(frame)")
+        self.setupView()
+    }
+}
+
+extension CompassView {
+
+    // MARK: - Bind / Embed Logic
+
+    /// Only embed and bind once `workflow` is non-nil and frame is reasonable.
+    private func setupView() {
+        // If already embedded, just resize
+        if let vc = viewController {
+            vc.view.frame = bounds
+            logMessage("CompassView resizing existing ViewController to: \(bounds)")
+            return
+        }
+
+        // Defer until we have both props *and* a real size
+        guard let _ = workflow else {
+            logMessage("CompassView workflow not set yet, delaying embed")
+            return
+        }
         
-      }
-      
-      return true
+        if bounds.width < 10 || bounds.height < 10 || parentViewController == nil {
+            logMessage("CompassView frame too small or missing parent, delaying embed. Bounds: \(bounds), Parent: \(String(describing: parentViewController))")
+            return
+        }
+
+        logMessage("CompassView proceeding with embed - workflow exists and frame is adequate")
+        embed()
+        setupBinding()
+        setupGestureRecognizer()
+        logMessage("CompassView setupBinding completed with frame: \(self.width)x\(self.height)")
+    }
+
+    /// Sets up the Combine subscription waiting for `isFinishedSettingMap == true`.
+    /// Once that fires, we call `displayMap(workflow:)`.
+    private func setupBinding() {
+        logMessage("CompassView setupBinding called")
+        // Cancel any existing subscription
+        cancellable?.cancel()
+
+        // Grab the CurrentValueSubject so we can both subscribe and check its current value
+        guard let subject = compass?.isFinishedSettingMap else { 
+            logMessage("CompassView no compass isFinishedSettingMap subject available")
+            return 
+        }
+
+        // Subscribe to future map-ready events
+        cancellable = subject
+            .sink { [weak self] isFinished in
+                guard let self = self, isFinished else { 
+                    self?.logMessage("CompassView isFinishedSettingMap: \(isFinished)")
+                    return 
+                }
+                self.logMessage("CompassView about to display map with workflow: \(String(describing: self.workflow))")
+                compass?.displayMap(workflow: self.workflow)
+                compass?.getStatusService().emitMapStatusEvent(isSuccess: true)
+                self.logMessage("CompassView map display completed with frame: \(self.width)x\(self.height)")
+            }
+
+        // If the map was already ready before we subscribed, fire immediately.
+        if subject.value {
+            logMessage("CompassView isFinishedSettingMap was already true; forcing displayMap")
+            compass?.displayMap(workflow: self.workflow)
+            compass?.getStatusService().emitMapStatusEvent(isSuccess: true)
+        }
+    }
+
+    /// Embeds the shared `ViewController.shared` into this UIView's parent VC,
+    /// sets up its frame and mask, and stitches into the RN bridge.
+    private func embed() {
+        logMessage("CompassView embed called")
+        guard let parentVC = parentViewController,
+              self.width > 0,
+              self.height > 0 else {
+            logMessage("CompassView embed failed - parentViewController: \(String(describing: self.parentViewController)), dimensions: \(self.width)x\(self.height)")
+            return
+        }
+
+        logMessage("CompassView embed proceeding with dimensions: \(self.width)x\(self.height)")
+        
+        // Remove any existing child VC (just in case)
+        let vc = ViewController.shared
+        parentVC.remove(vc)
+
+        // Size and add as child
+        vc.view.frame = CGRect(x: 0, y: 0, width: self.width, height: self.height)
+        parentVC.addChild(vc)
+        addSubview(vc.view)
+        vc.didMove(toParent: parentVC)
+        self.viewController = vc
+
+        // Keep track of this view in a shared list, so that RN can reference it later if needed
+        ViewController.shared.compassViewList.append(self)
+
+        // Apply a white "mask" so only our desired rect is visible
+        let maskView = UIView(frame: CGRect(x: 0, y: 0, width: self.width, height: self.height))
+        maskView.backgroundColor = .white
+        vc.view.mask = maskView
+        vc.view.clipsToBounds = true
+        vc.view.layer.masksToBounds = true
+
+        // Let the SDK know the map is "ready to be loaded" (this is simply emitting a status event)
+        compass?.getStatusService().emitMapStatusEvent(isSuccess: true)
+        logMessage("CompassView embed completed - vc.view.frame: \(vc.view.frame), maskView.frame: \(maskView.frame)")
+    }
+
+    /// Prevents parent scroll-view from hijacking pan/pinch events so that map gestures still work.
+    private func setupGestureRecognizer() {
+        setupPanGestureRecognizer()
+        setupPinchGestureRecognizer()
+    }
+
+    private func setupPanGestureRecognizer() {
+        if panGestureRecognizer == nil {
+            panGestureRecognizer = UIPanGestureRecognizer(target: self, action: #selector(panGestureSelector(_:)))
+            panGestureRecognizer!.delegate = self
+            panGestureRecognizer!.cancelsTouchesInView = false
+            panGestureRecognizer!.delaysTouchesBegan = false
+        }
+        viewController?.view.addGestureRecognizer(panGestureRecognizer!)
+    }
+
+    private func setupPinchGestureRecognizer() {
+        if pinchGestureRecognizer == nil {
+            pinchGestureRecognizer = UIPinchGestureRecognizer(target: self, action: #selector(pinchGestureSelector(_:)))
+            pinchGestureRecognizer!.delegate = self
+            pinchGestureRecognizer!.cancelsTouchesInView = false
+            pinchGestureRecognizer!.delaysTouchesBegan = false
+        }
+        viewController?.view.addGestureRecognizer(pinchGestureRecognizer!)
+    }
+
+    func gestureRecognizer(_ g1: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith g2: UIGestureRecognizer) -> Bool {
+        return true
+    }
+
+    @objc private func panGestureSelector(_ sender: UIPanGestureRecognizer) {
+        validateGesture(sender.state == .ended)
+    }
+
+    @objc private func pinchGestureSelector(_ sender: UIPinchGestureRecognizer) {
+        validateGesture(sender.state == .ended)
+    }
+
+    private func validateGesture(_ isGestureBegan: Bool) {
+        setViewControllerScrollEnable(isGestureBegan)
+    }
+
+    private func setViewControllerScrollEnable(_ isScrollEnabled: Bool) {
+        guard let viewController = viewController else { return }
+        viewController.view.enclosingScrollView?.isScrollEnabled = isScrollEnabled
+    }
+    
+    // MARK: - User Position Indicator
+    func removeUserPositionIndicator() {
+        // TODO: Implement actual logic to remove the user position indicator from the map
+        logMessage("removeUserPositionIndicator called to clear BlueDot")
+    }
+}
+
+// MARK: - UIViewController extension (for embedding/removal)
+
+extension UIViewController {
+    func addChildVC(_ childVC: UIViewController) {
+        addChild(childVC)
+        view.addSubview(childVC.view)
+        childVC.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addConstraints([
+            childVC.view.topAnchor.constraint(equalTo: view.topAnchor),
+            childVC.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            childVC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            childVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            childVC.view.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            childVC.view.centerYAnchor.constraint(equalTo: view.centerYAnchor)
+        ])
+        childVC.didMove(toParent: self)
+    }
+
+    func remove(_ childVC: UIViewController) {
+        childVC.willMove(toParent: nil)
+        childVC.view.removeFromSuperview()
+        childVC.removeFromParent()
+    }
+}
+
+// MARK: - UIView extension (finding the parent UIViewController)
+
+extension UIView {
+    var parentViewController: UIViewController? {
+        var parentResponder: UIResponder? = self
+        while parentResponder != nil {
+            parentResponder = parentResponder!.next
+            if let vc = parentResponder as? UIViewController {
+                return vc
+            }
+        }
+        return nil
     }
 }
