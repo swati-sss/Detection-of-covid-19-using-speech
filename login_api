@@ -1,9 +1,28 @@
-#import "React/RCTViewManager.h"
+import React
 
-@interface RCT_EXTERN_MODULE(CompassViewManager, RCTViewManager)
+@objc(CompassViewManager)
+class CompassViewManager: RCTViewManager {
+    
+    @objc(setSrc:)
+    public func setSrc(obj: [String: Any]) {
+        guard let currentView = obj["view"] as? CompassView,
+              let src = obj["json"] as? [String: Any] else {
+            return
+        }
+        
+        currentView.setSrc(src: src)
+    }
 
-RCT_CUSTOM_VIEW_PROPERTY(customProperty, NSString, NSObject) {
-    [self performSelector:@selector(setSrc:) withObject:@{@"view":view, @"json":json}];
+    override func view() -> UIView! {
+        if let compassViewLast = ViewController.shared.compassViewList.last {
+            compassViewLast.removeFromSuperview()
+            ViewController.shared.compassViewList.removeLast()
+        }
+        
+        return CompassView()
+    }
+
+    override static func requiresMainQueueSetup() -> Bool {
+        return true
+    }
 }
-
-@end
