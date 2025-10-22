@@ -1,28 +1,260 @@
-import React
+import Combine
+import compass_sdk_ios
 
-@objc(CompassViewManager)
-class CompassViewManager: RCTViewManager {
-    
-    @objc(setSrc:)
-    public func setSrc(obj: [String: Any]) {
-        guard let currentView = obj["view"] as? CompassView,
-              let src = obj["json"] as? [String: Any] else {
+class CompassView: UIView {
+
+    // MARK: - Property
+
+    weak var viewController: ViewController?
+    var defaultHeight: CGFloat = 50.0
+    var defaultWidth: CGFloat = 50.0
+    var height: CGFloat
+    var width : CGFloat
+    var workflow: Workflow?
+
+    // MARK: - Private property
+
+    private var panGestureRecognizer: UIPanGestureRecognizer?
+    private var pinchGestureRecognizer: UIPinchGestureRecognizer?
+    private var cancellable: AnyCancellable?
+
+    // MARK: - Init
+
+    override init(frame: CGRect) {
+        self.height = defaultHeight
+        self.width = defaultWidth
+
+        super.init(frame: frame)
+
+    }
+
+    required init?(coder aDecoder: NSCoder) { fatalError("nope") }
+
+    // MARK: - Function
+
+    // MARK: getHeight Function
+
+    func getHeight(using src:Dictionary<String, Any>) -> CGFloat {
+        guard let height = src["height"] as? CGFloat else {
+            return defaultHeight
+        }
+
+        return height > 0 ? height : defaultHeight
+    }
+
+    // MARK: getWidth Function
+
+    func getWidth(using src:Dictionary<String, Any>) -> CGFloat {
+        guard let width = src["width"] as? CGFloat else {
+            return defaultWidth
+        }
+
+        return width > 0 ? width : defaultWidth
+    }
+
+    // MARK: setSrc Function
+
+    func setSrc(src:Dictionary<String, Any>) {
+        debugPrint("src is \(src)")
+        self.height = getHeight(using: src)
+        self.width = getWidth(using: src)
+        if let id = src["workflowId"] as? String,
+           let type = src["workflowType"] as? String,
+           let value = src["workflowValue"] as? String {
+            self.workflow = Workflow(id: id, type: type, value: value)
+        }
+        debugPrint("height is \(self.height) and width is \(self.width)")
+        self.viewController = nil
+        self.setNeedsLayout()
+        self.layoutIfNeeded()
+    }
+
+    // MARK: layoutSubviews Function
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        self.setupView()
+    }
+}
+
+extension CompassView {
+
+    // MARK: - Private Function
+
+    // MARK: Private setupView Function
+
+    private func setupView() {
+        guard let viewController = viewController else {
+            self.embed()
+            setupBinding()
+            setupGestureRecognizer()
+            debugPrint("setupBinding is called and frame is \(self.width) \(self.height)")
             return
         }
-        
-        currentView.setSrc(src: src)
+
+        viewController.view.frame = bounds
     }
 
-    override func view() -> UIView! {
-        if let compassViewLast = ViewController.shared.compassViewList.last {
-            compassViewLast.removeFromSuperview()
-            ViewController.shared.compassViewList.removeLast()
+    // MARK: Private setupBinding Function
+
+    private func setupBinding() {
+        cancellable?.cancel()
+        cancellable = compass?.isFinishedSettingMap
+            .sink { isFinishedSettingMap in
+                guard isFinishedSettingMap else {
+                    return
+                }
+                compass?.displayMap(workflow: self.workflow)
+                compass?.getStatusService().emitMapStatusEvent(isSuccess: true)
+                debugPrint("isFinishedSettingMap is true and frame is \(self.width) \(self.height)")
+            }
+    }
+
+    // MARK: Private embed Function
+
+    private func embed() {
+        guard let parentVC = parentViewController,
+              self.width > 0,
+              self.height > 0 else {
+            debugPrint("parentViewController is \(String(describing: self.parentViewController)) and frame is \(self.width) \(self.height)")
+            return
         }
-        
-        return CompassView()
+
+        let vc = ViewController.shared
+        parentVC.remove(vc)
+        vc.view.frame = CGRect(x:0,
+                               y:0,
+                               width:self.width,
+                               height:height)
+        parentVC.addChild(vc)
+        addSubview(vc.view)
+        self.viewController = vc
+
+        // add current compasss view
+        ViewController.shared.compassViewList.append(self)
+
+        let maskView = UIView(frame: CGRect(x:0,
+                                            y:0,
+                                            width:self.width,
+                                            height:self.height))
+        maskView.backgroundColor = .white
+        vc.view.mask = maskView
+        debugPrint("vc is \(vc.view.frame) and maskView is \(maskView.frame)")
     }
 
-    override static func requiresMainQueueSetup() -> Bool {
-        return true
+    // MARK: Private setupGestureRecognizer Function
+
+    // To make sure nested view does not scroll parent view
+    private func setupGestureRecognizer() {
+        setupPanGestureRecognizer()
+        setupPinchGestureRecognizer()
+    }
+
+    // MARK: Private setupPanGestureRecognizer Function
+
+    private func setupPanGestureRecognizer() {
+        guard let  panGestureRecognizer = panGestureRecognizer else {
+            panGestureRecognizer = UIPanGestureRecognizer(target: self,
+                                                          action: #selector(panGestureSelector(_:)))
+            setupPanGestureRecognizer()
+            return
+        }
+
+        viewController?.view.addGestureRecognizer(panGestureRecognizer)
+    }
+
+    // MARK: Private setupPinchGestureRecognizer Function
+
+    private func setupPinchGestureRecognizer() {
+        guard let  pinchGestureRecognizer = pinchGestureRecognizer else {
+            pinchGestureRecognizer = UIPinchGestureRecognizer(target: self,
+                                                              action: #selector(pinchGestureSelector(_:)))
+            setupPinchGestureRecognizer()
+            return
+        }
+
+        viewController?.view.addGestureRecognizer(pinchGestureRecognizer)
+    }
+
+    // MARK: Private panGestureSelector Function
+
+    @objc private func panGestureSelector(_ sender: UIPanGestureRecognizer) {
+        validateGesture(sender.state == UIGestureRecognizer.State.ended)
+    }
+
+    // MARK: Private pinchGestureSelector Function
+
+    @objc private func pinchGestureSelector(_ sender: UIPinchGestureRecognizer) {
+        validateGesture(sender.state == UIGestureRecognizer.State.ended)
+    }
+
+    // MARK: Private validateGesture Function
+
+    private func validateGesture(_ isGestureBegan: Bool) {
+        setViewControllerScrollEnable(isGestureBegan)
+    }
+
+    // MARK: Private setViewControllerScrollEnable Function
+
+    private func setViewControllerScrollEnable(_ isScrollEnabled: Bool) {
+        guard let viewController = viewController else {
+            return
+        }
+
+        viewController.view.enclosingScrollView?.isScrollEnabled = isScrollEnabled
+    }
+}
+
+// MARK: - UIViewController extension
+
+extension UIViewController {
+
+    // MARK: - Functions
+
+    // MARK: addChildVC Function
+
+    func addChildVC(_ childVC: UIViewController) {
+        addChild(childVC)
+        view.addSubview(childVC.view)
+        childVC.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addConstraints([
+            childVC.view.topAnchor.constraint(equalTo: view.topAnchor),
+            childVC.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            childVC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            childVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            childVC.view.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            childVC.view.centerYAnchor.constraint(equalTo: view.centerYAnchor)
+        ])
+        childVC.didMove(toParent: self)
+    }
+
+    // MARK: remove Function
+
+    func remove(_ childVC: UIViewController) {
+        childVC.willMove(toParent: nil)
+        childVC.view.removeFromSuperview()
+        childVC.removeFromParent()
+
+    }
+}
+
+
+// MARK: - UIView extension
+
+extension UIView {
+
+    // MARK: - Functions
+
+    // MARK: parentViewController Function
+
+    var parentViewController: UIViewController? {
+        var parentResponder: UIResponder? = self
+        while parentResponder != nil {
+            parentResponder = parentResponder!.next
+            if let viewController = parentResponder as? UIViewController {
+                return viewController
+            }
+        }
+        return nil
     }
 }
