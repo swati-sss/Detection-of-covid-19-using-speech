@@ -1,423 +1,89 @@
 import SwiftUI
 
-struct HomeView: View {
-    @StateObject private var bridge = HomeViewModel()
-    @State private var showAisleSheet = false
-    @State private var showStaticPath = false
-    @State private var showAssetSheet = false
-    @State private var showGenericSheet = false
-    @State private var showDistanceSheet = false
-
-    @State private var goToFirstScreen = false
-    @State private var didAutoInit = false
-    
-    @State private var showFeatureFlags = false
-    @State private var showEnvironmentSheet = false
-    
-    @State private var showCustomMapSheet = false
-    @State private var tempUseCustomMap = false
-    @State private var tempStoreID = ""
-
-    private var controlHeight: CGFloat = 44
-    
-    init(bridge: HomeViewModel = HomeViewModel()) {
-        _bridge = StateObject(wrappedValue: bridge)
-    }
-    
-    var body: some View {
-        VStack(spacing: 5) {
-            
-            // top row
-            HStack(spacing: 8) {
-                TextField("Store ID", text: $bridge.storeIDText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: .infinity)
-                Button(action: { bridge.initialize(false) }) {
-                    Text("Initialize")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .foregroundStyle(.white)
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.blue)
-                )
-                
-                Menu {
-                    Button(action: {bridge.shouldZoomOnPins.toggle()}) {
-                        Label("Zoom-in on pin drop", systemImage: bridge.shouldZoomOnPins ? "checkmark.circle.fill" : "circle")
-                    }
-                    
-                    Button(action: {bridge.resetZoom.toggle()}) {
-                        Label("Reset zoom on clear map", systemImage: bridge.resetZoom ? "checkmark.circle.fill" : "circle")
-                    }
-                    
-                    Divider()
-                    
-                    Button("Copy console text") {
-                        bridge.copyConsoleTextToClipboard()
-                    }
-                    
-                    Button("Clear console") {
-                        bridge.clearConsole()
-                    }
-                    
-                    Button(bridge.isConsoleHidden ? "Show console" : "Hide console") {
-                        bridge.toggleConsoleVisibility()
-                    }
-                    
-                    Divider()
-                    
-                    Button("Stop positioning", role: .destructive) {
-                        bridge.stopPositioning()
-                    }
-                    
-                } label: {
-                    Text("Options")
-                        .font(.subheadline)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .background(RoundedRectangle(cornerRadius: 8))
-                    
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.top, 3)
-            
-            // Middle row
-            HStack(spacing: 8) {
-                Menu {
-                    Text("Select Update Event API")
-
-                    Button("Update Event") {
-                        bridge.updateEvent()
-                    }
-                    Button("Update Event List") {
-                        bridge.updateEventList()
-                    }
-                    
-                } label: {
-                    Text("Update Event")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 8))
-                }
-                
-                Menu {
-                    Text("Select a pin type")
-
-                    Button("Asset Pin") {
-                        showAssetSheet = true
-                    }
-                    Button("Generic Pin") {
-                        showGenericSheet = true
-                    }
-                    Button("Aisle Pin") {
-                        showAisleSheet = true
-                    }
-                    Button("Static Path") {
-                        showStaticPath = true
-                        showAisleSheet = true
-                    }
-                    Button("Get Distance") {
-                        showDistanceSheet = true
-                    }
-                    Button("Test Hardcoded Distance") {
-                        bridge.testGetUserDistanceWithHardcodedPin()
-                    }
-                    
-                } label: {
-                    Text("Display Pin")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 8))
-                }
-                
-                Menu {
-                    Text("Select API")
-
-                    Button("Clear Map") {
-                        bridge.clearMap()
-                    }
-                    Button("Get Location") {
-                        bridge.getLocation(assetId: "1645190")
-                    }
-                    Button("Kill Switch") {
-                        bridge.killSwitch()
-                    }
-                    
-                } label: {
-                    Text("Other APIs")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 8))
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.top, 3)
-            
-            
-            // last row
-            HStack(spacing: 8) {
-                Button(action: { goToFirstScreen = true }) {
-                    Text("Next Screen")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .foregroundStyle(.white)
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.blue)
-                )
-                
-                Button(action: {  }) {
-                    Text("Re-Mount")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .foregroundStyle(.white)
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.blue)
-                )
-                
-                Menu {
-                    Button("Feature Flags") {
-                        showFeatureFlags = true
-                    }
-                    Button("Environment") {
-                        showEnvironmentSheet = true
-                    }
-                } label: {
-                    Text("Env | Flags")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .foregroundStyle(.white)
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.blue)
-                )
-
-            }
-            .padding(.horizontal, 8)
-            .padding(.top, 3)
-            
-            Button(action: {
-                tempStoreID = bridge.customMapStoreIDText
-                tempUseCustomMap = !bridge.customMapStoreIDText.isEmpty
-                showCustomMapSheet = true
-            }) {
-                Text("Custom Map")
-                    .font(.subheadline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 7)
-                    .foregroundStyle(.white)
-            }
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.blue)
-                    .padding(.horizontal, 8)
-            )
-            .sheet(isPresented: $showCustomMapSheet) {
-                NavigationView {
-                    Form {
-                        Section(header: Text("Settings")) {
-                            Toggle("Load Custom Map", isOn: $tempUseCustomMap)
-
-                            if tempUseCustomMap {
-                                TextField("Store ID", text: $tempStoreID)
-                                    .textInputAutocapitalization(.never)
-                                    .disableAutocorrection(true)
-                            }
-                        }
-
-                        Section {
-                            Button("Apply") {
-                                if tempUseCustomMap {
-                                    bridge.customMapStoreIDText = tempStoreID
-                                    bridge.storeIDText = tempStoreID
-                                } else {
-                                    bridge.customMapStoreIDText = ""
-                                }
-                                DispatchQueue.main.async {
-                                    bridge.currentStore = nil
-                                    bridge.compass?.currentStore = nil
-                                    bridge.initialize(false)
-                                }
-                                showCustomMapSheet = false
-                            }
-                            .frame(maxWidth: .infinity, alignment: .center)
-                        }
-                    }
-                    .navigationTitle("Custom Map")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Cancel") {
-                                showCustomMapSheet = false
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // Progress strip
-            HStack(spacing: 8) {
-                ProgressView(value: bridge.calibrationProgress)
-                    .progressViewStyle(.linear)
-                    .frame(height: 24)
-                    .scaleEffect(y: 3, anchor: .center)
-                    .tint(bridge.calibrationProgress >= 1.0 ? .green : .red)
-                    .overlay(alignment: .leading) {
-                        Text(" ♾️ Calibration")
-                            .font(.system(size: 10, weight: .bold))
-                            .padding(.leading, 4)
-                    }
-                    .animation(.easeInOut, value: bridge.calibrationProgress)
-                
-                ProgressView(value: bridge.positioningProgress)
-                    .progressViewStyle(.linear)
-                    .frame(height: 24)
-                    .scaleEffect(y: 3, anchor: .center)
-                    .tint(bridge.positioningProgress >= 1.0 ? .green : .red)
-                    .overlay(alignment: .leading) {
-                        Text(" 🚶🏼 Position")
-                            .font(.system(size: 10, weight: .bold))
-                            .padding(.leading, 4)
-                    }
-                    .animation(.easeInOut, value: bridge.positioningProgress)
-                
-                ProgressView(value: bridge.isPositionLocked ? 1.0 : 0.0)
-                    .progressViewStyle(.linear)
-                    .frame(height: 24)
-                    .scaleEffect(y: 3, anchor: .center)
-                    .tint(bridge.isPositionLocked ? .green : .red)
-                    .overlay(alignment: .leading) {
-                        Text(" 🔒 Position Lock")
-                            .font(.system(size: 10, weight: .bold))
-                            .padding(.leading, 4)
-                    }
-                    .animation(.easeInOut, value: bridge.isPositionLocked)
-            }
-            .frame(height: 12)
-            .padding(.horizontal, 8)
-            .padding(.top, 3)
-
-            
-            // Map area
-            MapRootHost(viewController: bridge.mapRootViewController)
-                .background(Color(.systemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .padding(.horizontal, 8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            
-            
-            if !bridge.isConsoleHidden {
-                // Console
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        Text(bridge.consoleText.isEmpty ? "— console —" : bridge.consoleText)
-                            .font(.system(.footnote, design: .monospaced))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
-                        
-                        Color.clear
-                            .frame(height: 1)
-                            .id("BOTTOM")
-                    }
-                    .frame(height: 160)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.secondary.opacity(0.35))
-                    )
-                    .onChange(of: bridge.scrollToken) { _ in
-                        withAnimation {
-                            proxy.scrollTo("BOTTOM", anchor: .bottom)
-                        }
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 8)
-            }
-
-            NavigationLink(isActive: $showAisleSheet) {
-                AislePinInputSheet { tuples in
-                    bridge.displayPinsV2(pins: tuples, isStaticPathVisible: showStaticPath)
-                    showStaticPath = false
-                }
-            } label: {
-                EmptyView()
-            }
-            .hidden()
-            .frame(width: 0, height: 0)
-
-            NavigationLink(isActive: $showAssetSheet) {
-                AssetPinInputSheet { assetId in
-                    bridge.displayAssetPin(id: assetId)
-                }
-            } label: {
-                EmptyView()
-            }
-            .hidden()
-            .frame(width: 0, height: 0)
-
-            NavigationLink(isActive: $showGenericSheet) {
-                GenericPinInputSheet { encodedId in
-                    bridge.displayGenericPin(encodedId: encodedId)
-                }
-            } label: {
-                EmptyView()
-            }
-            .hidden()
-            .frame(width: 0, height: 0)
-
-            NavigationLink(isActive: $showDistanceSheet) {
-                DistanceInputSheet { zone, aisle, section in
-                    bridge.getUserDistance(zone: zone, aisle: aisle, section: section)
-                }
-            } label: {
-                EmptyView()
-            }
-            .hidden()
-            .frame(width: 0, height: 0)
-        }
-        .onAppear {
-            guard !didAutoInit else { return }
-            didAutoInit = true
-            DispatchQueue.main.async {
-                bridge.initialize(false)
-            }
-        }
-        .navigationTitle("Main Map")
-        .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showFeatureFlags){
-            FeatureFlagsView(bridge: bridge)
-        }
-        .sheet(isPresented: $showEnvironmentSheet) {
-            EnvironmentSettingsView(bridge: bridge)
-        }
-        .navigationDestination(isPresented: $goToFirstScreen) {
-            FirstScreenView(bridge: bridge)
-        }
-    }
+struct AislePinRow: Identifiable, Equatable {
+    let id = UUID()
+    var zone: String = ""
+    var aisle: String = ""
+    var section: String = ""
+    var selected: Bool = true
 }
 
-#Preview {
-    HomeView()
+struct AislePinInputSheet: View {
+    @SwiftUI.Environment(\.dismiss) private var dismiss
+
+    @State private var rows: [AislePinRow] = [AislePinRow()]
+    let maxRows: Int = 5
+
+    var onDisplayPin: (_ pins: [(zone: String, aisle: String, section: String, selected: Bool)]) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                ForEach($rows) { $row in
+                    HStack(spacing: 8) {
+                        TextField("Zone", text: $row.zone)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 80)
+
+                        TextField("Aisle", text: $row.aisle)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 80)
+
+                        TextField("Section", text: $row.section)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 80)
+
+                        Toggle("Selected", isOn: $row.selected)
+                            .labelsHidden()
+
+                        Button {
+                            removeRow(row)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(rows.count == 1)
+                    }
+                }
+
+                HStack {
+                    Button {
+                        addRow()
+                    } label: {
+                        Label("Add Row", systemImage: "plus.circle")
+                    }
+                    .disabled(rows.count >= maxRows)
+
+                    Spacer()
+                }
+            }
+            .padding()
+        }
+        .scrollDismissesKeyboard(.immediately)
+        .navigationTitle("Aisle Pins")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Display Pins") {
+                    let tuples = rows.map { ($0.zone, $0.aisle, $0.section, $0.selected) }
+                    onDisplayPin(tuples)
+                    dismiss()
+                }
+                .disabled(rows.isEmpty)
+            }
+        }
+    }
+
+    private func addRow() {
+        guard rows.count < maxRows else { return }
+        rows.append(AislePinRow())
+    }
+
+    private func removeRow(_ row: AislePinRow) {
+        if let idx = rows.firstIndex(of: row), rows.count > 1 {
+            rows.remove(at: idx)
+        }
+    }
 }
