@@ -1,959 +1,423 @@
 import SwiftUI
 
-struct DistanceInputSheet: View {
-    @SwiftUI.Environment(\.dismiss) private var dismiss
+struct HomeView: View {
+    @StateObject private var bridge = HomeViewModel()
+    @State private var showAisleSheet = false
+    @State private var showStaticPath = false
+    @State private var showAssetSheet = false
+    @State private var showGenericSheet = false
+    @State private var showDistanceSheet = false
 
-    @State private var zone: String = ""
-    @State private var aisle: String = ""
-    @State private var section: String = ""
+    @State private var goToFirstScreen = false
+    @State private var didAutoInit = false
+    
+    @State private var showFeatureFlags = false
+    @State private var showEnvironmentSheet = false
+    
+    @State private var showCustomMapSheet = false
+    @State private var tempUseCustomMap = false
+    @State private var tempStoreID = ""
 
-    var onSubmit: (_ zone: String, _ aisle: String, _ section: String) -> Void
-
+    private var controlHeight: CGFloat = 44
+    
+    init(bridge: HomeViewModel = HomeViewModel()) {
+        _bridge = StateObject(wrappedValue: bridge)
+    }
+    
     var body: some View {
-        NavigationStack {
-            Form {
-                Section("Target Aisle") {
-                    TextField("Zone", text: $zone)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
-
-                    TextField("Aisle", text: $aisle)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
-
-                    TextField("Section", text: $section)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
+        VStack(spacing: 5) {
+            
+            // top row
+            HStack(spacing: 8) {
+                TextField("Store ID", text: $bridge.storeIDText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+                Button(action: { bridge.initialize(false) }) {
+                    Text("Initialize")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(.white)
                 }
-
-                Section {
-                    Button("Get Distance") {
-                        onSubmit(zone, aisle, section)
-                        dismiss()
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.blue)
+                )
+                
+                Menu {
+                    Button(action: {bridge.shouldZoomOnPins.toggle()}) {
+                        Label("Zoom-in on pin drop", systemImage: bridge.shouldZoomOnPins ? "checkmark.circle.fill" : "circle")
                     }
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .disabled(!canSubmit)
+                    
+                    Button(action: {bridge.resetZoom.toggle()}) {
+                        Label("Reset zoom on clear map", systemImage: bridge.resetZoom ? "checkmark.circle.fill" : "circle")
+                    }
+                    
+                    Divider()
+                    
+                    Button("Copy console text") {
+                        bridge.copyConsoleTextToClipboard()
+                    }
+                    
+                    Button("Clear console") {
+                        bridge.clearConsole()
+                    }
+                    
+                    Button(bridge.isConsoleHidden ? "Show console" : "Hide console") {
+                        bridge.toggleConsoleVisibility()
+                    }
+                    
+                    Divider()
+                    
+                    Button("Stop positioning", role: .destructive) {
+                        bridge.stopPositioning()
+                    }
+                    
+                } label: {
+                    Text("Options")
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .background(RoundedRectangle(cornerRadius: 8))
+                    
                 }
             }
-            .navigationTitle("User Distance")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
+            .padding(.horizontal, 8)
+            .padding(.top, 3)
+            
+            // Middle row
+            HStack(spacing: 8) {
+                Menu {
+                    Text("Select Update Event API")
+
+                    Button("Update Event") {
+                        bridge.updateEvent()
+                    }
+                    Button("Update Event List") {
+                        bridge.updateEventList()
+                    }
+                    
+                } label: {
+                    Text("Update Event")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 8))
+                }
+                
+                Menu {
+                    Text("Select a pin type")
+
+                    Button("Asset Pin") {
+                        showAssetSheet = true
+                    }
+                    Button("Generic Pin") {
+                        showGenericSheet = true
+                    }
+                    Button("Aisle Pin") {
+                        showAisleSheet = true
+                    }
+                    Button("Static Path") {
+                        showStaticPath = true
+                        showAisleSheet = true
+                    }
+                    Button("Get Distance") {
+                        showDistanceSheet = true
+                    }
+                    Button("Test Hardcoded Distance") {
+                        bridge.testGetUserDistanceWithHardcodedPin()
+                    }
+                    
+                } label: {
+                    Text("Display Pin")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 8))
+                }
+                
+                Menu {
+                    Text("Select API")
+
+                    Button("Clear Map") {
+                        bridge.clearMap()
+                    }
+                    Button("Get Location") {
+                        bridge.getLocation(assetId: "1645190")
+                    }
+                    Button("Kill Switch") {
+                        bridge.killSwitch()
+                    }
+                    
+                } label: {
+                    Text("Other APIs")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 3)
+            
+            
+            // last row
+            HStack(spacing: 8) {
+                Button(action: { goToFirstScreen = true }) {
+                    Text("Next Screen")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(.white)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.blue)
+                )
+                
+                Button(action: {  }) {
+                    Text("Re-Mount")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(.white)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.blue)
+                )
+                
+                Menu {
+                    Button("Feature Flags") {
+                        showFeatureFlags = true
+                    }
+                    Button("Environment") {
+                        showEnvironmentSheet = true
+                    }
+                } label: {
+                    Text("Env | Flags")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(.white)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.blue)
+                )
+
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 3)
+            
+            Button(action: {
+                tempStoreID = bridge.customMapStoreIDText
+                tempUseCustomMap = !bridge.customMapStoreIDText.isEmpty
+                showCustomMapSheet = true
+            }) {
+                Text("Custom Map")
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .foregroundStyle(.white)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.blue)
+                    .padding(.horizontal, 8)
+            )
+            .sheet(isPresented: $showCustomMapSheet) {
+                NavigationView {
+                    Form {
+                        Section(header: Text("Settings")) {
+                            Toggle("Load Custom Map", isOn: $tempUseCustomMap)
+
+                            if tempUseCustomMap {
+                                TextField("Store ID", text: $tempStoreID)
+                                    .textInputAutocapitalization(.never)
+                                    .disableAutocorrection(true)
+                            }
+                        }
+
+                        Section {
+                            Button("Apply") {
+                                if tempUseCustomMap {
+                                    bridge.customMapStoreIDText = tempStoreID
+                                    bridge.storeIDText = tempStoreID
+                                } else {
+                                    bridge.customMapStoreIDText = ""
+                                }
+                                DispatchQueue.main.async {
+                                    bridge.currentStore = nil
+                                    bridge.compass?.currentStore = nil
+                                    bridge.initialize(false)
+                                }
+                                showCustomMapSheet = false
+                            }
+                            .frame(maxWidth: .infinity, alignment: .center)
+                        }
+                    }
+                    .navigationTitle("Custom Map")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") {
+                                showCustomMapSheet = false
+                            }
+                        }
                     }
                 }
+            }
+            
+            // Progress strip
+            HStack(spacing: 8) {
+                ProgressView(value: bridge.calibrationProgress)
+                    .progressViewStyle(.linear)
+                    .frame(height: 24)
+                    .scaleEffect(y: 3, anchor: .center)
+                    .tint(bridge.calibrationProgress >= 1.0 ? .green : .red)
+                    .overlay(alignment: .leading) {
+                        Text(" ♾️ Calibration")
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.leading, 4)
+                    }
+                    .animation(.easeInOut, value: bridge.calibrationProgress)
+                
+                ProgressView(value: bridge.positioningProgress)
+                    .progressViewStyle(.linear)
+                    .frame(height: 24)
+                    .scaleEffect(y: 3, anchor: .center)
+                    .tint(bridge.positioningProgress >= 1.0 ? .green : .red)
+                    .overlay(alignment: .leading) {
+                        Text(" 🚶🏼 Position")
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.leading, 4)
+                    }
+                    .animation(.easeInOut, value: bridge.positioningProgress)
+                
+                ProgressView(value: bridge.isPositionLocked ? 1.0 : 0.0)
+                    .progressViewStyle(.linear)
+                    .frame(height: 24)
+                    .scaleEffect(y: 3, anchor: .center)
+                    .tint(bridge.isPositionLocked ? .green : .red)
+                    .overlay(alignment: .leading) {
+                        Text(" 🔒 Position Lock")
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.leading, 4)
+                    }
+                    .animation(.easeInOut, value: bridge.isPositionLocked)
+            }
+            .frame(height: 12)
+            .padding(.horizontal, 8)
+            .padding(.top, 3)
+
+            
+            // Map area
+            MapRootHost(viewController: bridge.mapRootViewController)
+                .background(Color(.systemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            
+            
+            if !bridge.isConsoleHidden {
+                // Console
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        Text(bridge.consoleText.isEmpty ? "— console —" : bridge.consoleText)
+                            .font(.system(.footnote, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                        
+                        Color.clear
+                            .frame(height: 1)
+                            .id("BOTTOM")
+                    }
+                    .frame(height: 160)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.secondary.opacity(0.35))
+                    )
+                    .onChange(of: bridge.scrollToken) { _ in
+                        withAnimation {
+                            proxy.scrollTo("BOTTOM", anchor: .bottom)
+                        }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+            }
+
+            NavigationLink(isActive: $showAisleSheet) {
+                AislePinInputSheet { tuples in
+                    bridge.displayPinsV2(pins: tuples, isStaticPathVisible: showStaticPath)
+                    showStaticPath = false
+                }
+            } label: {
+                EmptyView()
+            }
+            .hidden()
+            .frame(width: 0, height: 0)
+
+            NavigationLink(isActive: $showAssetSheet) {
+                AssetPinInputSheet { assetId in
+                    bridge.displayAssetPin(id: assetId)
+                }
+            } label: {
+                EmptyView()
+            }
+            .hidden()
+            .frame(width: 0, height: 0)
+
+            NavigationLink(isActive: $showGenericSheet) {
+                GenericPinInputSheet { encodedId in
+                    bridge.displayGenericPin(encodedId: encodedId)
+                }
+            } label: {
+                EmptyView()
+            }
+            .hidden()
+            .frame(width: 0, height: 0)
+
+            NavigationLink(isActive: $showDistanceSheet) {
+                DistanceInputSheet { zone, aisle, section in
+                    bridge.getUserDistance(zone: zone, aisle: aisle, section: section)
+                }
+            } label: {
+                EmptyView()
+            }
+            .hidden()
+            .frame(width: 0, height: 0)
+        }
+        .onAppear {
+            guard !didAutoInit else { return }
+            didAutoInit = true
+            DispatchQueue.main.async {
+                bridge.initialize(false)
             }
         }
-    }
-
-    private var canSubmit: Bool {
-        !zone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !aisle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !section.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        .navigationTitle("Main Map")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showFeatureFlags){
+            FeatureFlagsView(bridge: bridge)
+        }
+        .sheet(isPresented: $showEnvironmentSheet) {
+            EnvironmentSettingsView(bridge: bridge)
+        }
+        .navigationDestination(isPresented: $goToFirstScreen) {
+            FirstScreenView(bridge: bridge)
+        }
     }
 }
 
 #Preview {
-    DistanceInputSheet { _, _, _ in }
-}
-
-
-
-
-
-
-
-
-import SwiftUI
-import Combine
-import compass_sdk_ios
-import LivingDesign
-import UserNotifications
-import IPSFramework
-
-final class HomeViewModel: ObservableObject {
-    
-    @Published var storeIDText: String = String(Environment.initialStore)
-    @Published var customMapStoreIDText: String = ""
-    @Published var consoleText: String = ""
-    @Published private var consoleScrollToken: Int = 0
-    @Published var calibrationProgress: Double = 0.0
-    @Published var positioningProgress: Double = 0.0
-    @Published var isPositionLocked: Bool = false
-    
-    @Published var shouldZoomOnPins: Bool = true
-    @Published var resetZoom: Bool = false
-    @Published var isConsoleHidden: Bool = true
-
-    
-    var compass: Compass?
-    var currentStore: Int?
-    var cancellables = Set<AnyCancellable>()
-    let mapRootViewController = LDRootViewController()
-    
-    var pinDropEventEmitterHandler: ((PinDropEventEmitter) -> Void)?
-    var pinClickedEventEmitterHandler: ((PinClickedEventEmitter) -> Void)?
-    var aislePinDropEventEmitterHandler: ((PinDropEventEmitter) -> Void)?
-    var bootstrapEventEmitterHandler: ((EventEmitterDescription) -> Void)?
-    var updateEventListEmitterHandler: ((EventEmitterDescription) -> Void)?
-    var errorEventEmitterHandler: ((ErrorEventEmitter) -> Void)?
-    
-    typealias AisleTuple = (zone: String, aisle: String, section: String, selected: Bool)
-    
-    private var currentGeoFenceState: String? = "undefined"
-    
-    var enableManualPinDrop: Bool = true
-    var displayPinConfig: DisplayPinConfig {
-        DisplayPinConfig(enableManualPinDrop: enableManualPinDrop, resetZoom: resetZoom, shouldZoomOnPins: shouldZoomOnPins)
-    }
-    
-    private let localMapDefaultsKey = "CompassLocalMapHTMLPath"
-    @Published private(set) var localMapURL: URL?
-
-    init() {
-        loadLocalMapOverride()
-    }
-
-
-    private static let timestampFormatter: DateFormatter = {
-        let df = DateFormatter()
-        df.dateFormat = "hh:mm:ss.SSSS"
-        return df
-    }()
-    
-    func consoleLog(_ text: String) {
-        let ts = Self.timestampFormatter.string(from: Date())
-        let chunk = "\n\n\(ts)\n\(text)"
-        DispatchQueue.main.async {
-            self.consoleText += chunk
-            self.consoleScrollToken &+= 1
-        }
-    }
-    
-    var scrollToken: Int { consoleScrollToken }
-    
-    func reset() {
-        cancellables.removeAll()
-    }
-    
-    func sendGeoFenceEnteredNotification() {
-        NotificationManager.shared.post(title: "Geofence", body: "You entered the store geofence", id: "geofence-entered")
-    }
-    
-    func sendGeoFenceExitedNotification() {
-        NotificationManager.shared.post(title: "Geofence", body: "You exited the store geofence", id: "geofence-exited")
-    }
-    
-    func sendPositionDropNotification() {
-        NotificationManager.shared.post(title: "Position Lost", body: "Indoor positioning has lost track of your location", id: "position-dropped")
-    }
-    
-    func copyConsoleTextToClipboard() {
-        UIPasteboard.general.string = consoleText
-    }
-    
-    func clearConsole() {
-        consoleText = ""
-    }
-    
-    func toggleConsoleVisibility() {
-        isConsoleHidden.toggle()
-    }
-    
-    func clearMap() {
-        compass?.clearMap(configuration: MapConfig(resetZoom: resetZoom).hashMap)
-    }
-    
-    func stopPositioning() {
-        compass?.killSwitch()
-    }
-
-    func getLocation(assetId: String) {
-        compass?.getAisle(id: assetId)
-    }
-    
-    func killSwitch() {
-        removeCompassAndDestroyRoot()
-    }
-    
-    func removeCompassAndDestroyRoot() {
-        compass?.killSwitch()
-
-        if let compass = compass {
-            compass.willMove(toParent: nil)
-            compass.view.removeFromSuperview()
-            compass.removeFromParent()
-        }
-
-        mapRootViewController.view.subviews.forEach {$0.removeFromSuperview()}
-
-        compass = nil
-    }
-    
-    private func normalizeStoreInput() {
-        let trimmedStore = storeIDText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedStore.isEmpty || Int(trimmedStore) == nil {
-            storeIDText = String(Environment.initialStore)
-        } else if trimmedStore != storeIDText {
-            storeIDText = trimmedStore
-        }
-    }
-    
-    private func restartCompassIfNeeded() {
-        guard compass != nil else { return }
-        removeCompassAndDestroyRoot()
-        currentStore = nil
-        initialize(false)
-    }
-    
-    private func loadLocalMapOverride() {
-        let defaults = UserDefaults.standard
-        guard let storedPath = defaults.string(forKey: localMapDefaultsKey) else {
-            localMapURL = nil
-            Compass.setLocalMapFileURL(nil)
-            return
-        }
-
-        let url = URL(fileURLWithPath: storedPath)
-        if FileManager.default.fileExists(atPath: url.path) {
-            localMapURL = url
-            Compass.setLocalMapFileURL(url)
-        } else {
-            defaults.removeObject(forKey: localMapDefaultsKey)
-            localMapURL = nil
-            Compass.setLocalMapFileURL(nil)
-        }
-    }
-    
-    func setLocalMapOverride(_ url: URL?) {
-        if localMapURL == url {
-            return
-        }
-
-        let defaults = UserDefaults.standard
-        if let url {
-            defaults.set(url.path, forKey: localMapDefaultsKey)
-        } else {
-            defaults.removeObject(forKey: localMapDefaultsKey)
-        }
-
-        localMapURL = url
-        Compass.setLocalMapFileURL(url)
-        compass?.setLocalMapFileURL(url)
-
-        if let url {
-            consoleLog("Local map override loaded: \(url.lastPathComponent)")
-        } else {
-            consoleLog("Local map override cleared. Reverting to backend map.")
-        }
-
-        normalizeStoreInput()
-        restartCompassIfNeeded()
-    }
-    
-    var localMapFileName: String? {
-        localMapURL?.lastPathComponent
-    }
-    
-    
-    
-    func applyEnvironmentChangesAndReinitializeIfNeeded() {
-        normalizeStoreInput()
-        if Environment.mockUser {
-            IPSPositioning.testLockThreshold = 0
-        } else {
-            IPSPositioning.testLockThreshold = 1
-        }
-        restartCompassIfNeeded()
-    }
-    
-    func updateEvent() {
-        Log.debug("Compass: updateEvent called.")
-        compass?.isFinishedInitialize
-            .sink { isInitialize in
-                let uuid =
-                self.storeIDText == DebugData.StoreID.oriient ?
-                DebugData.asset2280List.shuffled() : DebugData.asset3594List.shuffled()
-
-                guard let isInitialize,
-                      isInitialize,
-                      let assetId = uuid.first else {
-                    Log.debug("Compass: isInitialize is not set.")
-                    return
-                }
-
-                let compassEvent = CompassEvent(eventType: "asset_scan",
-                                                eventValue: assetId,
-                                                eventMetadata: [:])
-                self.compass?.updateEvent(compassEvent: compassEvent)
-            }
-            .store(in: &cancellables)
-
-        var isCancelled = false
-        var updateStatus = true
-
-        //Observe error and progress update
-        bootstrapEventEmitterHandler = { eventEmitterDescription in
-            var dict = eventEmitterDescription.toDictionary()
-            Log.debug("The value of bootstrapEventEmitterHandler dict is:\(dict)")
-            dict["eventType"] = nil
-
-            DispatchQueue.main.async {
-                self.consoleLog("BOOTSTRAP EVENT:\n\(dict.toJSONString() ?? "")")
-            }
-
-            isCancelled = true
-
-            guard updateStatus else {
-                return
-            }
-
-            updateStatus = false
-            Log.debug("Compass updateEvent success")
-        }
-
-        if !isCancelled {
-            errorEventEmitterHandler = { errorEventEmitter in
-                let dict = errorEventEmitter.toDictionary()
-                Log.debug("The value of errorEventEmitterHandler dict is:\(dict)")
-
-                var event = [String : Any]()
-                if let code = dict["errorCode"] as? Int {
-                    event["code"] = code
-                }
-                if let errorType = dict["compassErrorType"] as? String {
-                    event["errortype"] = errorType
-                }
-                if let message = dict["errorDescription"] as? String {
-                    event["message"] = message
-                }
-
-                DispatchQueue.main.async {
-                    self.consoleLog("ERROR EVENT:\n\(event.toJSONString() ?? "")")
-                }
-
-                Log.debug(" sendEvent errorEventEmitter body: \(event)")
-                guard updateStatus else {
-                    return
-                }
-
-                updateStatus = false
-                Log.debug("-1 Compass updateEvent failed")
-            }
-        }
-    }
-
-    func updateEventList() {
-        Log.debug("Compass: updateEvent List called.")
-
-        var isCancelled = false
-        var updateStatus = true
-
-        updateEventListEmitterHandler = { eventEmitterDescription in
-            var dict = eventEmitterDescription.toDictionary()
-            Log.debug("The value of updateEventListEmitterHandler dict is:\(dict)")
-            dict["eventType"] = nil
-
-            DispatchQueue.main.async {
-                self.consoleLog("UPDATE EVENT LIST:\n\(dict.toJSONString() ?? "")")
-            }
-
-            isCancelled = true
-
-            guard updateStatus else {
-                return
-            }
-
-            updateStatus = false
-            Log.debug("Compass updateEvent list success")
-        }
-        if !isCancelled {
-            errorEventEmitterHandler = { errorEventEmitter in
-                let dict = errorEventEmitter.toDictionary()
-                Log.debug("The value of errorEventEmitterHandler dict is:\(dict)")
-
-                var event = [String : Any]()
-                if let code = dict["errorCode"] as? Int {
-                    event["code"] = code
-                }
-                if let errorType = dict["compassErrorType"] as? String {
-                    event["errortype"] = errorType
-                }
-                if let message = dict["errorDescription"] as? String {
-                    event["message"] = message
-                }
-
-                DispatchQueue.main.async {
-                    self.consoleLog("ERROR EVENT:\n\(event.toJSONString() ?? "")")
-                }
-
-                Log.debug(" sendEvent errorEventEmitter body: \(event)")
-                guard updateStatus else {
-                    return
-                }
-
-                updateStatus = false
-                Log.debug("-1 Compass updateEvent failed")
-            }
-        }
-
-        compass?.isFinishedInitialize
-            .sink { isInitialize in
-                let uuid =
-                self.storeIDText == DebugData.StoreID.oriient ?
-                DebugData.asset2280List.shuffled() : DebugData.asset3594List.shuffled()
-
-                guard let isInitialize,
-                      isInitialize,
-                      let assetId = uuid.first else {
-                    Log.debug("Compass: isInitialize is not set.")
-                    return
-                }
-
-                self.compass?.updateEventList(
-                    namespace: "MODFLEX",
-                    eventType: "SCAN_FEATURE_LOCATION",
-                    eventValue: "BK4-12",
-                    metaData: [
-                        "keyA": "va",
-                        "keyB": "vb",
-                        "keyC": "vc",
-                        "keyD": "vd",
-                        "keyE": "ve",
-                        "keyF": "vf"
-                    ]
-                )
-            }
-            .store(in: &cancellables)
-
-    }
-    
-    
-    func initialize(_ disableAutoZoom: Bool) {
-        normalizeStoreInput()
-        reset()
-        self.currentStore = compass?.currentStore
-
-        guard let site = Int(storeIDText) else {
-            Log.debug("Compass Initialization failed: invalid store ID")
-            return
-        }
-
-        guard self.currentStore != site else {
-            self.compass?.resetPositionStatusEvent()
-            Log.debug("Already on store \(site), skipping initialization; resetting position status")
-            return
-        }
-
-        self.compass = Compass()
-        guard let compass = self.compass else {
-            Log.debug("Compass Initialization failed: counld not create Compass instance")
-            return
-        }
-
-        let authParameter = Environment.authParmeter
-        let configuration = Environment.getConfiguration(for: site)
-        var updateStatus = true
-       
-        compass.setEnvironment(Environment.backendEnv)
-
-        cancellables.removeAll()
-        consoleText  = ""
-
-        let customMapURL: URL? = !customMapStoreIDText.isEmpty
-            ? URL(string: "https://developer.api.us.stg.walmart.com/api-proxy/service/COMPASS/SERVICE/v1/instore-map/store/\(customMapStoreIDText)/map")
-            : nil
-
-        var customMapRequest: URLRequest? = nil
-        if let url = customMapURL {
-            var request = URLRequest(url: url)
-            compass_sdk_ios.AuthParameter.getStandardHeaders().forEach { key, value in
-                request.setValue(value, forHTTPHeaderField: key)
-            }
-            customMapRequest = request
-        }
-
-        Just(compass.initialize(
-            authParameter: authParameter,
-            configuration: configuration,
-            capabilities: [.storeMap],
-            rootViewController: mapRootViewController,
-            customMapRequest: customMapRequest
-        ))
-        .eraseToAnyPublisher()
-        .flatMap { _ in
-            Publishers
-                .CombineLatest(compass.isFinishedInitialize.compactMap { $0 }, compass.isBlueDotEnabled.compactMap { $0 })
-        }
-        .sink { [weak self] (isFinishedInitialize, isBlueDotEnabled) in
-            guard isFinishedInitialize else {
-                Log.debug("Compass: Compass Initialization Failed")
-                DispatchQueue.main.async {
-                    self?.consoleLog("Compass Initialization Failed")
-                }
-                return
-            }
-
-            Log.debug("Compass: isBlueDotEnabled: \(isBlueDotEnabled)")
-            self?.currentStore = site
-            compass.currentStore = site
-
-            self?.consoleLog("Compass Initialization Succeeded")
-
-            Log.debug("Compass: Compass initialization is success")
-
-            guard updateStatus else {
-                return
-            }
-            updateStatus = false
-            Log.debug("Compass Initialization success")
-        }
-        .store(in: &cancellables)
-
-        let errorEventEmitterCompletionHandler: (ErrorEventEmitter)->Void = { errorEventEmitter in
-            let dict = errorEventEmitter.toDictionary()
-            var event = [String : Any]()
-            if let code = dict["errorCode"] as? Int {
-                event["code"] = code
-            }
-            if let errortype = dict["compassErrorType"] as? String {
-                event["errortype"] = errortype
-            }
-            if let message = dict["errorDescription"] as? String {
-                event["message"] = message
-            }
-            DispatchQueue.main.async {
-                self.consoleLog("ERROR EVENT:\n\(event.toJSONString() ?? "")")
-            }
-            Log.debug("The value of errorEventEmitter is:\(errorEventEmitter)")
-            Log.debug("The value of errorEventEmitter dict is:\(event)")
-            guard updateStatus else { return }
-            updateStatus = false
-            Log.debug("-1 Compass Initialization failed")
-        }
-
-        waitForEventEmitterCompletionHandlerResponse(with: errorEventEmitterCompletionHandler)
-        waitForIsFinishedSettingMapResponse()
-    }
-    
-    func waitForEventEmitterCompletionHandlerResponse(with errorEventEmitterCompletionHandler: @escaping (ErrorEventEmitter) -> Void) {
-        var statusService = compass?.getStatusService()
-        statusService?.eventEmitterHandler = { [weak self] eventEmitter in
-            guard let self else { return }
-            switch eventEmitter.eventType {
-            case .showMapEventEmitter:
-                guard let eventEmitterDescription = eventEmitter as? EventEmitterDescription else {
-                    return
-                }
-
-                var hashMap = eventEmitterDescription.toDictionary()
-                hashMap["eventType"] = nil
-                DispatchQueue.main.async {
-                    self.consoleLog("SHOW MAP EVENT:\n\(hashMap.toJSONString() ?? "")")
-                }
-                Log.debug("The value of mapButtonEventEmitter is:\(eventEmitterDescription)")
-                Log.debug("The value of mapButtonEventEmitter dict is:\(hashMap)")
-            case .mapStatusEventEmitter:
-                guard let mapStatusEventEmitter = eventEmitter as? MapStatusEventEmitter else { return }
-
-                var hashMap = mapStatusEventEmitter.toDictionary()
-                hashMap["eventType"] = nil
-                DispatchQueue.main.async {
-                    self.consoleLog("MAP STATUS EVENT:\n\(hashMap.toJSONString() ?? "")")
-                }
-                Log.debug("The value of mapStatusEventEmitter is:\(mapStatusEventEmitter)")
-                Log.debug("The value of mapStatusEventEmitter dict is:\(hashMap)")
-            case .bootstrapEventEmitter:
-                guard let eventEmitterDescription = eventEmitter as? EventEmitterDescription else { return }
-                self.bootstrapEventEmitterHandler?(eventEmitterDescription)
-                Log.debug("The value of bootstrapEventEmitter is:\(eventEmitterDescription)")
-            case .updateEventListEventEmitter:
-                guard let eventEmitterDescription = eventEmitter as? EventEmitterDescription else { return }
-                self.updateEventListEmitterHandler?(eventEmitterDescription)
-                Log.debug("The value of bootstrapEventEmitter is:\(eventEmitterDescription)")
-            case .pinListEventEmitter:
-                guard let pinDropEventEmitter = eventEmitter as? PinDropEventEmitter else {
-                    return
-                }
-
-                self.pinDropEventEmitterHandler?(pinDropEventEmitter)
-                Log.debug("The value of pinListEventEmitter is:\(pinDropEventEmitter)")
-
-            case .pinClickedEventEmitter:
-                guard let pinClickedEventEmitter = eventEmitter as? PinClickedEventEmitter else {
-                    return
-                }
-
-                self.pinClickedEventEmitterHandler?(pinClickedEventEmitter)
-                Log.debug("The value of pinClickedEventEmitter is:\(pinClickedEventEmitter)")
-
-            case .aislesPinListEventEmitter:
-                guard let pinDropEventEmitter = eventEmitter as? PinDropEventEmitter else {
-                    return
-                }
-                self.aislePinDropEventEmitterHandler?(pinDropEventEmitter)
-                Log.debug("The value of aislesPinListEventEmitter is:\(pinDropEventEmitter)")
-            case .errorEventEmitter:
-                guard let errorEventEmitter = eventEmitter as? ErrorEventEmitter else {
-                    return
-                }
-
-                self.errorEventEmitterHandler?(errorEventEmitter)
-                Log.debug("The value of errorEventEmitter is:\(errorEventEmitter)")
-                
-            case .positioningStateEventEmitter:
-                guard let positioningStateEventEmitter = eventEmitter as? PositioningStateEventEmitter else {
-                    return
-                }
-                DispatchQueue.main.async {
-                    self.calibrationProgress = Double(positioningStateEventEmitter.calibrationProgress) / 100.0
-                    self.positioningProgress = Double(positioningStateEventEmitter.positioningProgress) / 100.0
-
-                    if positioningStateEventEmitter.isPositionLocked, !self.isPositionLocked {
-                        self.isPositionLocked = true
-                        self.consoleLog("**** POSITION LOCKED ****")
-                    }
-                    if !positioningStateEventEmitter.isPositionLocked && self.isPositionLocked {
-                        self.isPositionLocked = false
-                        self.consoleLog("**** POSITION DROPPED ****")
-                        self.sendPositionDropNotification()
-                    }
-                }
-
-            case .positionEventEmitter:
-                guard let positionEventEmitter = eventEmitter as? PositionEventEmitter else {
-                    return
-                }
-                if let positionType = positionEventEmitter.positionType {
-                    var event = [String : Any]()
-
-                    event["EventType"] = positionType
-                    event["EventCode"] = positionEventEmitter.positionCode
-                    DispatchQueue.main.async {
-                        self.consoleLog("POSITIONING EVENT:\n\(event.toJSONString() ?? "")")
-                    }
-                    Log.debug("The value of positionEventEmitter dict is:\(event)")
-                }
-
-                if let position = positionEventEmitter.positionCode, position == 0 {
-                    self.updateEvent()
-                }
-                Log.debug("The value of positionEventEmitter is:\(positionEventEmitter)")
-            case .initErrorEventEmitter:
-                guard let errorEventEmitter = eventEmitter as? ErrorEventEmitter else {
-                    return
-                }
-
-                errorEventEmitterCompletionHandler(errorEventEmitter)
-            case .geofenceStateEventEmitter:
-                guard let geofenceEvent = eventEmitter as? GeofenceStateEventEmitter else {
-                    return
-                }
-                
-                let newState = geofenceEvent.state
-                let previousState = self.currentGeoFenceState ?? "undefined"
-                
-                guard previousState != newState else {
-                    Log.debug("Geofence state unchanged: \(newState)")
-                    return
-                }
-                
-                switch newState {
-                case "inside":
-                    if previousState == "outside" || previousState == "undefined" {
-                        self.sendGeoFenceEnteredNotification()
-                        self.consoleLog("**** ENTERED GEOFENCE from \(previousState) ****")
-                    }
-                case "outside":
-                    if previousState == "inside" || previousState == "undefined" {
-                        self.sendGeoFenceExitedNotification()
-                        self.consoleLog("**** EXITED GEOFENCE ****")
-                    }
-                default:
-                    self.consoleLog("**** UNKNOWN state: \(newState) ****")
-                }
-                self.currentGeoFenceState = newState
-                
-            default:
-                break
-            }
-        }
-    }
-
-    func waitForIsFinishedSettingMapResponse() {
-        compass?.isFinishedSettingMap
-            .sink { [weak self] isInitialize in
-                guard isInitialize else {
-                    Log.debug("Compass: isInitialize is not set.")
-                    return
-                }
-                self?.compass?.displayMap(workflow: Workflow(id: "sample_app_id", type: "sample_app_flow", value: "sa_val"))
-            }
-            .store(in: &cancellables)
-    }
-    
-//    func displayPins() {
-//        setAndGetAssetsEventStatus()
-//        let uuids = storeIDText == DebugData.StoreID.oriient ? DebugData.asset2280List.shuffled() : DebugData.asset3594List.shuffled()
-//        let idType = PinDropMethod.assets
-//        Log.debug("assetList is \(uuids)")
-//        var firstUuid = [String]()
-//        if let first = uuids.first {
-//            firstUuid = [first]
-//        }
-//
-//        //        let uuid807 = "2660845"
-//        compass?.displayPin(uuidList: firstUuid, idType: idType, config: displayPinConfig.hashMap)
-//        Log.debug("uuids: \(uuids), firstUuid: \(firstUuid), type: \(idType.rawValue)")
-//    }
-//    
-//    func displayPinsFromEncodedString() {
-//        setAndGetAssetsEventStatus()
-//        //        self.compass?.displayPin(uuidList: ["YzAvWy12SixmWF0vMQ=="], idType: .generic, type: "GENERIC")
-//        //        self.compass?.displayPin(uuidList: ["YzAvWy1wSixoOV0vMQ=="], idType: .generic, type: "GENERIC")
-//        let encodedString = storeIDText == DebugData.StoreID.oriient ? DebugData.oriientMapEncodedString : DebugData.inStoreMapEncodedString
-//        compass?.displayPin(uuidList: ["WkovWy1WRyxQcV0vMQ=="], idType: .generic)
-//    }
-    
-    func displayAssetPin(id: String) {
-        guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {return}
-        setAndGetAssetsEventStatus()
-        compass?.displayPin(uuidList: [id], idType: PinDropMethod.assets, config: displayPinConfig.hashMap)
-    }
-    
-    func displayGenericPin(encodedId: String) {
-        guard !encodedId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {return}
-        setAndGetAssetsEventStatus()
-        compass?.displayPin(uuidList: [encodedId], idType: .generic)
-    }
-    
-    func displayPinsV2(pins: [AisleTuple], isStaticPathVisible: Bool = false) {
-        var updateStatus = true
-
-        aislePinDropEventEmitterHandler = { pinDropEventEmitter in
-            var dict = pinDropEventEmitter.toDictionary()
-            dict["eventType"] = nil
-
-            Log.debug("The value of aislePinDropEventEmitterHandler dict is:\(dict)")
-            if let output = dict.toJSONString() {
-                Log.debug("Display Pins Payload for Aisle: \(output)")
-                DispatchQueue.main.async {
-                    self.consoleLog("PIN DROP V2 EVENT:\n\(output)")
-                }
-            }
-
-            guard updateStatus else {
-                return
-            }
-
-            updateStatus = false
-            Log.debug("displaypin success")
-        }
-
-        pinClickedEventEmitterHandler = { pinClickedEventEmitter in
-            var dict = pinClickedEventEmitter.toDictionary()
-            dict["eventType"] = nil
-            Log.debug("The value of pinClickedEventEmitterHandler dict is:\(dict)")
-            if let output = dict.toJSONString() {
-                Log.debug("Pin Clicked: \(output)")
-                DispatchQueue.main.async {
-                    self.consoleLog("PIN CLICKED EVENT:\n\(output)")
-                }
-            }
-        }
-
-        
-        var isZoomOutRequired = true
-        let aislePins: [AislePin] = pins.map { tuple in
-            if !tuple.zone.isEmpty && !tuple.aisle.isEmpty && !tuple.section.isEmpty {
-                isZoomOutRequired = false
-            }
-            return AislePin(
-                type: "user",
-                id: UUID().uuidString,
-                location: AisleLocation(
-                    zone: tuple.zone,
-                    aisle: tuple.aisle,
-                    section: tuple.section,
-                    selected: tuple.selected
-                )
-            )
-        }
-        
-        if isStaticPathVisible {
-            compass?.displayStaticPath(
-                pins: aislePins,
-                startFromNearbyEntrance: true,
-                disableZoomGestures: false
-            )
-        } else {
-            compass?.displayPinV2(pins: aislePins, config: displayPinConfig.hashMap, isZoomOutRequired: isZoomOutRequired)
-        }
-    }
-    
-    
-    func getUserDistance(zone: String, aisle: String, section: String) {
-        let trimmedZone = zone.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedAisle = aisle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedSection = section.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !trimmedZone.isEmpty, !trimmedAisle.isEmpty, !trimmedSection.isEmpty else {
-            consoleLog("Please provide zone, aisle, and section to calculate distance.")
-            return
-        }
-
-        let location = compass_sdk_ios.AisleLocation(
-            zone: trimmedZone,
-            aisle: trimmedAisle,
-            section: trimmedSection,
-            selected: true
-        )
-        let pin = compass_sdk_ios.AislePin(
-            type: "user_distance",
-            id: UUID().uuidString,
-            location: location
-        )
-
-        consoleLog("Requesting distance to \(trimmedZone)-\(trimmedAisle)-\(trimmedSection)")
-        requestUserDistance(for: [pin])
-    }
-
-    func getUserDistance() {
-        // Replica of Compass SDK RN code
-        let pinOptions: [[String: Any]] = [
-            ["type": "test1", "id": 1, "location": ["zone": "A", "aisle": "7", "section": "1"]],
-//            ["type": "test2", "id": 2, "location": ["zone": "B", "aisle": "1", "section": "1"]],
-//            ["type": "test3", "id": 3, "location": ["zone": "C", "aisle": "1", "section": "1"]],
-//            ["type": "test4", "id": 4, "location": ["zone": "D", "aisle": "1", "section": "1"]],
-//            ["type": "test5", "id": 5, "location": ["zone": "E", "aisle": "1", "section": "1"]],
-//            ["type": "", "id": 6, "location": ["zone": "", "aisle": "", "section": ""]]
-        ]
-
-        guard let rawPin = pinOptions.shuffled().first,
-              let location = rawPin["location"] as? HashMap else { return }
-
-        let zone = location["zone"] as? String ?? ""
-        let aisle = location["aisle"] as? String ?? ""
-        let section = location["section"] as? String ?? ""
-
-        let aisleLocation = compass_sdk_ios.AisleLocation(zone: zone, aisle: aisle, section: section, selected: true)
-        let pin = compass_sdk_ios.AislePin(
-            type: rawPin["type"] as? String ?? "",
-            id: String(describing: rawPin["id"] ?? ""),
-            location: aisleLocation
-        )
-
-        consoleLog("Requesting distance using sample pin \(zone)-\(aisle)-\(section)")
-        requestUserDistance(for: [pin])
-    }
-    
-    func testGetUserDistanceWithHardcodedPin() {
-        let pin = compass_sdk_ios.AislePin(
-            type: "item",
-            id: "123",
-            location: compass_sdk_ios.AisleLocation(zone: "A", aisle: "1", section: "1", selected: true)
-        )
-        consoleLog("Called getUserDistance with hardcoded pin: \(pin)")
-        requestUserDistance(for: [pin])
-    }
-
-    private func requestUserDistance(for pins: [compass_sdk_ios.AislePin]) {
-        guard !pins.isEmpty else { return }
-
-        var updateStatus = true
-
-        aislePinDropEventEmitterHandler = { pinDropEventEmitter in
-            var dict = pinDropEventEmitter.toDictionary()
-            dict["eventType"] = nil
-
-            Log.debug("The value of aislePinDropEventEmitterHandler dict is:\(dict)")
-            if let output = dict.toJSONString() {
-                Log.debug("Display Pins Payload for Aisle: \(output)")
-                DispatchQueue.main.async {
-                    self.consoleLog("PIN DROP V2 EVENT:\n\(output)")
-                }
-            }
-
-            guard updateStatus else {
-                return
-            }
-
-            updateStatus = false
-            Log.debug("displaypin success")
-        }
-
-        pinClickedEventEmitterHandler = { pinClickedEventEmitter in
-            var dict = pinClickedEventEmitter.toDictionary()
-            dict["eventType"] = nil
-            Log.debug("The value of pinClickedEventEmitterHandler dict is:\(dict)")
-            if let output = dict.toJSONString() {
-                Log.debug("Pin Clicked: \(output)")
-                DispatchQueue.main.async {
-                    self.consoleLog("PIN CLICKED EVENT:\n\(output)")
-                }
-            }
-        }
-
-        compass?.getUserDistance(pins: pins) { responses in
-            responses.forEach { response in
-                let dict = response.toDictionary()
-                print("User distance response is: \(dict)")
-                if let output = dict.toJSONString() {
-                    DispatchQueue.main.async {
-                        self.consoleLog("USER DISTANCE RESPONSE:\n\(output)")
-                    }
-                }
-            }
-        }
-    }
-    
-    func setAndGetAssetsEventStatus() {
-        var updateStatus = true
-
-        pinDropEventEmitterHandler = { pinDropEventEmitter in
-            var dict = pinDropEventEmitter.toDictionary()
-            dict["eventType"] = nil
-            Log.debug("The value of pinDropEventEmitterHandler dict is:\(dict)")
-            if let output = dict.toJSONString() {
-                Log.debug("Display Pins Payload for Asset or Generic: \(output)")
-                DispatchQueue.main.async {
-                    self.consoleLog("PIN DROP EVENT:\n\(output)")
-                }
-            }
-
-            guard updateStatus else {
-                return
-            }
-
-            updateStatus = false
-            Log.debug("displaypin success")
-        }
-
-        errorEventEmitterHandler = { errorEventEmitter in
-            let dict = errorEventEmitter.toDictionary()
-            Log.debug("The value of errorEventEmitterHandler dict is:\(dict)")
-
-            var event = [String : Any]()
-            if let code = dict["errorCode"] as? Int {
-                event["code"] = code
-            }
-            if let errortype = dict["compassErrorType"] as? String {
-                event["errortype"] = errortype
-            }
-            if let message = dict["errorDescription"] as? String {
-                event["message"] = message
-            }
-            Log.debug("SendEvent wih errorEventEmitter and body \(event)")
-            DispatchQueue.main.async {
-                self.consoleLog("ERROR EVENT:\n\(event.toJSONString() ?? "")")
-            }
-            guard updateStatus else {
-                return
-            }
-
-            updateStatus = false
-            Log.debug("-1 Compass displayPins failed")
-        }
-    }
+    HomeView()
 }
