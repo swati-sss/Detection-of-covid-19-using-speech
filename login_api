@@ -1,260 +1,407 @@
-import Combine
-import compass_sdk_ios
+import SwiftUI
 
-class CompassView: UIView {
+struct HomeView: View {
+    @StateObject private var bridge = HomeViewModel()
+    @State private var showAisleSheet = false
+    @State private var showStaticPath = false
+    @State private var showAssetSheet = false
+    @State private var showGenericSheet = false
+    @State private var showDistanceSheet = false
 
-    // MARK: - Property
+    @State private var goToFirstScreen = false
+    @State private var didAutoInit = false
+    
+    @State private var showFeatureFlags = false
+    @State private var showEnvironmentSheet = false
+    
+    @State private var showCustomMapSheet = false
+    @State private var tempUseCustomMap = false
+    @State private var tempStoreID = ""
 
-    weak var viewController: ViewController?
-    var defaultHeight: CGFloat = 50.0
-    var defaultWidth: CGFloat = 50.0
-    var height: CGFloat
-    var width : CGFloat
-    var workflow: Workflow?
-
-    // MARK: - Private property
-
-    private var panGestureRecognizer: UIPanGestureRecognizer?
-    private var pinchGestureRecognizer: UIPinchGestureRecognizer?
-    private var cancellable: AnyCancellable?
-
-    // MARK: - Init
-
-    override init(frame: CGRect) {
-        self.height = defaultHeight
-        self.width = defaultWidth
-
-        super.init(frame: frame)
-
+    private var controlHeight: CGFloat = 44
+    
+    init(bridge: HomeViewModel = HomeViewModel()) {
+        _bridge = StateObject(wrappedValue: bridge)
     }
-
-    required init?(coder aDecoder: NSCoder) { fatalError("nope") }
-
-    // MARK: - Function
-
-    // MARK: getHeight Function
-
-    func getHeight(using src:Dictionary<String, Any>) -> CGFloat {
-        guard let height = src["height"] as? CGFloat else {
-            return defaultHeight
-        }
-
-        return height > 0 ? height : defaultHeight
-    }
-
-    // MARK: getWidth Function
-
-    func getWidth(using src:Dictionary<String, Any>) -> CGFloat {
-        guard let width = src["width"] as? CGFloat else {
-            return defaultWidth
-        }
-
-        return width > 0 ? width : defaultWidth
-    }
-
-    // MARK: setSrc Function
-
-    func setSrc(src:Dictionary<String, Any>) {
-        debugPrint("src is \(src)")
-        self.height = getHeight(using: src)
-        self.width = getWidth(using: src)
-        if let id = src["workflowId"] as? String,
-           let type = src["workflowType"] as? String,
-           let value = src["workflowValue"] as? String {
-            self.workflow = Workflow(id: id, type: type, value: value)
-        }
-        debugPrint("height is \(self.height) and width is \(self.width)")
-        self.viewController = nil
-        self.setNeedsLayout()
-        self.layoutIfNeeded()
-    }
-
-    // MARK: layoutSubviews Function
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        self.setupView()
-    }
-}
-
-extension CompassView {
-
-    // MARK: - Private Function
-
-    // MARK: Private setupView Function
-
-    private func setupView() {
-        guard let viewController = viewController else {
-            self.embed()
-            setupBinding()
-            setupGestureRecognizer()
-            debugPrint("setupBinding is called and frame is \(self.width) \(self.height)")
-            return
-        }
-
-        viewController.view.frame = bounds
-    }
-
-    // MARK: Private setupBinding Function
-
-    private func setupBinding() {
-        cancellable?.cancel()
-        cancellable = compass?.isFinishedSettingMap
-            .sink { isFinishedSettingMap in
-                guard isFinishedSettingMap else {
-                    return
+    
+    var body: some View {
+        VStack(spacing: 5) {
+            
+            // top row
+            HStack(spacing: 8) {
+                TextField("Store ID", text: $bridge.storeIDText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+                Button(action: { bridge.initialize(false) }) {
+                    Text("Initialize")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(.white)
                 }
-                compass?.displayMap(workflow: self.workflow)
-                compass?.getStatusService().emitMapStatusEvent(isSuccess: true)
-                debugPrint("isFinishedSettingMap is true and frame is \(self.width) \(self.height)")
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.blue)
+                )
+                
+                Menu {
+                    Button(action: {bridge.shouldZoomOnPins.toggle()}) {
+                        Label("Zoom-in on pin drop", systemImage: bridge.shouldZoomOnPins ? "checkmark.circle.fill" : "circle")
+                    }
+                    
+                    Button(action: {bridge.resetZoom.toggle()}) {
+                        Label("Reset zoom on clear map", systemImage: bridge.resetZoom ? "checkmark.circle.fill" : "circle")
+                    }
+                    
+                    Divider()
+                    
+                    Button("Copy console text") {
+                        bridge.copyConsoleTextToClipboard()
+                    }
+                    
+                    Button("Clear console") {
+                        bridge.clearConsole()
+                    }
+                    
+                    Button(bridge.isConsoleHidden ? "Show console" : "Hide console") {
+                        bridge.toggleConsoleVisibility()
+                    }
+                    
+                    Divider()
+                    
+                    Button("Stop positioning", role: .destructive) {
+                        bridge.stopPositioning()
+                    }
+                    
+                } label: {
+                    Text("Options")
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .background(RoundedRectangle(cornerRadius: 8))
+                    
+                }
             }
-    }
+            .padding(.horizontal, 8)
+            .padding(.top, 3)
+            
+            // Middle row
+            HStack(spacing: 8) {
+                Menu {
+                    Text("Select Update Event API")
 
-    // MARK: Private embed Function
+                    Button("Update Event") {
+                        bridge.updateEvent()
+                    }
+                    Button("Update Event List") {
+                        bridge.updateEventList()
+                    }
+                    
+                } label: {
+                    Text("Update Event")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 8))
+                }
+                
+                Menu {
+                    Text("Select a pin type")
 
-    private func embed() {
-        guard let parentVC = parentViewController,
-              self.width > 0,
-              self.height > 0 else {
-            debugPrint("parentViewController is \(String(describing: self.parentViewController)) and frame is \(self.width) \(self.height)")
-            return
+                    Button("Asset Pin") {
+                        showAssetSheet = true
+                    }
+                    Button("Generic Pin") {
+                        showGenericSheet = true
+                    }
+                    Button("Aisle Pin") {
+                        showAisleSheet = true
+                    }
+                    Button("Static Path") {
+                        showStaticPath = true
+                        showAisleSheet = true
+                    }
+                    Button("Get Distance") {
+                        showDistanceSheet = true
+                    }
+                    Button("Test Hardcoded Distance") {
+                        bridge.testGetUserDistanceWithHardcodedPin()
+                    }
+                    
+                } label: {
+                    Text("Display Pin")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 8))
+                }
+                
+                Menu {
+                    Text("Select API")
+
+                    Button("Clear Map") {
+                        bridge.clearMap()
+                    }
+                    Button("Get Location") {
+                        bridge.getLocation(assetId: "1645190")
+                    }
+                    Button("Kill Switch") {
+                        bridge.killSwitch()
+                    }
+                    
+                } label: {
+                    Text("Other APIs")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 3)
+            
+            
+            // last row
+            HStack(spacing: 8) {
+                Button(action: { goToFirstScreen = true }) {
+                    Text("Next Screen")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(.white)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.blue)
+                )
+                
+                Button(action: {  }) {
+                    Text("Re-Mount")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(.white)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.blue)
+                )
+                
+                Menu {
+                    Button("Feature Flags") {
+                        showFeatureFlags = true
+                    }
+                    Button("Environment") {
+                        showEnvironmentSheet = true
+                    }
+                } label: {
+                    Text("Env | Flags")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(.white)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.blue)
+                )
+
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 3)
+            
+            Button(action: {
+                tempStoreID = bridge.customMapStoreIDText
+                tempUseCustomMap = !bridge.customMapStoreIDText.isEmpty
+                showCustomMapSheet = true
+            }) {
+                Text("Custom Map")
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .foregroundStyle(.white)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.blue)
+                    .padding(.horizontal, 8)
+            )
+            .sheet(isPresented: $showCustomMapSheet) {
+                NavigationView {
+                    Form {
+                        Section(header: Text("Settings")) {
+                            Toggle("Load Custom Map", isOn: $tempUseCustomMap)
+
+                            if tempUseCustomMap {
+                                TextField("Store ID", text: $tempStoreID)
+                                    .textInputAutocapitalization(.never)
+                                    .disableAutocorrection(true)
+                            }
+                        }
+
+                        Section {
+                            Button("Apply") {
+                                if tempUseCustomMap {
+                                    bridge.customMapStoreIDText = tempStoreID
+                                    bridge.storeIDText = tempStoreID
+                                } else {
+                                    bridge.customMapStoreIDText = ""
+                                }
+                                DispatchQueue.main.async {
+                                    bridge.currentStore = nil
+                                    bridge.compass?.currentStore = nil
+                                    bridge.initialize(false)
+                                }
+                                showCustomMapSheet = false
+                            }
+                            .frame(maxWidth: .infinity, alignment: .center)
+                        }
+                    }
+                    .navigationTitle("Custom Map")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") {
+                                showCustomMapSheet = false
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Progress strip
+            HStack(spacing: 8) {
+                ProgressView(value: bridge.calibrationProgress)
+                    .progressViewStyle(.linear)
+                    .frame(height: 24)
+                    .scaleEffect(y: 3, anchor: .center)
+                    .tint(bridge.calibrationProgress >= 1.0 ? .green : .red)
+                    .overlay(alignment: .leading) {
+                        Text(" ♾️ Calibration")
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.leading, 4)
+                    }
+                    .animation(.easeInOut, value: bridge.calibrationProgress)
+                
+                ProgressView(value: bridge.positioningProgress)
+                    .progressViewStyle(.linear)
+                    .frame(height: 24)
+                    .scaleEffect(y: 3, anchor: .center)
+                    .tint(bridge.positioningProgress >= 1.0 ? .green : .red)
+                    .overlay(alignment: .leading) {
+                        Text(" 🚶🏼 Position")
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.leading, 4)
+                    }
+                    .animation(.easeInOut, value: bridge.positioningProgress)
+                
+                ProgressView(value: bridge.isPositionLocked ? 1.0 : 0.0)
+                    .progressViewStyle(.linear)
+                    .frame(height: 24)
+                    .scaleEffect(y: 3, anchor: .center)
+                    .tint(bridge.isPositionLocked ? .green : .red)
+                    .overlay(alignment: .leading) {
+                        Text(" 🔒 Position Lock")
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.leading, 4)
+                    }
+                    .animation(.easeInOut, value: bridge.isPositionLocked)
+            }
+            .frame(height: 12)
+            .padding(.horizontal, 8)
+            .padding(.top, 3)
+
+            
+            // Map area
+            MapRootHost(viewController: bridge.mapRootViewController)
+                .background(Color(.systemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            
+            
+            if !bridge.isConsoleHidden {
+                // Console
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        Text(bridge.consoleText.isEmpty ? "— console —" : bridge.consoleText)
+                            .font(.system(.footnote, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                        
+                        Color.clear
+                            .frame(height: 1)
+                            .id("BOTTOM")
+                    }
+                    .frame(height: 160)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.secondary.opacity(0.35))
+                    )
+                    .onChange(of: bridge.scrollToken) { _ in
+                        withAnimation {
+                            proxy.scrollTo("BOTTOM", anchor: .bottom)
+                        }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+            }
         }
-
-        let vc = ViewController.shared
-        parentVC.remove(vc)
-        vc.view.frame = CGRect(x:0,
-                               y:0,
-                               width:self.width,
-                               height:height)
-        parentVC.addChild(vc)
-        addSubview(vc.view)
-        self.viewController = vc
-
-        // add current compasss view
-        ViewController.shared.compassViewList.append(self)
-
-        let maskView = UIView(frame: CGRect(x:0,
-                                            y:0,
-                                            width:self.width,
-                                            height:self.height))
-        maskView.backgroundColor = .white
-        vc.view.mask = maskView
-        debugPrint("vc is \(vc.view.frame) and maskView is \(maskView.frame)")
-    }
-
-    // MARK: Private setupGestureRecognizer Function
-
-    // To make sure nested view does not scroll parent view
-    private func setupGestureRecognizer() {
-        setupPanGestureRecognizer()
-        setupPinchGestureRecognizer()
-    }
-
-    // MARK: Private setupPanGestureRecognizer Function
-
-    private func setupPanGestureRecognizer() {
-        guard let  panGestureRecognizer = panGestureRecognizer else {
-            panGestureRecognizer = UIPanGestureRecognizer(target: self,
-                                                          action: #selector(panGestureSelector(_:)))
-            setupPanGestureRecognizer()
-            return
+        .onAppear {
+            guard !didAutoInit else { return }
+            didAutoInit = true
+            DispatchQueue.main.async {
+                bridge.initialize(false)
+            }
         }
-
-        viewController?.view.addGestureRecognizer(panGestureRecognizer)
-    }
-
-    // MARK: Private setupPinchGestureRecognizer Function
-
-    private func setupPinchGestureRecognizer() {
-        guard let  pinchGestureRecognizer = pinchGestureRecognizer else {
-            pinchGestureRecognizer = UIPinchGestureRecognizer(target: self,
-                                                              action: #selector(pinchGestureSelector(_:)))
-            setupPinchGestureRecognizer()
-            return
+        .navigationTitle("Main Map")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showAisleSheet) {
+            AislePinInputSheet { tuples in
+                bridge.displayPinsV2(pins: tuples, isStaticPathVisible: showStaticPath)
+                showStaticPath = false
+            }
+            .presentationDetents([.medium, .large])
         }
-
-        viewController?.view.addGestureRecognizer(pinchGestureRecognizer)
-    }
-
-    // MARK: Private panGestureSelector Function
-
-    @objc private func panGestureSelector(_ sender: UIPanGestureRecognizer) {
-        validateGesture(sender.state == UIGestureRecognizer.State.ended)
-    }
-
-    // MARK: Private pinchGestureSelector Function
-
-    @objc private func pinchGestureSelector(_ sender: UIPinchGestureRecognizer) {
-        validateGesture(sender.state == UIGestureRecognizer.State.ended)
-    }
-
-    // MARK: Private validateGesture Function
-
-    private func validateGesture(_ isGestureBegan: Bool) {
-        setViewControllerScrollEnable(isGestureBegan)
-    }
-
-    // MARK: Private setViewControllerScrollEnable Function
-
-    private func setViewControllerScrollEnable(_ isScrollEnabled: Bool) {
-        guard let viewController = viewController else {
-            return
+        .sheet(isPresented: $showAssetSheet) {
+            AssetPinInputSheet { assetId in
+                bridge.displayAssetPin(id: assetId)
+            }
+            .presentationDetents([.medium])
         }
-
-        viewController.view.enclosingScrollView?.isScrollEnabled = isScrollEnabled
+        .sheet(isPresented: $showGenericSheet) {
+            GenericPinInputSheet { encodedId in
+                bridge.displayGenericPin(encodedId: encodedId)
+            }
+            .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showDistanceSheet) {
+            DistanceInputSheet { zone, aisle, section in
+                bridge.getUserDistance(zone: zone, aisle: aisle, section: section)
+            }
+            .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showFeatureFlags){
+            FeatureFlagsView(bridge: bridge)
+        }
+        .sheet(isPresented: $showEnvironmentSheet) {
+            EnvironmentSettingsView(bridge: bridge)
+        }
+        .navigationDestination(isPresented: $goToFirstScreen) {
+            FirstScreenView(bridge: bridge)
+        }
     }
 }
 
-// MARK: - UIViewController extension
-
-extension UIViewController {
-
-    // MARK: - Functions
-
-    // MARK: addChildVC Function
-
-    func addChildVC(_ childVC: UIViewController) {
-        addChild(childVC)
-        view.addSubview(childVC.view)
-        childVC.view.translatesAutoresizingMaskIntoConstraints = false
-        view.addConstraints([
-            childVC.view.topAnchor.constraint(equalTo: view.topAnchor),
-            childVC.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            childVC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            childVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            childVC.view.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            childVC.view.centerYAnchor.constraint(equalTo: view.centerYAnchor)
-        ])
-        childVC.didMove(toParent: self)
-    }
-
-    // MARK: remove Function
-
-    func remove(_ childVC: UIViewController) {
-        childVC.willMove(toParent: nil)
-        childVC.view.removeFromSuperview()
-        childVC.removeFromParent()
-
-    }
-}
-
-
-// MARK: - UIView extension
-
-extension UIView {
-
-    // MARK: - Functions
-
-    // MARK: parentViewController Function
-
-    var parentViewController: UIViewController? {
-        var parentResponder: UIResponder? = self
-        while parentResponder != nil {
-            parentResponder = parentResponder!.next
-            if let viewController = parentResponder as? UIViewController {
-                return viewController
-            }
-        }
-        return nil
-    }
+#Preview {
+    HomeView()
 }
