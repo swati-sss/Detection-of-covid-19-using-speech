@@ -3,7 +3,7 @@ import LivingDesign
 
 final class MapContainerViewController: UIViewController {
     let mapRoot: LDRootViewController
-    private var hasAppliedInitialLayout = false
+    private var hasConfiguredView = false
 
     init(mapRoot: LDRootViewController) {
         self.mapRoot = mapRoot
@@ -13,12 +13,18 @@ final class MapContainerViewController: UIViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        rehostIfNeeded()
+        rehostIfNeeded(reason: "viewWillAppear")
     }
 
-    func rehostIfNeeded() {
+    func rehostIfNeeded(reason: String? = nil) {
+#if DEBUG
+        if let reason {
+            debugPrint("[MapContainerViewController] rehostIfNeeded triggered (\(reason))")
+        } else {
+            debugPrint("[MapContainerViewController] rehostIfNeeded triggered")
+        }
+#endif
         let child = mapRoot
-        var needsLayout = false
 
         if let parent = child.parent, parent !== self {
             child.willMove(toParent: nil)
@@ -32,23 +38,29 @@ final class MapContainerViewController: UIViewController {
         }
 
         if child.view.superview !== view {
-            let v = child.view!
-            v.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(v)
+            guard let embeddedView = child.view else { return }
+            configureEmbeddedViewIfNeeded(embeddedView)
+            embeddedView.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(embeddedView)
             NSLayoutConstraint.activate([
-                v.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-                v.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-                v.topAnchor.constraint(equalTo: view.topAnchor), 
-                v.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)
+                embeddedView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+                embeddedView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+                embeddedView.topAnchor.constraint(equalTo: view.topAnchor),
+                embeddedView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)
             ])
-            needsLayout = true
+        } else if let embeddedView = child.view {
+            configureEmbeddedViewIfNeeded(embeddedView)
         }
+    }
 
-        if needsLayout && !hasAppliedInitialLayout {
-            view.setNeedsLayout()
-            view.layoutIfNeeded()
-            hasAppliedInitialLayout = true
+    private func configureEmbeddedViewIfNeeded(_ embeddedView: UIView) {
+        guard !hasConfiguredView else { return }
+        if let scrollView = embeddedView.enclosingScrollView {
+            scrollView.isScrollEnabled = false
+            scrollView.canCancelContentTouches = true
         }
+        embeddedView.clipsToBounds = true
+        hasConfiguredView = true
     }
 }
 
@@ -60,6 +72,6 @@ struct MapRootHost: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: MapContainerViewController, context: Context) {
-        uiViewController.rehostIfNeeded()
+        uiViewController.rehostIfNeeded(reason: "updateUIViewController")
     }
 }
