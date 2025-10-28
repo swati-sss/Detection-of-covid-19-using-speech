@@ -1,323 +1,898 @@
+import CompassSdkRn, { Environment, TokenType } from '@walmart/compass-sdk-rn';
+import * as ENV from './env_vars';
 import {
-  NativeModules,
-  NativeEventEmitter,
+    StyleSheet,
+    Dimensions,
+    Platform,
 } from 'react-native';
+import { Dropdown } from 'react-native-element-dropdown';
+import { Picker } from '@react-native-picker/picker';
 import React from 'react';
-import {
-  type CompassSdkRnInterface,
-  type DisplayPinsConfig,
-  type InitConfig,
-  type Props,
-  type Pin,
-  type MapConfig,
-  type PinCallbackEvent,
-  type MapEvent,
-  type CompassStatusEvent,
-  type PinType,
-  SectionCaptureEvent,
-  Environment,
-  EventType,
-  TokenType,
-} from '../index';
-import { useEffect, useRef } from 'react';
-import { findNodeHandle, PixelRatio, Platform, UIManager } from 'react-native';
-import { requireNativeComponent } from 'react-native';
-import { Validator } from './validation';
+import RNFS from 'react-native-fs';
+import { request, PERMISSIONS } from 'react-native-permissions';
+import _ from 'lodash';
 
-const { CompassSdkRn } = NativeModules;
-const CompassEventEmitter = new NativeEventEmitter(CompassSdkRn);
-
-/** @internal */
-export class CompassSdkRnImpl implements CompassSdkRnInterface {
-
-  initialize(
-    clientSec: string,
-    consumerID: string,
-    accountID: string,
-    tokenType: TokenType,
-    storeId: number,
-    environment: Environment,
-    config?: InitConfig
-  ): Promise<string> {
-    console.log('[CompassSdkRnImpl] initialize called', {
-      hasClientSec: clientSec?.length ?? 0,
-      consumerID,
-      accountID,
-      tokenType,
-      storeId,
-      environment,
-      config,
+//Common Variables
+export const ACCOUNT_ID = 'example_app_account'
+export const TOKEN_TYPE_IAM = 'iam'
+export const TOKEN_TYPE_USER = 'user'
+export const WORKFLOW_TYPE = 'sample_app_workflow_type'
+export const WORKFLOW_ID = 'sample_app_workflow_id'
+export const WORKFLOW_VALUE = 'sample_app_workflow_value'
+export const AISLE_REGEX = /^[A-Z]\d+-\d+$/
+export const ENCODED_LOCATION_REGEX = /^[A-Za-z0-9]{1,48}=?=?$/
+export const runAfterInitialize = (
+  store: string,
+  code: () => void
+) => {
+  console.log('[Helper] runAfterInitialize invoked', { store });
+  CompassSdkRn.initialize(
+    ENV.REACT_APP_FIXIT_CLIENT_KEY,
+    ENV.REACT_APP_FIXIT_CONSUMER_ID,
+    ACCOUNT_ID,
+    TokenType.IAM,
+    Number(store),
+    Environment.STAGE,
+    {
+      mockUser: true
+    }
+  )
+    .then(() => {
+      console.log('[Helper] runAfterInitialize initialize resolved');
+      onInitSuccessCallback();
+      code();
+    })
+    .catch((err: any) => {
+      console.log('[Helper] runAfterInitialize initialize rejected', err);
     });
-    const errors = Validator.validateInitialize(
-      clientSec,
-      consumerID,
-      accountID,
-      tokenType,
-      storeId,
-      environment);
-    if (errors.length > 0) {
-      console.log(`Incorrect parameters for CompassSdkRn.initialize:\n
-                  ${errors.join('\n')}`);
-      return Promise.reject(`Incorrect parameters for CompassSdkRn.initialize:\n
-                  ${errors.join('\n')}`);
+}
+
+//Helper function for running getUserDistance after initialization
+export const runGetUserDistanceAfterInit = (
+  store: string,
+  pins: any[],
+  onSuccess: (data: any) => void,
+  onError: (err: any) => void
+) => {
+  console.log('[Helper] runGetUserDistanceAfterInit invoked', { store, pinsCount: pins?.length });
+  CompassSdkRn.initialize(
+    ENV.REACT_APP_FIXIT_CLIENT_KEY,
+    ENV.REACT_APP_FIXIT_CONSUMER_ID,
+    ACCOUNT_ID,
+    TokenType.IAM,
+    Number(store),
+    Environment.STAGE,
+    {
+      mockUser: true
     }
-
-    console.log('[CompassSdkRnImpl] forwarding initialize to native');
-    return (CompassSdkRn as CompassSdkRnInterface).initialize(
-      clientSec,
-      consumerID,
-      accountID,
-      tokenType,
-      storeId,
-      environment,
-      config);
-  }
-
-  displayPins(
-    pinId: string[],
-    pinType: PinType,
-    config?: DisplayPinsConfig
-  ): Promise<void> {
-    console.log('[CompassSdkRnImpl] displayPins called', { pinId, pinType, config });
-    const errors = Validator.validateDisplayPins(pinId, pinType);
-    if (errors.length > 0) {
-      return Promise.reject(`Incorrect parameters for CompassSdkRn.displayPins:\n
-        ${errors.join('\n')}`);
-    }
-
-    console.log('[CompassSdkRnImpl] forwarding displayPins to native');
-    return (CompassSdkRn as CompassSdkRnInterface).displayPins(
-      pinId,
-      pinType,
-      config);
-  }
-
-  displayPinsV2(pins: Pin[], config?: DisplayPinsConfig | undefined): Promise<any> {
-    console.log('[CompassSdkRnImpl] displayPinsV2 called', { pins, config });
-    const errors = Validator.validateDisplayPinsV2(pins, config);
-    if (errors.length > 0) {
-      return Promise.reject(`Incorrect parameters for CompassSdkRn.displayPinsV2:\n
-        ${errors.join('\n')}`);
-    }
-
-    console.log('[CompassSdkRnImpl] forwarding displayPinsV2 to native');
-    return (CompassSdkRn as CompassSdkRnInterface).displayPinsV2(
-      pins,
-      config);
-  }
-
-  getUserDistance(pins: Pin[]): Promise<any> {
-    console.log('[CompassSdkRnImpl] getUserDistance called', { pins });
-    const errors = Validator.validateGetUserDistanceFrom(pins);
-    if (errors.length > 0) {
-      return Promise.reject(`Incorrect parameters for CompassSdkRn.getUserDistance:\n
-        ${errors.join('\n')}`);
-    }
-
-    console.log('[CompassSdkRnImpl] forwarding getUserDistance to native');
-    return (CompassSdkRn as CompassSdkRnInterface).getUserDistance(pins);
-  }
-
-  centerAndZoom(
-    asset: string,
-    zoomLevel: number
-  ): Promise<void> {
-    console.log('[CompassSdkRnImpl] centerAndZoom called', { asset, zoomLevel });
-    (CompassSdkRn as CompassSdkRnInterface).centerAndZoom(
-      asset,
-      zoomLevel);
-      return Promise.resolve();
-  }
-
-  updateEvent(
-    consumerId: string,
-    eventType: EventType,
-    eventValue: string, 
-    metadata: Map<string, string> 
-  ): Promise<string> {
-    console.log('[CompassSdkRnImpl] updateEvent called', { consumerId, eventType, eventValue, metadata: Object.fromEntries(metadata) });
-    const errors = Validator.validateUpdateEvent(eventType, eventValue);
-    if (errors.length > 0) {
-      return Promise.reject(`Incorrect parameters for CompassSdkRn.updateEvent:\n
-        ${errors.join('\n')}`);
-    }
-
-    console.log('[CompassSdkRnImpl] forwarding updateEvent to native');
-    return (CompassSdkRn as CompassSdkRnInterface).updateEvent(
-      consumerId,
-      eventType,
-      eventValue,
-      metadata);
-  }
-
-  clearMap(
-    config?: MapConfig
-  ): Promise<void> {
-    console.log('[CompassSdkRnImpl] clearMap called', { config });
-    (CompassSdkRn as CompassSdkRnInterface).clearMap(
-      config);
-    return Promise.resolve();
-  }
-
-  updateAuthParams(
-    clientSec: String,
-    consumerID: String,
-    accountID: String): Promise<void> {
-    console.log('[CompassSdkRnImpl] updateAuthParams called', { hasClientSec: clientSec.length, consumerID, accountID });
-    (CompassSdkRn as CompassSdkRnInterface).updateAuthParams(
-      clientSec,
-      consumerID,
-      accountID);
-    return Promise.resolve();
-  }
-
-  addMapEventListener(
-    listener: (event: MapEvent) => void,
-  ): void {
-    console.log('[CompassSdkRnImpl] addMapEventListener registering listener');
-    CompassEventEmitter.addListener('COMPASS_MAP_EVENT', (data: any) => {
-      console.log('[CompassSdkRnImpl] COMPASS_MAP_EVENT received', data);
-      const mapEvent: MapEvent = {
-        success: data.success || true,
-      };
-      listener(mapEvent)
+  )
+    .then(() => {
+      console.log('[Helper] runGetUserDistanceAfterInit initialize resolved, scheduling getUserDistance');
+      onInitSuccessCallback();
+      setTimeout(() => {
+        console.log('[Helper] runGetUserDistanceAfterInit executing getUserDistance');
+        CompassSdkRn.getUserDistance(pins)
+          .then((data: any) => {
+            console.log('[Helper] runGetUserDistanceAfterInit getUserDistance resolved', data);
+            onSuccess(data);
+          })
+          .catch((err: any) => {
+            console.log('[Helper] runGetUserDistanceAfterInit getUserDistance rejected', err);
+            onError(err);
+          });
+      }, 5000);
     })
-  }
+    .catch((err: any) => {
+      console.log('[Helper] runGetUserDistanceAfterInit initialize rejected', err);
+      onError(err);
+    });
+}
 
-  addPinCallbackEventListener(
-    listener: (event: PinCallbackEvent) => void,
-  ): void {
-    console.log('[CompassSdkRnImpl] addPinCallbackEventListener registering listener');
-    CompassEventEmitter.addListener('PIN_CALLBACK_EVENT', (data: any) => {
-      console.log('[CompassSdkRnImpl] PIN_CALLBACK_EVENT received', data);
-      const pinCallbackEvent: PinCallbackEvent = {
-        mapType: data.mapType || 'WalmartMap',
-        longPressed: data.longPressed || false,
-        assets: data.assets || [],
-        encodedLocation: data.encodedLocation
-      }
-      listener(pinCallbackEvent)
+//Helper function for running displayPinsV2 after initialization
+export const runDisplayPinsV2AfterInit = (
+  store: string,
+  pins: any[],
+  config: any,
+  onSuccess: (data: any) => void,
+  onError: (err: any) => void
+) => {
+  console.log('[Helper] runDisplayPinsV2AfterInit invoked', { store, pinsCount: pins?.length, config });
+  CompassSdkRn.initialize(
+    ENV.REACT_APP_FIXIT_CLIENT_KEY,
+    ENV.REACT_APP_FIXIT_CONSUMER_ID,
+    ACCOUNT_ID,
+    TokenType.IAM,
+    Number(store),
+    Environment.STAGE,
+    {
+      mockUser: true
+    }
+  )
+    .then(() => {
+      console.log('[Helper] runDisplayPinsV2AfterInit initialize resolved, scheduling displayPinsV2');
+      onInitSuccessCallback();
+      setTimeout(() => {
+        console.log('[Helper] runDisplayPinsV2AfterInit executing displayPinsV2');
+        CompassSdkRn.displayPinsV2(pins, config)
+          .then((data: any) => {
+            console.log('[Helper] runDisplayPinsV2AfterInit displayPinsV2 resolved', data);
+            onSuccess(data);
+          })
+          .catch((err: any) => {
+            console.log('[Helper] runDisplayPinsV2AfterInit displayPinsV2 rejected', err);
+            onError(err);
+          });
+      }, 3000);
     })
-  }
+    .catch((err: any) => {
+      console.log('[Helper] runDisplayPinsV2AfterInit initialize rejected', err);
+      onError(err);
+    });
+}
 
-  addCompassStatusEventListener(
-    listener: (event: CompassStatusEvent) => void,
-  ): void {
-    console.log('[CompassSdkRnImpl] addCompassStatusEventListener registering listener');
-    CompassEventEmitter.addListener('COMPASS_STATUS_EVENT', (data: any) => {
-      console.log('[CompassSdkRnImpl] COMPASS_STATUS_EVENT received', data);
-      const compassStatusEvent: CompassStatusEvent = {
-        eventCode: data.eventCode || 3,
-        eventType: data.eventType || 'IDLE'
-      }
-      listener(compassStatusEvent)
+//common initialization success for tests
+export const initializeFixitSuccess = (
+  store: string,
+  mockUser: boolean,
+  onInit: (data: any) => void,
+  onError: (data: any) => void
+) => {
+  console.log('[Helper] initializeFixitSuccess invoked', { store, mockUser });
+  CompassSdkRn.initialize(
+    ENV.REACT_APP_FIXIT_CLIENT_KEY,
+    ENV.REACT_APP_FIXIT_CONSUMER_ID,
+    ACCOUNT_ID,
+    TokenType.IAM,
+    Number(store),
+    Environment.STAGE,
+    {
+      mockUser: mockUser
+    }
+  )
+    .then((data) => {
+      console.log('[Helper] initializeFixitSuccess resolved', data);
+      onInitSuccessCallback();
+      onInit(data);
     })
-  }
+    .catch((err) => {
+      console.log('[Helper] initializeFixitSuccess rejected', err);
+      onError(err);
+    });
+}
 
-  addSectionCaptureEventListener(
-    listener: (event: SectionCaptureEvent) => void,
-  ): void {
-    console.log('[CompassSdkRnImpl] addSectionCaptureEventListener registering listener');
-    CompassEventEmitter.addListener('SECTION_CAPTURE_EVENT', (data: any) => {
-      console.log('[CompassSdkRnImpl] SECTION_CAPTURE_EVENT received', data);
-      const sectionCaptureEvent: SectionCaptureEvent = {
-        success: data.success || true,
-        errorCode: data.errorCode || null,
-        errorMessage: data.errorMessage || null
-      }
-      listener(sectionCaptureEvent)
+//common initialization error for tests
+export const initializeFixitError = (
+  store: string,
+  onInit: (data: any) => void,
+  onError: (err: any) => void
+) => {
+  console.log('[Helper] initializeFixitError invoked', { store });
+  CompassSdkRn.initialize(
+    ENV.REACT_APP_FIXIT_CLIENT_KEY + "abcd",
+    ENV.REACT_APP_FIXIT_CONSUMER_ID,
+    ACCOUNT_ID,
+    TokenType.IAM,
+    Number(store),
+    Environment.STAGE,
+    { mockUser: false }
+  )
+    .then((data: any) => {
+      console.log('[Helper] initializeFixitError unexpectedly resolved', data);
+      onInit(data)
     })
+    .catch((err: any) => {
+      console.log('[Helper] initializeFixitError rejected as expected', err);
+      onError(err)
+    });
+}
+
+//common initialization success for tests
+export const initializeShopperSuccess = (
+  store: string,
+  mockUser: boolean,
+  onInit: (data: any) => void,
+  onError: (err: any) => void
+) => {
+  console.log('[Helper] initializeShopperSuccess invoked', { store, mockUser });
+  CompassSdkRn.initialize(
+    ENV.REACT_APP_SS_TOKEN,
+    ENV.REACT_APP_SS_CONSUMER_ID,
+    ACCOUNT_ID,
+    TokenType.USER,
+    Number(store),
+    Environment.STAGE,
+    {
+      mockUser: mockUser
+    }
+  )
+    .then((data) => {
+      console.log('[Helper] initializeShopperSuccess resolved', data);
+      onInitSuccessCallback();
+      onInit(data);
+    })
+    .catch((err) => {
+      console.log('[Helper] initializeShopperSuccess rejected', err);
+      onError(err);
+    });
+}
+
+//common initialization error for tests
+export const initializeShopperError = (
+  store: string,
+  onInit: (data: any) => void,
+  onError: (data: any) => void
+) => {
+  console.log('[Helper] initializeShopperError invoked', { store });
+  CompassSdkRn.initialize(
+    ENV.REACT_APP_SS_TOKEN + "abcd",
+    ENV.REACT_APP_SS_CONSUMER_ID,
+    ACCOUNT_ID,
+    TokenType.USER,
+    Number(store),
+    Environment.STAGE
+  )
+    .then((data) => {
+      console.log('[Helper] initializeShopperError unexpectedly resolved', data);
+      onInit(data)
+    })
+    .catch((err) => {
+      console.log('[Helper] initializeShopperError rejected as expected', err);
+      onError(err)
+    });
+}
+
+let onInitSuccessCallback: () => void = () => { };
+
+export function setInitSuccessCallback(callback: () => void) {
+  console.log('[Helper] setInitSuccessCallback registered callback');
+  onInitSuccessCallback = callback;
+}
+
+export const windowWidth = Dimensions.get('screen').width;
+export const windowHeight = Dimensions.get('screen').height;
+
+export const Styles = StyleSheet.create({
+    container: {
+        backgroundColor: 'white',
+        flex: 1,
+        alignItems: 'flex-start',
+        justifyContent: 'flex-start',
+        paddingTop: 10,
+    },
+    input: {
+        margin: 2,
+        borderColor: '#404040',
+        borderWidth: 1,
+        borderRadius: 4,
+        width: 50,
+        height: 35
+    },
+    testInput: {
+        margin: 2,
+        borderColor: '#404040',
+        borderWidth: 1,
+        borderRadius: 4,
+        height: 35
+    },
+    touchButton: {
+        margin: 2,
+        borderWidth: 1,
+        borderColor: 'black',
+        borderRadius: 4,
+        height: 35
+    },
+    row: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        paddingStart: 10,
+        paddingEnd: 10,
+    },
+    box: {
+        backgroundColor: 'white',
+        width: windowWidth - 10,
+        height: windowHeight / 3,
+        paddingEnd: 10,
+        borderWidth: 1,
+        margin: 5,
+        borderColor: 'black',
+    },
+    textStyle: {
+        fontSize: 12,
+        paddingTop: 6,
+        paddingLeft: 5,
+        paddingRight: 5,
+    },
+    textStyleHeader: {
+        paddingTop: 1,
+        fontWeight: 'bold'
+    },
+    colorlabel: {
+        color: 'red',
+        paddingTop: 20,
+        textAlign: 'center',
+    },
+    textBox: {
+        margin: 4,
+        padding: 4,
+        marginStart: 30,
+        borderWidth: 1,
+        borderColor: 'black',
+        borderRadius: 4,
+        width: 250,
+    }
+});
+
+export const PickerSelectStyles = StyleSheet.create({
+  inputIOS: {
+    fontSize: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: 'gray',
+    borderRadius: 4,
+    color: 'black',
+    paddingRight: 30, // to ensure the text is never behind the icon
+  },
+  inputAndroid: {
+    fontSize: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderWidth: 0.5,
+    borderColor: 'purple',
+    borderRadius: 8,
+    color: 'black',
+    paddingRight: 30, // to ensure the text is never behind the icon
+  },
+});
+
+export function contains(bigObject: any, smallObject: any): boolean {
+  // If testObject is a RegExp, test it against targetObject
+  if (smallObject instanceof RegExp) {
+    return typeof bigObject === 'string' && smallObject.test(bigObject);
   }
 
-  removeMapEventListener(): void {
-    console.log('[CompassSdkRnImpl] removeMapEventListener clearing listeners');
-    CompassEventEmitter.removeAllListeners('COMPASS_MAP_EVENT');
+  // If testObject is null or not an object, it's contained if it strictly equals targetObject
+  if (smallObject === null || typeof smallObject !== 'object') {
+    return smallObject === bigObject;
   }
 
-  removePinCallbackEventListener(): void {
-    console.log('[CompassSdkRnImpl] removePinCallbackEventListener clearing listeners');
-    CompassEventEmitter.removeAllListeners('PIN_CALLBACK_EVENT');
-  }
-  
-  removeCompassStatusEventListener(): void {
-    console.log('[CompassSdkRnImpl] removeCompassStatusEventListener clearing listeners');
-    CompassEventEmitter.removeAllListeners('COMPASS_STATUS_EVENT');
+  // If targetObject is null or not an object, it can't contain testObject
+  if (bigObject === null || typeof bigObject !== 'object') {
+    return false;
   }
 
-  removeSectionCaptureEventListener(): void {
-    console.log('[CompassSdkRnImpl] removeSectionCaptureEventListener clearing listeners');
-    CompassEventEmitter.removeAllListeners('SECTION_CAPTURE_EVENT');
+  // Handle arrays
+  if (Array.isArray(smallObject)) {
+    if (!Array.isArray(bigObject)) {
+      return false;
+    }
+    return smallObject.every((testItem, index) => {
+      return bigObject.some(targetItem => contains(targetItem, testItem));
+    });
+  }
+
+  // Handle objects
+  return Object.keys(smallObject).every(key =>
+    key in bigObject && contains(bigObject[key], smallObject[key])
+  );
+}
+
+export class MockBackend {
+  constructor(
+    public asset: object,
+    public config: object,
+    public aisle: object,
+  ) { }
+}
+
+export async function writeJsonToFile(mock: MockBackend) {
+  try {
+    const hasPermission = await requestStoragePermission();
+    if (!hasPermission) {
+      console.log('Storage permission not granted');
+      return;
+    }
+
+    // Use DocumentDirectoryPath for iOS, ExternalDirectoryPath for Android
+    const path = Platform.OS === 'ios' 
+      ? `${RNFS.DocumentDirectoryPath}/backend_mock.json`
+      : `${RNFS.ExternalDirectoryPath}/backend_mock.json`;
+
+    const jsonString = JSON.stringify(mock);
+    await RNFS.writeFile(path, jsonString, 'utf8');
+
+    console.log('JSON file written successfully at:', path);
+  } catch (error) {
+    console.error('Error writing JSON file:', error);
   }
 }
 
-const createFragment = (viewId: number) =>
-  UIManager.dispatchViewManagerCommand(
-    viewId,
-    // we are calling the 'create' command
-    // UIManager.MapViewManager.Commands.create.toString(),
-    //@ts-ignore
-    UIManager.MapViewManager.Commands.create.toString(),
-    [viewId],
+async function requestStoragePermission() {
+  if (Platform.OS === 'android') {
+    const result = await request(PERMISSIONS.ANDROID.WRITE_EXTERNAL_STORAGE);
+    return result === 'granted';
+  }
+  return true;
+}
+
+function runContainsTests() {
+  let passCount = 0;
+  let failCount = 0;
+
+  function assert(condition: boolean, message: string) {
+    if (condition) {
+      console.log(`PASS: ${message}`);
+      passCount++;
+    } else {
+      console.log(`FAIL: ${message}`);
+      failCount++;
+    }
+  }
+
+  // Test 1: Simple object containment
+  assert(
+    contains({ a: 1, b: 2, c: 3 }, { a: 1, c: 3 }),
+    "Simple object containment"
   );
 
-const CompassView = requireNativeComponent('CompassView');
+  // Test 2: Nested object containment
+  assert(
+    contains({ a: 1, b: { x: 10, y: 20 }, c: 3 }, { b: { x: 10 } }),
+    "Nested object containment"
+  );
 
-const MapViewManager = requireNativeComponent('MapViewManager');
+  // Test 3: Array containment
+  assert(
+    contains([1, 2, 3, 4, 5], [1, 2, 3]),
+    "Array containment"
+  );
 
-export const CompassMap = ({ height, width, workflowType, workflowId, workflowValue }: Props) => {
+  // Test 4: Nested array containment
+  assert(
+    contains({ a: [1, 2, [3, 4]], b: 2 }, { a: [1, [3]] }),
+    "Nested array containment"
+  );
 
-  const ref = useRef(null);
-  useEffect(() => {
-    console.log('[CompassMap] mount', { platform: Platform.OS, height, width, workflowType, workflowId, workflowValue });
-    return () => {
-      console.log('[CompassMap] unmount', { platform: Platform.OS });
-    };
-  }, [height, width, workflowId, workflowType, workflowValue]);
+  // Test 5: Regex matching
+  assert(
+    contains({ a: 'hello world', b: 'test123' }, { a: /hello/, b: /\d+$/ }),
+    "Regex matching"
+  );
 
-  if (Platform.OS === 'android') {
-    useEffect(() => {
-      const viewId = findNodeHandle(ref?.current);
-      if (viewId != null) {
-        console.log('[CompassMap] android createFragment', { viewId });
-        createFragment(viewId);
-      }
-    }, []);
+  // Test 6: Complex object with regex
+  assert(
+    contains(
+      [{
+        PIN_CALLBACK_EVENT:
+        {
+          longPressed: true,
+          mapType: 'WalmartMap',
+          encodedLocation: 'YzAvWy1pUCxOWV0vMQ==',
+          assets:
+          {
+            '3466238':
+            {
+              locations:
+                ['G1-17',
+                  'G1-18',
+                  'G1-19',
+                  'D19-1',
+                  'C16-3',
+                  'D19-10',
+                  'G1-23',
+                  'C16-2',
+                  'C16-1',
+                  'G1-24'],
+              assetId: '3466238'
+            }
+          }
+        }
+      }],
+      [{
+        PIN_CALLBACK_EVENT:
+        {
+          mapType: 'WalmartMap',
+          longPressed: true,
+          encodedLocation: /^[A-Za-z0-9]{1,48}=?=?$/,
+          assets:
+          {
+            '3466238':
+            {
+              locations: [/^[A-Z]\d+-\d+$/, /^[A-Z]\d+-\d+$/],
+              assetId: '3466238'
+            }
+          }
+        }
+      }]
+    ),
+    "Complex object with regex"
+  );
 
-    return (
-      <MapViewManager
-        //@ts-ignore
-        style={{
-          // converts dpi to px, provide desired height
-          height: PixelRatio.getPixelSizeForLayoutSize(height),
-          // converts dpi to px, provide desired width
-          width: PixelRatio.getPixelSizeForLayoutSize(width)
-        }}
-        ref={ref}
-        workflowType={workflowType}
-        workflowId={workflowId}
-        workflowValue={workflowValue}
-      />
-    );
-  } else {
-    // ios fragment 
+  // Test 7: Non-containment
+  assert(
+    !contains({ a: 1, b: 2 }, { a: 1, c: 3 }),
+    "Non-containment"
+  );
 
-    return (
-      <CompassView
-        //@ts-ignore
-        customProperty={{
-          height: height,
-          width: width,
-          workflowType: workflowType,
-          workflowId: workflowId,
-          workflowValue: workflowValue
-        }}
-        style={{
-          height: height,
-          width: width,
-          backgroundColor: 'transparent',
-        }}
-        ref={ref}
-      />
-    );
+  // Test 8: Type mismatch
+  assert(
+    !contains({ a: '1' }, { a: 1 }),
+    "Type mismatch"
+  );
+
+  // Test 9: Array length mismatch
+  assert(
+    !contains([1, 2, 3], [1, 2, 3, 4]),
+    "Array length mismatch"
+  );
+
+  // Test 10: Regex non-match
+  assert(
+    !contains({ a: 'hello' }, { a: /world/ }),
+    "Regex non-match"
+  );
+
+  // Test 11: Null and undefined handling
+  assert(contains(null, null), "Null handling");
+  assert(contains(undefined, undefined), "Undefined handling");
+  assert(contains({ a: null }, { a: null }), "Object with null");
+  assert(contains({ a: undefined }, { a: undefined }), "Object with undefined");
+  assert(!contains({ a: 1 }, { a: null }), "Mismatch with null");
+
+  // Test 12: Empty objects and arrays
+  assert(contains({}, {}), "Empty object");
+  assert(contains([], []), "Empty array");
+  assert(contains({ a: {} }, { a: {} }), "Object with empty object");
+  assert(contains({ a: [] }, { a: [] }), "Object with empty array");
+
+  // Print summary
+  console.log("\n--- Test Summary ---");
+  console.log(`Passed: ${passCount}`);
+  console.log(`Failed: ${failCount}`);
+  console.log(`Total: ${passCount + failCount}`);
+  console.log(failCount === 0 ? "All tests passed!" : "Some tests failed.");
+}
+
+type DropItem = {
+    label: string,
+    value: string,
+    itemTestIDField: string,
+    itemAccessibilityLabelField: string,
   }
-};
+  export interface DropdownComponentProps {
+    dropdownData: { label: string; value: string}[];
+    selectedValue: string;
+    onValueChange: (value: string) => void;
+    testIDArg?: string;
+  accessibilityLabelArg?: string;
+  }
+  export const DropdownComponent: React.FC<DropdownComponentProps> = ({ 
+    dropdownData,
+     selectedValue, 
+     onValueChange,
+     testIDArg,
+     accessibilityLabelArg
+    }) => {
+    const [value,setValue] = React.useState<DropItem>();
+  // const DropdownComponent = () => { 
+  //   const [value, setValue] = useState(null);
+    if (Platform.OS === 'android') {
+       return ( 
+       <Picker 
+        selectedValue={value} 
+        onValueChange={(itemValue) => {
+          setValue(itemValue);
+          onValueChange(itemValue.label);
+        }}
+        style={styles.dropdown}
+        testID={testIDArg}
+        accessibilityLabel = {accessibilityLabelArg}
+        > 
+        {dropdownData.map(item => ( 
+          <Picker.Item label={item.label} value={item.value} key={item.value} /> 
+        ))} 
+        </Picker> 
+        ); 
+      } 
+      else { 
+     return ( 
+     <Dropdown
+     style={styles.dropdown} 
+     placeholderStyle={styles.placeholderStyle} 
+     selectedTextStyle={styles.selectedTextStyle} 
+     inputSearchStyle={styles.inputSearchStyle} 
+     iconStyle={styles.iconStyle} 
+     data={dropdownData} 
+     onChangeText={(search: string) => {
+      dropdownData.map((item: DropItem) => {
+        if (item.value === search)
+          setValue(item)
+      })
+     }}
+     maxHeight={300} 
+     labelField="label" 
+     valueField="value" 
+     placeholder="Select item" 
+     searchPlaceholder="Search..." 
+     search= {true}
+     value={value} 
+     onChange={changeItem => { 
+      dropdownData.map((item: DropItem) => {
+        if (item.value === changeItem.value)
+          setValue(item)
+          onValueChange(item.value); 
+      })      
+    }} 
+    testID={testIDArg}
+    accessibilityLabel={accessibilityLabelArg}
+    /> 
+    ); 
+  }
+  };
+  export const styles = StyleSheet.create({
+    dropdown: 
+    { marginTop: 0, 
+      marginLeft: 10, 
+      marginRight: 10, 
+      height: 30, 
+      borderBottomColor: 'gray', 
+      borderBottomWidth: 0.5, 
+      zIndex: 999, 
+      },
+      placeholderStyle: {
+        fontSize:14,
+        color: 'grey',
+      },
+      selectedTextStyle: {
+        fontSize: 14,
+        color: 'black',
+      },
+      inputSearchStyle: {
+        height:30,
+        fontSize: 14,
+      },
+      iconStyle: {
+        width:18,
+        height: 18,
+      },
+    });
+export interface Test {
+  id: string,
+  name: string,
+  setup: {
+    mockBackend: () => MockBackend,
+    autoInitialize: AutoInitialize,  
+  }
+  test: () => Promise<any>,
+  asserts: {
+    expectedResult: any,
+    expectedPayload: () => object[],  
+  }
+}
+
+export enum AutoInitialize {
+  FIXIT,
+  SS,
+  FAIL,
+  NO
+}
+
+export function getAssetSuccess() {
+  return {
+    status: "OK",
+    header: {
+      headerAttributes: {}
+    },
+    errors: [],
+    payload: {
+      id: "848515",
+      positionX: -4442.419765625,
+      positionY: 1794.8799877929687,
+      type: "ASSET",
+      aisleLocation: "H53-2",
+      aisleLocations: ["H53-2", "H53-3", "H53-4", "H53-5", "H38-16", "H38-15", "H51-3", "H51-4", "H51-5", "H38-12"]
+    }
+  }
+}
+
+export function getAssetNotFound() {
+  return {
+    status: "NOT_FOUND",
+    header: {
+      headerAttributes: {}
+    },
+    errors: [
+      {
+        "code": "rq.param.not.found",
+        "timestamp": "2024-11-01T22:18:24.410466Z",
+        "message": "Nothing found for the query parameters."
+      }      
+    ],
+    payload: null
+  }
+}
+
+export function getConfigSuccess() {
+  return {
+    status: "ACCEPTED",
+    header: {
+      headerAttributes: {}
+    },
+    errors: [],
+    payload: {
+      consumerConfig: {
+        consumerId: "c061c52a-b978-4ae9-9875-6584e58e8a74",
+        deviceSpec: {
+          frequency: 300
+        },
+        consumerSpec: {
+          getLocation: false
+        },
+        compassSpec: {
+          logFrequency: 300,
+          logUploadStartTime: "09:00",
+          logUploadEndTime: "17:00"
+        },
+        createdAt: 1660137139000,
+        updatedAt: 1660137139000
+      },
+      storeConfig: {
+        storeId: 2280,
+        valid: true,
+        bluedotEnabled: true,
+        mapType: "WalmartMap",
+        sessionRefreshTime: 7200,
+        analytics: true,
+        heartbeatInterval: 3000,
+        batchInterval: 180000,
+        offset: {
+          x: 6933.419765625,
+          y: 3615.8799877929687
+        },
+        geofenceRadius: 100,
+        latitude: 36.3585,
+        longitude: -94.2098,
+        createdAt: 1660137139000,
+        updatedAt: 1660137139000
+      }
+    }
+  }
+}
+
+export function getAisleSuccess() {
+  return {
+    status: "OK",
+    header: {
+      headerAttributes: {}
+    },
+    errors: [],
+    payload: {
+      id: null,
+      positionX: 100,
+      positionY: 200,
+      type: "ASSET",
+      aisleLocation: "A36-7",
+      aisleLocations: ["A36-7", "A36-6"]
+    }
+  }
+}
+
+//Helper function for getUserDistance success response
+export function getUserDistanceSuccess() {
+  return {
+    distances: [
+      {
+        location: {
+          zone: "A",
+          aisle: "3", 
+          section: "2"
+        },
+        userDistanceInInches: 72.0, // 6 feet = 72 inches
+        error: null
+      },
+      {
+        location: {
+          zone: "B",
+          aisle: "5",
+          section: "1"
+        },
+        userDistanceInInches: 144.0, // 12 feet = 144 inches
+        error: null
+      }
+    ]
+  }
+}
+
+//Helper function for getUserDistance position not locked error
+export function getUserDistancePositionNotLocked() {
+  return {
+    distances: [
+      {
+        location: {
+          zone: "A",
+          aisle: "3",
+          section: "2"
+        },
+        userDistanceInInches: null,
+        error: {
+          isPositionLocked: "false",
+          message: "Position lock never acquired, wait for position lock and try again."
+        }
+      }
+    ]
+  }
+}
+
+//Helper function for getUserDistance empty list error
+export function getUserDistanceEmptyList() {
+  return {
+    distances: [
+      {
+        location: null,
+        userDistanceInInches: null,
+        error: {
+          isPositionLocked: "false",
+          message: "pins list is empty"
+        }
+      }
+    ]
+  }
+}
+
+//Helper function for displayPinsV2 success response
+export function displayPinsV2Success() {
+  return {
+    status: "success",
+    message: "displaypin success",
+    pinsDisplayed: 2,
+    mapType: "WalmartMap"
+  }
+}
+
+//Helper function for displayPinsV2 invalid pins error
+export function displayPinsV2InvalidPins() {
+  return {
+    status: "error",
+    message: "Invalid pin data provided",
+    error: "Pin validation failed"
+  }
+}
+
+//Helper function for displayPinsV2 map not ready error
+export function displayPinsV2MapNotReady() {
+  return {
+    status: "error", 
+    message: "Map is not loaded or ready for pin display",
+    error: "Map initialization incomplete"
+  }
+}
+
+//Helper function for displayPinsV2 pin callback event success
+export function displayPinsV2PinCallbackSuccess() {
+  return {
+    PIN_CALLBACK_EVENT: {
+      mapType: "WalmartMap",
+      longPressed: false,
+      pins: [
+        {
+          success: true,
+          id: '123',
+          location: {
+            zone: 'A',
+            aisle: '3',
+            section: '2',
+          }
+        },
+        {
+          success: true,
+          id: '456',
+          location: {
+            zone: 'B',
+            aisle: '5',
+            section: '1',
+          }
+        }
+      ]
+    }
+  }
+}
