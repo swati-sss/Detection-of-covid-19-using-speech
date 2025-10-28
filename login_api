@@ -1,20 +1,323 @@
-import Foundation
-import os.log
+import {
+  NativeModules,
+  NativeEventEmitter,
+} from 'react-native';
+import React from 'react';
+import {
+  type CompassSdkRnInterface,
+  type DisplayPinsConfig,
+  type InitConfig,
+  type Props,
+  type Pin,
+  type MapConfig,
+  type PinCallbackEvent,
+  type MapEvent,
+  type CompassStatusEvent,
+  type PinType,
+  SectionCaptureEvent,
+  Environment,
+  EventType,
+  TokenType,
+} from '../index';
+import { useEffect, useRef } from 'react';
+import { findNodeHandle, PixelRatio, Platform, UIManager } from 'react-native';
+import { requireNativeComponent } from 'react-native';
+import { Validator } from './validation';
 
-//import compass_sdk_ios
+const { CompassSdkRn } = NativeModules;
+const CompassEventEmitter = new NativeEventEmitter(CompassSdkRn);
 
-class ViewController: UIViewController {
-    private let log = OSLog(subsystem: Bundle.main.bundleIdentifier ?? "com.compass.map", category: "CompassViewController")
-    static var shared = ViewController()
-    var compassViewList: [CompassView] = []
+/** @internal */
+export class CompassSdkRnImpl implements CompassSdkRnInterface {
 
-    override init(nibName nibNameOrNil: String?, bundle nibBundleOrNil: Bundle?) {
-        super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
-        os_log("ViewController: init called (nibName=%{public}@)", log: log, String(describing: nibNameOrNil))
+  initialize(
+    clientSec: string,
+    consumerID: string,
+    accountID: string,
+    tokenType: TokenType,
+    storeId: number,
+    environment: Environment,
+    config?: InitConfig
+  ): Promise<string> {
+    console.log('[CompassSdkRnImpl] initialize called', {
+      hasClientSec: clientSec?.length ?? 0,
+      consumerID,
+      accountID,
+      tokenType,
+      storeId,
+      environment,
+      config,
+    });
+    const errors = Validator.validateInitialize(
+      clientSec,
+      consumerID,
+      accountID,
+      tokenType,
+      storeId,
+      environment);
+    if (errors.length > 0) {
+      console.log(`Incorrect parameters for CompassSdkRn.initialize:\n
+                  ${errors.join('\n')}`);
+      return Promise.reject(`Incorrect parameters for CompassSdkRn.initialize:\n
+                  ${errors.join('\n')}`);
     }
 
-    required init?(coder: NSCoder) {
-        os_log("ViewController: init?(coder:) called", log: log)
-        super.init(coder: coder)
+    console.log('[CompassSdkRnImpl] forwarding initialize to native');
+    return (CompassSdkRn as CompassSdkRnInterface).initialize(
+      clientSec,
+      consumerID,
+      accountID,
+      tokenType,
+      storeId,
+      environment,
+      config);
+  }
+
+  displayPins(
+    pinId: string[],
+    pinType: PinType,
+    config?: DisplayPinsConfig
+  ): Promise<void> {
+    console.log('[CompassSdkRnImpl] displayPins called', { pinId, pinType, config });
+    const errors = Validator.validateDisplayPins(pinId, pinType);
+    if (errors.length > 0) {
+      return Promise.reject(`Incorrect parameters for CompassSdkRn.displayPins:\n
+        ${errors.join('\n')}`);
     }
+
+    console.log('[CompassSdkRnImpl] forwarding displayPins to native');
+    return (CompassSdkRn as CompassSdkRnInterface).displayPins(
+      pinId,
+      pinType,
+      config);
+  }
+
+  displayPinsV2(pins: Pin[], config?: DisplayPinsConfig | undefined): Promise<any> {
+    console.log('[CompassSdkRnImpl] displayPinsV2 called', { pins, config });
+    const errors = Validator.validateDisplayPinsV2(pins, config);
+    if (errors.length > 0) {
+      return Promise.reject(`Incorrect parameters for CompassSdkRn.displayPinsV2:\n
+        ${errors.join('\n')}`);
+    }
+
+    console.log('[CompassSdkRnImpl] forwarding displayPinsV2 to native');
+    return (CompassSdkRn as CompassSdkRnInterface).displayPinsV2(
+      pins,
+      config);
+  }
+
+  getUserDistance(pins: Pin[]): Promise<any> {
+    console.log('[CompassSdkRnImpl] getUserDistance called', { pins });
+    const errors = Validator.validateGetUserDistanceFrom(pins);
+    if (errors.length > 0) {
+      return Promise.reject(`Incorrect parameters for CompassSdkRn.getUserDistance:\n
+        ${errors.join('\n')}`);
+    }
+
+    console.log('[CompassSdkRnImpl] forwarding getUserDistance to native');
+    return (CompassSdkRn as CompassSdkRnInterface).getUserDistance(pins);
+  }
+
+  centerAndZoom(
+    asset: string,
+    zoomLevel: number
+  ): Promise<void> {
+    console.log('[CompassSdkRnImpl] centerAndZoom called', { asset, zoomLevel });
+    (CompassSdkRn as CompassSdkRnInterface).centerAndZoom(
+      asset,
+      zoomLevel);
+      return Promise.resolve();
+  }
+
+  updateEvent(
+    consumerId: string,
+    eventType: EventType,
+    eventValue: string, 
+    metadata: Map<string, string> 
+  ): Promise<string> {
+    console.log('[CompassSdkRnImpl] updateEvent called', { consumerId, eventType, eventValue, metadata: Object.fromEntries(metadata) });
+    const errors = Validator.validateUpdateEvent(eventType, eventValue);
+    if (errors.length > 0) {
+      return Promise.reject(`Incorrect parameters for CompassSdkRn.updateEvent:\n
+        ${errors.join('\n')}`);
+    }
+
+    console.log('[CompassSdkRnImpl] forwarding updateEvent to native');
+    return (CompassSdkRn as CompassSdkRnInterface).updateEvent(
+      consumerId,
+      eventType,
+      eventValue,
+      metadata);
+  }
+
+  clearMap(
+    config?: MapConfig
+  ): Promise<void> {
+    console.log('[CompassSdkRnImpl] clearMap called', { config });
+    (CompassSdkRn as CompassSdkRnInterface).clearMap(
+      config);
+    return Promise.resolve();
+  }
+
+  updateAuthParams(
+    clientSec: String,
+    consumerID: String,
+    accountID: String): Promise<void> {
+    console.log('[CompassSdkRnImpl] updateAuthParams called', { hasClientSec: clientSec.length, consumerID, accountID });
+    (CompassSdkRn as CompassSdkRnInterface).updateAuthParams(
+      clientSec,
+      consumerID,
+      accountID);
+    return Promise.resolve();
+  }
+
+  addMapEventListener(
+    listener: (event: MapEvent) => void,
+  ): void {
+    console.log('[CompassSdkRnImpl] addMapEventListener registering listener');
+    CompassEventEmitter.addListener('COMPASS_MAP_EVENT', (data: any) => {
+      console.log('[CompassSdkRnImpl] COMPASS_MAP_EVENT received', data);
+      const mapEvent: MapEvent = {
+        success: data.success || true,
+      };
+      listener(mapEvent)
+    })
+  }
+
+  addPinCallbackEventListener(
+    listener: (event: PinCallbackEvent) => void,
+  ): void {
+    console.log('[CompassSdkRnImpl] addPinCallbackEventListener registering listener');
+    CompassEventEmitter.addListener('PIN_CALLBACK_EVENT', (data: any) => {
+      console.log('[CompassSdkRnImpl] PIN_CALLBACK_EVENT received', data);
+      const pinCallbackEvent: PinCallbackEvent = {
+        mapType: data.mapType || 'WalmartMap',
+        longPressed: data.longPressed || false,
+        assets: data.assets || [],
+        encodedLocation: data.encodedLocation
+      }
+      listener(pinCallbackEvent)
+    })
+  }
+
+  addCompassStatusEventListener(
+    listener: (event: CompassStatusEvent) => void,
+  ): void {
+    console.log('[CompassSdkRnImpl] addCompassStatusEventListener registering listener');
+    CompassEventEmitter.addListener('COMPASS_STATUS_EVENT', (data: any) => {
+      console.log('[CompassSdkRnImpl] COMPASS_STATUS_EVENT received', data);
+      const compassStatusEvent: CompassStatusEvent = {
+        eventCode: data.eventCode || 3,
+        eventType: data.eventType || 'IDLE'
+      }
+      listener(compassStatusEvent)
+    })
+  }
+
+  addSectionCaptureEventListener(
+    listener: (event: SectionCaptureEvent) => void,
+  ): void {
+    console.log('[CompassSdkRnImpl] addSectionCaptureEventListener registering listener');
+    CompassEventEmitter.addListener('SECTION_CAPTURE_EVENT', (data: any) => {
+      console.log('[CompassSdkRnImpl] SECTION_CAPTURE_EVENT received', data);
+      const sectionCaptureEvent: SectionCaptureEvent = {
+        success: data.success || true,
+        errorCode: data.errorCode || null,
+        errorMessage: data.errorMessage || null
+      }
+      listener(sectionCaptureEvent)
+    })
+  }
+
+  removeMapEventListener(): void {
+    console.log('[CompassSdkRnImpl] removeMapEventListener clearing listeners');
+    CompassEventEmitter.removeAllListeners('COMPASS_MAP_EVENT');
+  }
+
+  removePinCallbackEventListener(): void {
+    console.log('[CompassSdkRnImpl] removePinCallbackEventListener clearing listeners');
+    CompassEventEmitter.removeAllListeners('PIN_CALLBACK_EVENT');
+  }
+  
+  removeCompassStatusEventListener(): void {
+    console.log('[CompassSdkRnImpl] removeCompassStatusEventListener clearing listeners');
+    CompassEventEmitter.removeAllListeners('COMPASS_STATUS_EVENT');
+  }
+
+  removeSectionCaptureEventListener(): void {
+    console.log('[CompassSdkRnImpl] removeSectionCaptureEventListener clearing listeners');
+    CompassEventEmitter.removeAllListeners('SECTION_CAPTURE_EVENT');
+  }
 }
+
+const createFragment = (viewId: number) =>
+  UIManager.dispatchViewManagerCommand(
+    viewId,
+    // we are calling the 'create' command
+    // UIManager.MapViewManager.Commands.create.toString(),
+    //@ts-ignore
+    UIManager.MapViewManager.Commands.create.toString(),
+    [viewId],
+  );
+
+const CompassView = requireNativeComponent('CompassView');
+
+const MapViewManager = requireNativeComponent('MapViewManager');
+
+export const CompassMap = ({ height, width, workflowType, workflowId, workflowValue }: Props) => {
+
+  const ref = useRef(null);
+  useEffect(() => {
+    console.log('[CompassMap] mount', { platform: Platform.OS, height, width, workflowType, workflowId, workflowValue });
+    return () => {
+      console.log('[CompassMap] unmount', { platform: Platform.OS });
+    };
+  }, [height, width, workflowId, workflowType, workflowValue]);
+
+  if (Platform.OS === 'android') {
+    useEffect(() => {
+      const viewId = findNodeHandle(ref?.current);
+      if (viewId != null) {
+        console.log('[CompassMap] android createFragment', { viewId });
+        createFragment(viewId);
+      }
+    }, []);
+
+    return (
+      <MapViewManager
+        //@ts-ignore
+        style={{
+          // converts dpi to px, provide desired height
+          height: PixelRatio.getPixelSizeForLayoutSize(height),
+          // converts dpi to px, provide desired width
+          width: PixelRatio.getPixelSizeForLayoutSize(width)
+        }}
+        ref={ref}
+        workflowType={workflowType}
+        workflowId={workflowId}
+        workflowValue={workflowValue}
+      />
+    );
+  } else {
+    // ios fragment 
+
+    return (
+      <CompassView
+        //@ts-ignore
+        customProperty={{
+          height: height,
+          width: width,
+          workflowType: workflowType,
+          workflowId: workflowId,
+          workflowValue: workflowValue
+        }}
+        style={{
+          height: height,
+          width: width,
+          backgroundColor: 'transparent',
+        }}
+        ref={ref}
+      />
+    );
+  }
+};
