@@ -1,21 +1,20 @@
-import React
+import Foundation
 import os.log
 
-@objc(CompassViewManager)
-class CompassViewManager: RCTViewManager {
-    private let log = OSLog(subsystem: Bundle.main.bundleIdentifier ?? "com.compass.map", category: "CompassViewManager")
-    
-    override func view() -> UIView! {
-        if let compassViewLast = ViewController.shared.compassViewList.last {
-            os_log("CompassViewManager: removing stale CompassView before creating new instance", log: log)
-            compassViewLast.removeFromSuperview()
-            ViewController.shared.compassViewList.removeLast()
-        }
-        os_log("CompassViewManager: creating fresh CompassView", log: log)
-        return CompassView()
+//import compass_sdk_ios
+
+class ViewController: UIViewController {
+    private let log = OSLog(subsystem: Bundle.main.bundleIdentifier ?? "com.compass.map", category: "CompassViewController")
+    static var shared = ViewController()
+    var compassViewList: [CompassView] = []
+
+    override init(nibName nibNameOrNil: String?, bundle nibBundleOrNil: Bundle?) {
+        super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
+        os_log("ViewController: init called (nibName=%{public}@)", log: log, String(describing: nibNameOrNil))
     }
 
-    override static func requiresMainQueueSetup() -> Bool {
-        return true
+    required init?(coder: NSCoder) {
+        os_log("ViewController: init?(coder:) called", log: log)
+        super.init(coder: coder)
     }
 }
