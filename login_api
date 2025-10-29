@@ -30,6 +30,8 @@ class StoreMapLoaderViewModel {
     var staticPathPreviewService: StaticPathPreviewService
     let userPositionManager: UserPositionManagement
     var mapFocusManager: MapFocusManager
+    private var isPinZoomAnimating = false
+    private var pendingUserZoomBounds: (topLeft: Point, bottomRight: Point)?
     var keychainService: KeychainServiceType
     var eventService: EventService
     var pinList: (current: PinList?, last: PinList?)
@@ -491,11 +493,24 @@ class StoreMapLoaderViewModel {
         let targetDescription = target == .pinAnnotation ? "pin" : "user"
         Log.debug("[ZoomTrace] ► request \(requestId) target=\(targetDescription) topLeft=\(String(describing: topLeft?.cgPoint)) bottomRight=\(String(describing: bottomRight?.cgPoint)) centerButton=\(String(describing: mapViewDelegate?.isCenterButtonClicked)) shouldZoomOnPins=\(config.shouldZoomOnPins)")
 
+        if target == .userLocation,
+           isPinZoomAnimating,
+           let topLeft,
+           let bottomRight {
+            pendingUserZoomBounds = (topLeft, bottomRight)
+            Log.debug("[ZoomTrace] ↺ request \(requestId) queued user zoom while pin animation in progress")
+            return
+        }
+
         guard target == .pinAnnotation ? config.shouldZoomOnPins : mapViewDelegate?.isCenterButtonClicked == true,
               let topLeft = topLeft,
               let bottomRight = bottomRight else {
             Log.debug("[ZoomTrace] ✕ request \(requestId) skipped guard failure target=\(targetDescription)")
             return
+        }
+
+        if target == .pinAnnotation {
+            isPinZoomAnimating = true
         }
 
         // If both the blue dot and pins are present on the map,
@@ -570,8 +585,27 @@ class StoreMapLoaderViewModel {
 
     func zoomOnRegion(with zoomRect: CGRect, target: ZoomTarget = .pinAnnotation) {
         let delay = target == .pinAnnotation ? StoreMapConfig.zoomPinAnimationDelay : 0.0
-        mapViewDelegate?.zoomOnRegion(with: zoomRect, zoomAnimationDelay: delay) { [weak self] in
-            if target == .pinAnnotation { self?.renderedPinsZoomRect = nil }
+        guard let delegate = mapViewDelegate else {
+            if target == .pinAnnotation {
+                renderedPinsZoomRect = nil
+                isPinZoomAnimating = false
+                if let pending = pendingUserZoomBounds {
+                    pendingUserZoomBounds = nil
+                    zoomOnLocation(topLeft: pending.topLeft, bottomRight: pending.bottomRight, target: .userLocation)
+                }
+            }
+            return
+        }
+        delegate.zoomOnRegion(with: zoomRect, zoomAnimationDelay: delay) { [weak self] in
+            guard let self else { return }
+            if target == .pinAnnotation {
+                self.renderedPinsZoomRect = nil
+                self.isPinZoomAnimating = false
+                if let pending = self.pendingUserZoomBounds {
+                    self.pendingUserZoomBounds = nil
+                    self.zoomOnLocation(topLeft: pending.topLeft, bottomRight: pending.bottomRight, target: .userLocation)
+                }
+            }
         }
     }
 
