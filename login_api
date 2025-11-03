@@ -1,79 +1,641 @@
-#import <React/RCTBridgeModule.h>
+/**
+ * Compass SDK Interface.
+ */
 
-@interface RCT_EXTERN_MODULE(CompassSdkRn, NSObject)
+import React from 'react';
+import { CompassSdkRnImpl, CompassMap } from './internal/implementation';
 
-RCT_EXTERN_METHOD(initialize:(NSString *)clientSec
-                  consumerID:(NSString *)consumerID
-                  accountID:(NSString *)accountID
-                  tokenType:(NSString *)tokenType
-                  storeId:(NSInteger)storeId
-                  environment:(NSString *)environment
-                  config: (id)config
-                  resolve:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
+const CompassSdkRn = new CompassSdkRnImpl()
 
-RCT_EXTERN_METHOD(getCompassStatus
-                  resolve:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
+export type StoreConfigSnapshot = Record<string, any>;
+export type FeatureFlagOverrides = Record<string, any>;
 
-RCT_EXTERN_METHOD(displayPins:(NSArray *)uuid
-                  type: (NSString *)type
-                  config: (NSDictionary*)config
-                  resolve:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
-                  
-RCT_EXTERN_METHOD(displayPinsV2:(NSArray *)pins
-                  config: (NSDictionary *)displayPinConfig
-                  resolve:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
+//** Objects **
+
+/**
+ * Compass Map API Entry Point.
+ * @example
+ * CompassSdkRn.clearMap()
+ */
+export default CompassSdkRn as CompassSdkRnInterface;
+
+//** Interfaces **
+
+//Compass Maps and Positioning API: All functions return success/error
+export interface CompassSdkRnInterface {
+
+  /**
+  * Initialize: Call first. Wait for response before calling any other APIs.
+  *  1. Initializes compass module.
+  *  2. If blue dot supported and user is within store geofence:
+  *    Begins listening for user location.
+  * Callbacks: {@link CompassStatusEvent} and {@link MapEvent}. See models for details.
+  * @param clientSec Client secret or user auth token.
+  * @param consumerID Service Registry consumer id of the app. (UUID)
+  * @param accountId Currently logged in user's account id.
+  * @param tokenType The type of auth token you app uses.
+  * @param storeId Walmart store number to be initalized.
+  * @param environment stage or prod environment. (anything but prod or beta is considered staging)
+  * @param config Config to enable mock user (optional)
+  * @returns Is bluedot supported and is mock user enabled.
+  * @example
+  * initialize(a, b, c)
+  */
+  initialize(
+    clientSec: string,
+    consumerID: string,
+    accountID: string,
+    tokenType: TokenType,
+    storeId: number,
+    environment: Environment,
+    config?: InitConfig
+  ): Promise<string>;
+
+  /**
+  * DisplayPins V1: Supports asset and generic pins.
+  *  1. Drops pins on the map visible on screen
+  *  2. Optionally enables manual (user) pin drop
+  * Callbacks: {@link PinCallbackEvent}. See model for details.
+  * @param pinId Asset Id or Generic Pins
+  * @param pinType Type of pinID {@link PinType}
+  * @param config Config to enable manual pin drop. (Optional)
+  * @returns Promise
+  * @example
+  * displayPins(["12345"], 'asset', { enableManualPinDrop: true } as DisplayPinsConfig)
+  */
+  displayPins(
+    pinId: string[],
+    pinType: PinType,
+    config?: DisplayPinsConfig
+  ): Promise<void>;
+
+  /**
+  * DisplayPins V2: Supports all pin types. Currently Used by Spark Driver.
+  *  1. Drops pins on the map visible on screen
+  *  2. Optionally enables manual (user) pin drop
+  * Callbacks: {@link PinCallbackEvent}. See model for details.
+  * @param pins List of {@link Pin} objects. See model for details
+  * @param config Config to enable manual pin drop. (Optional)
+  * @returns Promise
+  * @example
+  * displayPinsV2([{
+  * displayPins([{
+  *   id: "1235456",
+  *   type: PinType.ITEM,
+  *   locationType: LocationType.AISLE,
+  *   location: {
+  *     type: LocationType.AISLE,
+  *     zone: "A",
+  *     aisle: "5",
+  *     section: "3",
+  *   } as AislePinLocation
+  * } as Pin], { enableManualPinDrop: true } as DisplayPinsConfig)
+  */
+  displayPinsV2(
+    pins: Pin[],
+    config?: DisplayPinsConfig
+  ): Promise<any>;
+
+  /**
+   * Update Event: Notifies compass of user events.
+   * @param eventType event type to get ingested: ASSET_SCAN | ITEM_PICkED 
+   * @param eventValue assetId | itemId
+   * @param metadata additional data for special cases
+   * @returns Promise
+   * @example Asset scans
+   * updateEvent(EventType.ASSET_SCAN, "123456", new Map<string,string>())
+   * @example Items picked
+   * updateEvent(EventType.ITEM_PICKED, "123456", new Map<string,string>())
+   */
+  updateEvent(
+    consumerId: string,
+    eventType: EventType,
+    eventValue: string, 
+    metadata: Map<string, string> 
+  ): Promise<string>;
+
+  /**
+  * ClearMap: Clears all pins from the currently shown/last used map.
+  * @param config Config to reset zoom. (optional)
+  * @returns Promise
+  * @example
+  * clearMap({resetZoom: true} as MapConfig);
+  */
+  clearMap(
+    config?: MapConfig
+  ): Promise<void>;
+
+  /**
+   * CenterAndZoom: Pans map to given assetId if the pin exists
+   * @param asset assetId
+   * @param zoomLevel 
+   * @returns Promise
+   * @example
+   * centerAndZoom("12345",2)
+   */
+  centerAndZoom(
+    asset?: string,
+    zoomLevel?: number
+  ): Promise<void>;
+
+  /**
+   * UpdateAuthParams: Updates authentication info in case of reauth
+   * @param clientSec 
+   * @param consumerID 
+   * @param accountID 
+   * @returns Promise
+   * @example
+   * updateAuthParams("clientSec","consumerId", "accountId")
+   */
+  updateAuthParams(
+    clientSec: String,
+    consumerID: String,
+    accountID: String): Promise<void>;
+
+  //Callbacks. See respective models for details.
+  /**
+   * GetUserDistance: Calculates the distance from user's current location to pins
+   * @param pins List of Pin objects to calculate distance to
+   * @returns Promise with distance data
+   * @example
+   * getUserDistance([{
+   *   id: "1235456",
+   *   type: PinType.ITEM,
+   *   locationType: LocationType.AISLE,
+   *   location: {
+   *     type: LocationType.AISLE,
+   *     zone: "A",
+   *     aisle: "5",
+   *     section: "3",
+   *   } as AislePinLocation
+   * } as Pin])
+   */
+  getUserDistance(
+    pins: Pin[]
+  ): Promise<any>;
+
+  /**
+   * Returns the current store configuration as delivered by the backend after initialization.
+   * @returns Promise resolving with the configuration dictionary or null when unavailable.
+   */
+  getCurrentStoreConfig(): Promise<StoreConfigSnapshot | null>;
+
+  /**
+   * Applies local overrides for feature flags. Values are merged with the last store config.
+   * @param overrides Dictionary of overrides (supports nested navigation/mapUi/pins/offset structures).
+   */
+  applyFeatureFlagOverrides(
+    overrides: FeatureFlagOverrides
+  ): Promise<void>;
+
+  /**
+   * Reverts the store configuration back to the backend defaults.
+   */
+  revertFeatureFlagOverrides(): Promise<void>;
+
+  /**
+   * Indicates whether local overrides are currently applied.
+   */
+  hasFeatureFlagOverridesApplied(): Promise<boolean>;
+
+  //Callbacks. See respective models for details.
+  /**
+   * addMapEventListener: Adds a listener for the events that happen on the map
+   * @param listener callback for an event map
+   * @example
+   * addMapEventListener(() => {
+   *  //event callback
+   * })
+   */
+  addMapEventListener(
+    listener: (event: MapEvent) => void,
+  ): void
 
 
-RCT_EXTERN_METHOD(getUserDistance:(NSArray *)pins
-                  resolve:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
+  /**
+   * addPinCallbackEventListener: Adds a listener for the events on pins
+   * @param listener callback for a pin event
+   * @example
+   * addPinCallbackEventListener(() => {
+   *  //event callback
+   * })
+   */
+  addPinCallbackEventListener(
+    listener: (event: PinCallbackEvent) => void,
+  ): void
 
+  /**
+   * addCompassStatusEventListener: Adds a listener for the events on Compass Status
+   * @param listener callback for Compass status event
+   * @example
+   * addCompassStatusEventListener(() => {
+   *  //event callback
+   * })
+   */
+  addCompassStatusEventListener(
+    listener: (event: CompassStatusEvent) => void,
+  ): void
 
-RCT_EXTERN_METHOD(centerAndZoom:(NSString *)asset
-                  zoomLevel: (NSInteger)zoomLevel)
+  /**
+   * addSectionCaptureEventListener: Adds a listener for the events on Section Capture
+   * @param listener callback fo Section Captured event
+   * @example
+   * addSectionCaptureEventListener(() => {
+   *  //event callback
+   * })
+   */
+  addSectionCaptureEventListener(
+    listener: (event: SectionCaptureEvent) => void,
+  ): void
 
-RCT_EXTERN_METHOD(updateEvent:(NSString *)eventType
-                  eventValue:(NSString *)eventValue
-                  metadata: (NSDictionary *)metadata
-                  resolve:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
+  /**
+   * removeMapEventListener: Removes the listener for maps event
+   */
+  removeMapEventListener(): void
 
-RCT_EXTERN_METHOD(clearMap:(NSDictionary *)config)
+  /**
+   * removePinCallbackEventListener: Removes the listener for pin events
+   */
+  removePinCallbackEventListener(): void;
 
-RCT_EXTERN_METHOD(displayMap:(NSString *)workflowType
-                  workflowId:(NSString *)workflowId
-                  workflowValue:(NSString *)workflowValue
-                  resolve:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
+  /**
+   * removeCompassStatusEventListener: Removes the listener for compass status events
+   */
+  removeCompassStatusEventListener(): void;
 
-RCT_EXTERN_METHOD(getLocation:(NSString *)assetId
-                  resolve:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
+  /**
+   * removeSectionCaptureEventListener: Removes the listener for Section Capture
+   */
+  removeSectionCaptureEventListener(): void;
+};
 
-RCT_EXTERN_METHOD(getCurrentStoreConfig:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
+/**
+ * Map view UI component
+ * @example
+ * <CompassMapView
+    workflowType="refrigeration_alarms"
+    workflowId={alarmId}
+    workflowValue={assetId}
+    height={height} 
+    width={width}
+  />
+ */
+export const CompassMapView = ({ height, width, workflowType, workflowId, workflowValue }: Props) => {
+  return (
+    <CompassMap
+      height={height}
+      width={width}
+      workflowType={workflowType}
+      workflowId={workflowId}
+      workflowValue={workflowValue}
+    />
+  );
+};
 
-RCT_EXTERN_METHOD(applyFeatureFlagOverrides:(NSDictionary *)overrides
-                  resolve:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
+/**
+ * Models
+ */
 
-RCT_EXTERN_METHOD(revertFeatureFlagOverrides:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
-
-RCT_EXTERN_METHOD(hasFeatureFlagOverridesApplied:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
-
-RCT_EXTERN_METHOD(updateAuthParams:(NSString *)clientSec
-                  consumerID:(NSString *)consumerID
-                  accountID:(NSString *)accountID)
-
-+ (BOOL)requiresMainQueueSetup
-{
-  return NO;
+/**
+ * Properties for the Section Capture API
+ * @interface
+ */
+export interface SectionCapture {
+  /**
+   * Name of the section
+   * @property {string}
+   */
+  sectionTitle: string,
+  /**
+   * The section has been captured
+   * @property {boolean}
+   */
+  sectionDone: boolean,
+  /**
+   * Id of the section
+   * @property {number}
+   */
+  sectionId: number,
 }
 
-@end
+/**
+ * Properties of an Aisle
+ * @interface
+ */
+export interface Aisle {
+  /**
+   * Zone of the aisle (usually a letter)
+   * @property {string}
+   */
+  zone: string,
+  /**
+   * Aisle number
+   * @property {string}
+   */
+  aisle: string,
+}
+
+/**
+ * Result of Compass Initialization
+ * @interface
+ */
+export interface InitializeResult {
+  /**
+   * Is bluedot supported
+   * @property {boolean}
+   */
+  blueDotSupported: boolean,
+  /**
+   * Is mock user enabled
+   * This property enables the mock location
+   * @property {boolean}
+   */
+  mockUserEnabled: boolean
+}
+
+/**
+ * Configuration for displaying pins
+ * @interface
+ */
+export interface DisplayPinsConfig {
+  /**
+   * Is manual pin drop enabled
+   * if is true, usear can manually drop a pin
+   * @property {boolean}
+   */
+  enableManualPinDrop?: boolean
+  /**
+   * Should reset zoom
+   * If it's true, the zoom would be resetted when dropping the pin
+   * @property {boolean}
+   */
+  resetZoom?: boolean
+}
+
+/**
+ * Location of a pin when dropped in an aisle
+ * @interface
+ */
+export interface AislePinLocation {
+  /**
+   * Type of location. Should be AISLE.
+   * @property {LocationType}
+   */
+  type: LocationType.AISLE,
+  /**
+   * Zone of the aisle (usually a letter)
+   * @property {string}
+   */
+  zone: string,
+  /**
+   * Aisle number
+   * @property {string}
+   */
+  aisle: string,
+  /**
+   * Section where the pin is going to be dropped.
+   * Should be a number.
+   * @property {string}
+   */
+  section: string
+}
+
+/**
+ * Location of a generic pin
+ * @interface
+ */
+interface GenericPinLocation {
+  /**
+   * Type of location. Should be GENERIC
+   * @property {LocationType}
+   */
+  type: LocationType.GENERIC
+  /**
+   * Encoded string that contains the pin location
+   * @property {string}
+   */
+  encodedLocation: string
+}
+
+/**
+ * Pin information
+ * @interface
+ */
+export interface Pin {
+  /**
+   * Asset id
+   * @property {string}
+   */
+  id: string,
+  /**
+   * Type of the pin.
+   * Options:
+   * - ASSET
+   * - GENERIC
+   * - ITEM
+   * - SHELF
+   * @property {PinType}
+   */
+  type: PinType,
+  /**
+   * Type of Location.
+   * Options:
+   * - GENERIC
+   * - AISLE
+   * - AUTO
+   * @property {LocationType}
+   */
+  locationType: LocationType,
+  /**
+   * Location of the pin
+   * @property {GenericPinLocation | AislePinLocation}
+   */
+  location?: GenericPinLocation | AislePinLocation,
+}
+
+/**
+ * Configuration of the map
+ * @interface
+ */
+export interface MapConfig {
+  /**
+   * Should zoom reset
+   * @property {boolean}
+   */
+  resetZoom?: boolean
+}
+
+/**
+ * Configurations for initialization
+ * @interface
+ */
+export interface InitConfig {
+  /**
+   * Is user mock
+   * If it's true, enables mock location
+   * @property {boolean}
+   */
+  mockUser?: boolean
+}
+
+/**
+ * Typoe of authentiaction
+ * - IAM
+ * - USER
+ * @enum
+ */
+export enum TokenType {
+  IAM = 'iam',
+  USER = 'user',
+}
+
+/**
+ * Type of event
+ * - ASSET_SCAN
+ * - ITEM_PICKED
+ * @enum
+ */
+export enum EventType {
+  ASSET_SCAN = 'asset_scan',
+  ITEM_PICKED = 'item_picked',
+}
+
+/**
+ * Type of Pin
+ * - ASSET
+ * - GENERIC
+ * - ITEM
+ * - SHELF
+ * @enum
+ */
+export enum PinType {
+  ASSET = 'asset',
+  GENERIC = 'generic',
+  ITEM = 'item',
+  SHELF = 'shelf',
+}
+
+/**
+ * Type of environment
+ * - STAGE
+ * - PROD
+ * @enum
+ */
+export enum Environment {
+  STAGE = 'stage',
+  PROD = 'prod',
+}
+
+/**
+ * Type of Location
+ * - GENERIC
+ * - AISLE
+ * - AUTO
+ * @enum
+ */
+export enum LocationType {
+  GENERIC = 'generic',
+  AISLE = 'aisle',
+  AUTO = 'auto',
+}
+
+/**
+ * Callback Listener Models
+ */
+
+/**
+ * Used to communicate when a map is completely loaded after initialize
+ * @interface
+ */
+export interface MapEvent {
+  success: boolean
+}
+
+/**
+ * Emitted on every pin drop, whether manual or programmatic.
+ * @interface
+ */
+//On every pin drop, whether manual or programmatic
+export interface PinCallbackEvent {
+  /**
+   * Map Type
+   * @property {string}
+   */
+  mapType: 'WalmartMap' | 'OriientMap',
+  /**
+   * Event occurred due long press by User
+   * @property {boolean}
+   */
+  longPressed: boolean,
+  /**
+   * When assets are provided, otherwise empty
+   * @property {[string]}
+   */
+  assets: {
+    [assetId: string]: {
+      assetId: string,
+    /**
+     * If location unknown, then first element is 'Unknown'
+     * @property {string[]}
+     */      
+      locations: string[] | ["Unknown"]
+    },
+  };
+  /**
+   * Encoded location identifier for the current visible pin.
+   * Used for storing user tapped location.
+   * Can be used to drop pin at the same location with {@link CompassSdkRnInterface.displayPins||CompassSdkRn.displayPins(...)} and {@link PinType.GENERIC}
+   * @property {string}
+   */
+  encodedLocation: string | null, //Null when no pins provided and no manual pin drop
+  locations?: string[] | ["Unknown"] //When using generic pin without assets, otherwise not present
+}
+
+/**
+ * Status of Section Capture
+ * @interface
+ */
+export interface SectionCaptureEvent {
+  /**
+   * If capture is success
+   * @property {boolean}
+   */
+  success: boolean,
+  /**
+   * Code of the error
+   * @property {string}
+   */
+  errorCode?: string,
+  /**
+   * Message of the error
+   * @property {string}
+   */
+  errorMessage?: string,
+}
+
+/**
+ * Status of Compass Positioning.
+ * Values as EventType(EventCode):
+ * LOCKED(0), POSITION_LOCKED(1), CALIBRATION_NEEDED(2), IDLE(3)
+ * @interface
+ */
+export interface CompassStatusEvent {
+  /**
+   * Event Code (0-3)
+   * @property {string}
+   */
+  eventCode: number,
+  /**
+   * Event Type
+   * @property {string}
+   */
+  eventType: 'LOCKED' | 'POSITION_NEEDED' | 'CALIBRATION_NEEDED' | 'IDLE';
+}
+
+export type Props = {
+  height: number,
+  width: number,
+  workflowType: string,
+  workflowId: string,
+  workflowValue: string,
+};
