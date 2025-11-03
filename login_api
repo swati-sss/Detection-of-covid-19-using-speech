@@ -619,7 +619,7 @@ class CompassSdkRn: RCTEventEmitter {
       }
     }
   }
-  
+
   @objc(displayMap:workflowId:workflowValue:resolve:reject:)
   func displayMap(workflowType: String,
                   workflowId: String,
@@ -660,9 +660,74 @@ class CompassSdkRn: RCTEventEmitter {
     }
   }
 
+  @objc(getCurrentStoreConfig:reject:)
+  func getCurrentStoreConfig(_ resolve: @escaping RCTPromiseResolveBlock,
+                             reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.main.async {
+      guard let compass = compass else {
+        resolve(NSNull())
+        return
+      }
+
+      guard let config = compass.getCurrentStoreConfig() else {
+        resolve(NSNull())
+        return
+      }
+
+      resolve(config)
+    }
+  }
+
+  @objc(applyFeatureFlagOverrides:resolve:reject:)
+  func applyFeatureFlagOverrides(_ overrides: NSDictionary,
+                                 resolve: @escaping RCTPromiseResolveBlock,
+                                 reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.main.async {
+      guard let compass = compass else {
+        reject("-1", "Compass is not initialized. Call initialize before applying overrides.", nil)
+        return
+      }
+
+      guard let overrides = overrides as? [String: Any] else {
+        reject("-1", "Overrides must be a dictionary.", nil)
+        return
+      }
+
+      compass.applyFeatureFlagOverrides(overrides)
+      resolve(true)
+    }
+  }
+
+  @objc(revertFeatureFlagOverrides:reject:)
+  func revertFeatureFlagOverrides(_ resolve: @escaping RCTPromiseResolveBlock,
+                                  reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.main.async {
+      guard let compass = compass else {
+        reject("-1", "Compass is not initialized. Call initialize before reverting overrides.", nil)
+        return
+      }
+
+      compass.revertToOriginalConfig()
+      resolve(true)
+    }
+  }
+
+  @objc(hasFeatureFlagOverridesApplied:reject:)
+  func hasFeatureFlagOverridesApplied(_ resolve: @escaping RCTPromiseResolveBlock,
+                                      reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.main.async {
+      guard let compass = compass else {
+        resolve(false)
+        return
+      }
+
+      resolve(compass.hasOverridesApplied())
+    }
+  }
+
     @objc(updateAuthParams:consumerID:accountID:)
     func updateAuthParams(clientSec: String, consumerID: String, accountID: String) -> Void {}
-    
+
     // MARK: - Helper methods
     func send(_ event: Event, dict: Any) {
       self.sendEvent(withName: event.rawValue, body: dict)
