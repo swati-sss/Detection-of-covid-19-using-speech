@@ -1,302 +1,1616 @@
+import * as React from 'react';
 import {
-  NativeModules,
-  NativeEventEmitter,
+  Button,
+  View,
+  SafeAreaView,
+  Text,
+  Platform,
+  TextInput,
+  ScrollView,
+  Switch,
+  Modal
 } from 'react-native';
-import React from 'react';
-import {
-  type CompassSdkRnInterface,
-  type DisplayPinsConfig,
-  type InitConfig,
-  type Props,
-  type Pin,
-  type MapConfig,
-  type PinCallbackEvent,
-  type MapEvent,
-  type CompassStatusEvent,
-  type PinType,
-  SectionCaptureEvent,
-  Environment,
-  EventType,
-  TokenType,
-} from '../index';
-import { useEffect, useRef } from 'react';
-import { findNodeHandle, PixelRatio, Platform, UIManager } from 'react-native';
-import { requireNativeComponent } from 'react-native';
-import { Validator } from './validation';
 
-const { CompassSdkRn } = NativeModules;
-const CompassEventEmitter = new NativeEventEmitter(CompassSdkRn);
+import * as ENV from './env_vars';
+import * as Helper from './Helper';
 
-/** @internal */
-export class CompassSdkRnImpl implements CompassSdkRnInterface {
+import isEqual from 'lodash.isequal';
 
-  initialize(
-    clientSec: string,
-    consumerID: string,
-    accountID: string,
-    tokenType: TokenType,
-    storeId: number,
-    environment: Environment,
-    config?: InitConfig
-  ): Promise<string> {
-    console.log(`Saneet: Running initialize with params:\nClientSec:${clientSec}`)
-    const errors = Validator.validateInitialize(
-      clientSec,
-      consumerID,
-      accountID,
-      tokenType,
-      storeId,
-      environment);
-    if (errors.length > 0) {
-      console.log(`Incorrect parameters for CompassSdkRn.initialize:\n
-                  ${errors.join('\n')}`);
-      return Promise.reject(`Incorrect parameters for CompassSdkRn.initialize:\n
-                  ${errors.join('\n')}`);
-    }
+import CompassSdkRn, { CompassStatusEvent, DisplayPinsConfig, Environment, EventType, InitConfig, MapEvent, Pin, PinCallbackEvent, PinType, TokenType, LocationType, AislePinLocation } from '@walmart/compass-sdk-rn';
+import { CompassMapView } from '@walmart/compass-sdk-rn';
+import { AISLE_REGEX, AutoInitialize, getAisleSuccess, getAssetNotFound, getAssetSuccess, getConfigSuccess, MockBackend, Test } from './Helper';
+import FeatureFlagsView from './FeatureFlagsView';
 
-    return (CompassSdkRn as CompassSdkRnInterface).initialize(
-      clientSec,
-      consumerID,
-      accountID,
-      tokenType,
-      storeId,
-      environment,
-      config);
-  }
-
-  displayPins(
-    pinId: string[],
-    pinType: PinType,
-    config?: DisplayPinsConfig
-  ): Promise<void> {
-    const errors = Validator.validateDisplayPins(pinId, pinType);
-    if (errors.length > 0) {
-      return Promise.reject(`Incorrect parameters for CompassSdkRn.displayPins:\n
-        ${errors.join('\n')}`);
-    }
-
-    return (CompassSdkRn as CompassSdkRnInterface).displayPins(
-      pinId,
-      pinType,
-      config);
-  }
-
-  displayPinsV2(pins: Pin[], config?: DisplayPinsConfig | undefined): Promise<any> {
-    const errors = Validator.validateDisplayPinsV2(pins, config);
-    if (errors.length > 0) {
-      return Promise.reject(`Incorrect parameters for CompassSdkRn.displayPinsV2:\n
-        ${errors.join('\n')}`);
-    }
-
-    return (CompassSdkRn as CompassSdkRnInterface).displayPinsV2(
-      pins,
-      config);
-  }
-
-  getUserDistance(pins: Pin[]): Promise<any> {
-    const errors = Validator.validateGetUserDistanceFrom(pins);
-    if (errors.length > 0) {
-      return Promise.reject(`Incorrect parameters for CompassSdkRn.getUserDistance:\n
-        ${errors.join('\n')}`);
-    }
-
-    return (CompassSdkRn as CompassSdkRnInterface).getUserDistance(pins);
-  }
-
-  getCurrentStoreConfig(): Promise<Record<string, any> | null> {
-    return (CompassSdkRn as CompassSdkRnInterface).getCurrentStoreConfig();
-  }
-
-  applyFeatureFlagOverrides(overrides: Record<string, any>): Promise<void> {
-    if (!overrides || typeof overrides !== 'object') {
-      return Promise.reject('Overrides must be an object.');
-    }
-    return (CompassSdkRn as CompassSdkRnInterface).applyFeatureFlagOverrides(overrides);
-  }
-
-  revertFeatureFlagOverrides(): Promise<void> {
-    return (CompassSdkRn as CompassSdkRnInterface).revertFeatureFlagOverrides();
-  }
-
-  hasFeatureFlagOverridesApplied(): Promise<boolean> {
-    return (CompassSdkRn as CompassSdkRnInterface).hasFeatureFlagOverridesApplied();
-  }
-
-  centerAndZoom(
-    asset: string,
-    zoomLevel: number
-  ): Promise<void> {
-    (CompassSdkRn as CompassSdkRnInterface).centerAndZoom(
-      asset,
-      zoomLevel);
-      return Promise.resolve();
-  }
-
-  updateEvent(
-    consumerId: string,
-    eventType: EventType,
-    eventValue: string, 
-    metadata: Map<string, string> 
-  ): Promise<string> {
-    const errors = Validator.validateUpdateEvent(eventType, eventValue);
-    if (errors.length > 0) {
-      return Promise.reject(`Incorrect parameters for CompassSdkRn.updateEvent:\n
-        ${errors.join('\n')}`);
-    }
-
-    return (CompassSdkRn as CompassSdkRnInterface).updateEvent(
-      consumerId,
-      eventType,
-      eventValue,
-      metadata);
-  }
-
-  clearMap(
-    config?: MapConfig
-  ): Promise<void> {
-    (CompassSdkRn as CompassSdkRnInterface).clearMap(
-      config);
-    return Promise.resolve();
-  }
-
-  updateAuthParams(
-    clientSec: String,
-    consumerID: String,
-    accountID: String): Promise<void> {
-    (CompassSdkRn as CompassSdkRnInterface).updateAuthParams(
-      clientSec,
-      consumerID,
-      accountID);
-    return Promise.resolve();
-  }
-
-  addMapEventListener(
-    listener: (event: MapEvent) => void,
-  ): void {
-    CompassEventEmitter.addListener('COMPASS_MAP_EVENT', (data: any) => {
-      const mapEvent: MapEvent = {
-        success: data.success || true,
-      };
-      listener(mapEvent)
-    })
-  }
-
-  addPinCallbackEventListener(
-    listener: (event: PinCallbackEvent) => void,
-  ): void {
-    CompassEventEmitter.addListener('PIN_CALLBACK_EVENT', (data: any) => {
-      const pinCallbackEvent: PinCallbackEvent = {
-        mapType: data.mapType || 'WalmartMap',
-        longPressed: data.longPressed || false,
-        assets: data.assets || [],
-        encodedLocation: data.encodedLocation
-      }
-      listener(pinCallbackEvent)
-    })
-  }
-
-  addCompassStatusEventListener(
-    listener: (event: CompassStatusEvent) => void,
-  ): void {
-    CompassEventEmitter.addListener('COMPASS_STATUS_EVENT', (data: any) => {
-      const compassStatusEvent: CompassStatusEvent = {
-        eventCode: data.eventCode || 3,
-        eventType: data.eventType || 'IDLE'
-      }
-      listener(compassStatusEvent)
-    })
-  }
-
-  addSectionCaptureEventListener(
-    listener: (event: SectionCaptureEvent) => void,
-  ): void {
-    CompassEventEmitter.addListener('SECTION_CAPTURE_EVENT', (data: any) => {
-      const sectionCaptureEvent: SectionCaptureEvent = {
-        success: data.success || true,
-        errorCode: data.errorCode || null,
-        errorMessage: data.errorMessage || null
-      }
-      listener(sectionCaptureEvent)
-    })
-  }
-
-  removeMapEventListener(): void {
-    CompassEventEmitter.removeAllListeners('COMPASS_MAP_EVENT');
-  }
-
-  removePinCallbackEventListener(): void {
-    CompassEventEmitter.removeAllListeners('PIN_CALLBACK_EVENT');
-  }
-  
-  removeCompassStatusEventListener(): void {
-    CompassEventEmitter.removeAllListeners('COMPASS_STATUS_EVENT');
-  }
-
-  removeSectionCaptureEventListener(): void {
-    CompassEventEmitter.removeAllListeners('SECTION_CAPTURE_EVENT');
-  }
+type DropItem = {
+  label: string,
+  value: string,
+  itemTestIDField: string,
+  itemAccessibilityLabelField: string,
 }
+const clearMapSelectorData: DropItem[] = [
+  {label: 'Clear Map', value: 'clearMap', itemTestIDField: 'test1', itemAccessibilityLabelField: 'test1'},
+  {label: 'Test 1', value: 'test1', itemTestIDField: 'test1', itemAccessibilityLabelField: 'test1'},
+  {label: 'Test 2', value: 'test2', itemTestIDField: 'test1', itemAccessibilityLabelField: 'test1'},
+];
+const updateEventSelectorData: DropItem[] = [
+  {label: 'Update Event', value: 'updatevent', itemTestIDField: 'updatevent', itemAccessibilityLabelField: 'updatevent'},
+  {label: 'Test 1', value: 'test1', itemTestIDField: 'test1', itemAccessibilityLabelField: 'test1'},
+  {label: 'Test 2', value: 'test2', itemTestIDField: 'test2', itemAccessibilityLabelField: 'test2'},
+  {label: 'Test 3', value: 'test3', itemTestIDField: 'test3', itemAccessibilityLabelField: 'test3'},
+];
 
-const createFragment = (viewId: number) =>
-  UIManager.dispatchViewManagerCommand(
-    viewId,
-    // we are calling the 'create' command
-    // UIManager.MapViewManager.Commands.create.toString(),
-    //@ts-ignore
-    UIManager.MapViewManager.Commands.create.toString(),
-    [viewId],
-  );
+const getUserDistanceSelectorData: DropItem[] = [
+  {label: 'Get User Distance', value: 'getUserDistance', itemTestIDField: 'getUserDistance', itemAccessibilityLabelField: 'getUserDistance'},
+  {label: 'Test 1', value: 'test1', itemTestIDField: 'test1', itemAccessibilityLabelField: 'test1'},
+  {label: 'Test 2', value: 'test2', itemTestIDField: 'test2', itemAccessibilityLabelField: 'test2'},
+];
 
-const CompassView = requireNativeComponent('CompassView');
-
-const MapViewManager = requireNativeComponent('MapViewManager');
-
-export const CompassMap = ({ height, width, workflowType, workflowId, workflowValue }: Props) => {
-
-  const ref = useRef(null);
-  if (Platform.OS === 'android') {
-    useEffect(() => {
-      const viewId = findNodeHandle(ref?.current);
-      if (viewId != null) {
-        createFragment(viewId);
-      }
-    }, []);
-
-    return (
-      <MapViewManager
-        //@ts-ignore
-        style={{
-          // converts dpi to px, provide desired height
-          height: PixelRatio.getPixelSizeForLayoutSize(height),
-          // converts dpi to px, provide desired width
-          width: PixelRatio.getPixelSizeForLayoutSize(width)
-        }}
-        ref={ref}
-        workflowType={workflowType}
-        workflowId={workflowId}
-        workflowValue={workflowValue}
-      />
-    );
-  } else {
-    // ios fragment 
-
-    return (
-      <CompassView
-        //@ts-ignore
-        customProperty={{
-          height: height,
-          width: width,
-          workflowType: workflowType,
-          workflowId: workflowId,
-          workflowValue: workflowValue
-        }}
-        style={{
-          height: height,
-          width: width,
-          backgroundColor: 'transparent',
-        }}
-        ref={ref}
-      />
-    );
+//Used for appending correct prefixes to Android and iOS views.
+ function getTestID(testID: string) {
+  if (!testID) {
+    return undefined;
   }
-};
+
+  const prefix = `${appIdentifier}:id/`;
+  const hasPrefix = testID.startsWith(prefix);
+
+  return Platform.select({
+    android: !hasPrefix ? `${prefix}${testID}` : testID,
+    ios: hasPrefix ? testID.slice(prefix.length) : testID,
+  });
+}
+const appIdentifier = "com.example.compasssdkrn"
+
+const tID = getTestID;
+
+//Expected test results
+let expectedName = ""
+let expectedPayloads: any[] = []
+let expectedResult: any = ""
+
+function App() {
+  const [storeId, onChangeStoreId] = React.useState('2280');
+  const [storeIdUpdated, setStoreIdUpdated] = React.useState(false);
+  const [testInput, onChangeTestInput] = React.useState('');
+  const [init, setInit] = React.useState<Boolean>(false);
+  const [errorStatusCode, setErrorStatusCode] = React.useState<any>();
+  const [status, setStatus] = React.useState<any>();
+  const [error, setError] = React.useState<any>();
+  const [service, setService] = React.useState("");
+
+  //Selectors
+  const [initSelector, setInitSelector] = React.useState<string>("InitFixit");
+  const [displayPinSelector, setDisplayPinSelector] = React.useState<string>("displayPin");
+  const [updateEventSelector, setUpdateEventSelector] = React.useState<string>("updateEvent");
+  const [clearMapSelector, setClearMapSelector] = React.useState<string>("clearMap");
+  const [getUserDistanceSelector, setGetUserDistanceSelector] = React.useState<string>("getUserDistance");
+
+  //Test Result TextBoxes
+  const [testName, setTestName] = React.useState<String>('');
+  const [testAPIResult, setAPIResult] = React.useState<any>();
+  const [testPayloads, setPayloads] = React.useState<any[]>([])
+
+  //Test Result Checkboxes
+  const [nameCheckbox, setNameCheckbox] = React.useState(false)
+  const [resultCheckbox, setResultCheckbox] = React.useState(false)
+  const [payloadsCheckbox, setPayloadsCheckbox] = React.useState(false)
+  const [isMapLoaded, setMapLoaded] = React.useState(false)
+  const [isNeedsTap, setNeedsTap] = React.useState(false)
+  const [featureFlagsVisible, setFeatureFlagsVisible] = React.useState(false)
+
+  // const { CompassSdkRn } = NativeModules;
+
+  //Effects
+  React.useEffect(() => {
+    if (testName.toLowerCase() == expectedName.toLowerCase())
+      setNameCheckbox(true)
+  }, [testName])
+  React.useEffect(() => {
+    console.log(`testAPIResult: ${testAPIResult}\nexpectedResult: ${expectedResult}`)
+    if (isEqual(expectedResult, "") || isEqual(testAPIResult, expectedResult))
+      setResultCheckbox(true)
+  }, [testAPIResult])
+  React.useEffect(() => {
+    if (isEqual(expectedPayloads, []))
+      setPayloadsCheckbox(true)
+    else {
+        setPayloadsCheckbox(expectedPayloads.reduce((matches, payload) => {
+        return matches && Helper.contains(testPayloads, [payload])
+      }, true))
+    }
+  }, [testPayloads])
+
+  //Utility functions
+  React.useEffect(() => {
+    Helper.setInitSuccessCallback(() => {
+      updateUI();
+    })
+  }, [])
+
+  const clearTestData = () => {
+    clearAllListeners()
+    //setPayloads([])
+    setAPIResult("")
+    setTestName('')
+    setNameCheckbox(false)
+    setResultCheckbox(false)
+    setPayloadsCheckbox(false)
+    setMapLoaded(false)
+    setNeedsTap(false)
+  }
+
+  const addResult = (data: any) => {
+    setAPIResult(data)
+  }
+
+  const addPayload = (data: any) => {
+    setPayloads(testPayloads => {
+      return [...testPayloads, data]
+    })
+  }
+
+  React.useEffect(() => {
+    clearTestData()
+    console.log("StoreID updated");
+  }, []);
+
+  const pinCallbackEvent = (event: PinCallbackEvent) => {
+    addPayload({ "PIN_CALLBACK_EVENT": event })
+    console.log("Received PIN_CALLBACK_EVENT = " + JSON.stringify(event));
+  };
+
+  const compassStatus = (data: CompassStatusEvent) => {
+    addPayload({ "COMPASS_STATUS_EVENT": data })
+    console.log("Received COMPASS_STATUS_EVENT = " + JSON.stringify(data));
+  };
+
+  const compassMapEvent = (data: MapEvent) => {
+    setMapLoaded(data.success)
+    addPayload({ "COMPASS_MAP_EVENT": data })
+    console.log("Received COMPASS_MAP_EVENT = " + JSON.stringify(data));
+  }
+
+  //Event Emitter Listeners
+  function clearAllListeners() {
+    CompassSdkRn.removeCompassStatusEventListener();
+    CompassSdkRn.removeMapEventListener();
+    CompassSdkRn.removePinCallbackEventListener();
+  }
+
+  //Event Emitter Listeners
+  function addAllListeners() {
+    CompassSdkRn.addPinCallbackEventListener(pinCallbackEvent);
+    CompassSdkRn.addCompassStatusEventListener(compassStatus);
+    CompassSdkRn.addMapEventListener(compassMapEvent);
+  }
+
+  function updateUI() {
+    //setStoreIdUpdated(true);
+    setInit(true)
+    addAllListeners()
+  }
+
+  /*
+
+  Intialization Tests
+
+  */
+
+  const testRunner = () => {
+    console.log('SP TEST testRunner ', testInput)
+    if (testInput.startsWith('Initialize')) {
+      initializeRunner(testInput.split(':')[1] + '')
+    } else if (testInput.startsWith('clearmap')) {
+      clearMapRunner(testInput.split(':')[1] + '')
+    } else if (testInput.startsWith('updateevent')) {
+      updateEventRunner(testInput.split(':')[1] + '')
+    } else if (testInput.startsWith('displaypin')) {
+      displayPinRunner(testInput.split(':')[1] + '')
+    } else if (testInput.startsWith('getUserDistance')) {
+      getUserDistanceRunner(testInput.split(':')[1] + '')
+    }
+  }
+
+  const initializeRunner = (testID: String) => {
+    console.log('SP TEST initializeRunner ', testID)
+    if (testID.startsWith('test')) {
+      clearTestData();
+    }
+
+    switch (testID) {
+      case 'InitFixit':
+        initializeFixit();
+        break;
+      case 'InitSS':
+        initializeShopper();
+        break;
+    }
+    const selectedTest = initializeTests.find(test => test.id === initSelector);
+    if (selectedTest) {
+      // Execute the selected test's code
+      runInitializeTest(selectedTest)
+      console.log(`Saneet Running ${selectedTest.name}`);
+    }
+  }
+
+
+  const clearMapRunner = (testID: String) => {
+    if (testID.startsWith('test')) {
+      clearTestData();
+    }
+ 
+  }
+
+  const initializeRouter = () => {
+    initializeRunner(initSelector)
+  }
+
+  const clearMapRouter = () => {
+    clearMapRunner(clearMapSelector)    
+
+
+    switch (clearMapSelector) {
+      case 'clearMap':
+        clearMap1();
+        break;
+      case 'test1':
+        clearMap1();
+        break;
+      case 'test2':
+        clearMap2();
+        break;
+    }
+  }
+
+  const updateEventRunner = (testID: String) => {
+    if (testID.startsWith('test')) {
+      clearTestData();
+    }
+ 
+  }
+
+  const updateEventRouter = () => {
+    updateEventRunner(updateEventSelector)
+
+      switch (updateEventSelector) {
+      case 'updateEvent':
+        updateEvent1();
+        break;
+      case 'test1':
+        updateEvent1();
+        break;
+      case 'test2':
+        updateEvent2();
+        break;
+      case 'test3':
+        updateEvent3();
+        break;
+    }
+  }
+
+  const displayPinRunner = (testID: String) => {
+    if (testID.startsWith('test')) {
+      clearTestData();
+    }
+ 
+  }
+
+  const getUserDistanceRunner = (testID: String) => {
+    if (testID.startsWith('test')) {
+      clearTestData();
+    }
+  }
+
+  const getUserDistanceTests: Test[] = [
+    {
+      name: 'getUserDistance - Success',
+      id: 'test1',
+      setup: {
+        mockBackend: () => { return new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess()) },
+        autoInitialize: AutoInitialize.FIXIT,
+      },
+      test: () => {
+        const pins: Pin[] = [
+          {
+            type: PinType.ITEM,
+            id: '123',
+            locationType: LocationType.AISLE,
+            location: {
+              type: LocationType.AISLE,
+              zone: 'A',
+              aisle: '3',
+              section: '2',
+            } as AislePinLocation
+          } as Pin,
+        ];
+        return CompassSdkRn.getUserDistance(pins)
+      },
+      asserts: {
+        expectedResult: "getUserDistance success",
+        expectedPayload: () => {
+          return []
+        },
+      }
+    },
+    {
+      name: 'getUserDistance - No Initialize',
+      id: 'test2',
+      setup: {
+        mockBackend: () => { return new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess()) },
+        autoInitialize: AutoInitialize.FAIL,
+      },
+      test: () => {
+        const pins: Pin[] = [
+          {
+            type: PinType.ITEM,
+            id: '123',
+            locationType: LocationType.AISLE,
+            location: {
+              type: LocationType.AISLE,
+              zone: 'A',
+              aisle: '3',
+              section: '2',
+            } as AislePinLocation
+          } as Pin,
+        ];
+        return CompassSdkRn.getUserDistance(pins)
+      },
+      asserts: {
+        expectedResult: Error("Compass getUserDistance failed"),
+        expectedPayload: () => {
+          return []
+        },
+      }
+    }
+  ];
+
+  const getUserDistanceRouter = () => {
+    getUserDistanceRunner(getUserDistanceSelector)
+
+    switch (getUserDistanceSelector) {
+      case 'getUserDistance':
+        getUserDistanceTest1();
+        break;
+      case 'test1':
+        getUserDistanceTest1();
+        break;
+      case 'test2':
+        getUserDistanceTest2();
+        break;
+    }
+
+    const selectedTest = getUserDistanceTests.find(test => test.id === getUserDistanceSelector);
+    if (selectedTest) {
+      runGetUserDistanceTest(selectedTest)
+      console.log(`Running ${selectedTest.name}`);
+    }
+  }
+
+  const runDisplayPinTest = async (test: Test) => {
+    setTestName(test.name)
+    expectedName = test.name
+    expectedPayloads = test.asserts.expectedPayload()
+    //If no payloads are expected then trigger check and forget
+    if (isEqual(expectedPayloads, [])) {
+      setPayloads([])
+    }
+    expectedResult = test.asserts.expectedResult
+    console.log('Saneet: Expected values set.')
+    const mock = test.setup.mockBackend()
+    await Helper.writeJsonToFile(mock)
+    console.log('Saneet: Mock backend written.')
+    switch (test.setup.autoInitialize) {
+      case AutoInitialize.FIXIT: {
+        Helper.initializeFixitSuccess(storeId, true, () => {
+          console.log('Saneet: Autoinitialize done.')
+          test.test().then((data: any) => {
+            console.log(`Saneet: test run ${data}`)
+            setAPIResult(data)
+          }).catch((err) =>
+            setAPIResult(err)
+          )
+        }, (err) => {
+          setAPIResult("Init Failed erroniously: " + err)
+        })
+        break;
+      }
+      case AutoInitialize.SS: {
+        Helper.initializeShopperSuccess(storeId, true, () => {
+          test.test().then((data: any) => {
+            setAPIResult(data)
+          }).catch((err) =>
+            setAPIResult(err)
+          )
+        }, (err) => {
+          setAPIResult("Init Failed erroniously: " + err)
+        })
+        break;
+      }
+      case AutoInitialize.FAIL: {
+        Helper.initializeFixitError(storeId, (data) => {
+          setAPIResult("Init Succeeded erroniously: " + data)
+        }, () => {
+          test.test().then((data: any) => {
+            setAPIResult(data)
+          }).catch((err) =>
+            setAPIResult(err))
+        })
+        break;
+      }
+      case AutoInitialize.NO: {
+        test.test().then((data: any) => {
+          console.log("Saneet result: " + JSON.stringify(data))
+          setAPIResult(data)
+        }).catch((err) => {
+          console.log("Saneet result: " + JSON.stringify(err))
+          setAPIResult(err)
+        })
+        break;
+      }
+    }
+  }
+
+  const runInitializeTest = async (test: Test) => {
+    setTestName(test.name)
+    expectedName = test.name
+    expectedPayloads = test.asserts.expectedPayload()
+    //If no payloads are expected then trigger check and forget
+    if (isEqual(expectedPayloads, [])) {
+      setPayloads([])
+    }
+    expectedResult = test.asserts.expectedResult
+    const mock = test.setup.mockBackend()
+    await Helper.writeJsonToFile(mock)
+    if (test.setup.autoInitialize != AutoInitialize.NO)
+      setAPIResult("AutoInitialize not allowed.")
+    else {
+      test.test().then((data: any) => {
+        setAPIResult(data)
+        updateUI()
+      }).catch((err) => {
+        setAPIResult(err)
+      })
+    }
+  }
+
+  const initializeFixit = () => {
+    Helper.initializeFixitSuccess(
+      storeId,
+      false,
+      (data) => {
+        updateUI();
+        console.log(`Successfully register the module with env ${Environment.STAGE}`, data);
+      },
+      (err) => {
+        console.log(`Error when initializing.`, err);
+      }
+    )
+  }
+
+  const initializeShopper = () => {
+    Helper.initializeShopperSuccess(
+      storeId,
+      true,
+      (data) => {
+        updateUI();
+        console.log(`Successfully register the module with env ${Environment.STAGE}`, data);
+      },
+      (err) => {
+        console.log(`Error when initializing.`, err);
+      }
+    )
+  }
+
+  /**
+   * ClearMap tests
+   */
+
+  //Test 1 - clearMap when resetZoom is true
+  const clearMap1 = () => {
+    //Preconditions
+    clearTestData()
+
+    //Expected values
+    expectedName = "ClearMap when resetZoom is true"
+    expectedResult = "No crash"
+    setPayloads([])
+
+    //Actions
+    Helper.writeJsonToFile(new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess()))
+    setTestName("ClearMap when resetZoom is true")
+
+    Helper.initializeFixitSuccess(
+      storeId,
+      true,
+      () => {
+        updateUI()
+        try {
+          CompassSdkRn.clearMap({
+            resetZoom: true
+          })
+          setAPIResult("No crash")
+        } catch (error) {
+          setAPIResult("App Crashed")
+        }
+      },
+      (err: any) => {
+        setAPIResult(err)
+      }
+    )
+
+  };
+
+  //Test 2 - clearMap fails because not initialized
+  const clearMap2 = () => {
+    //Preconditions
+    clearTestData()
+
+    //Expected values
+    expectedName = "ClearMap when Compass not initialized"
+    expectedResult = "No crash"
+    setPayloads([])
+
+    //Actions
+    setTestName("ClearMap when Compass not initialized")
+    try {
+      CompassSdkRn.clearMap({
+        resetZoom: true
+      })
+      setAPIResult("No crash")
+    } catch (error) {
+      setAPIResult("Crash")
+    }
+  };
+
+
+  /**
+   * Tests for updateEvent
+   */
+
+  //Test 1 - UpdateEvent Scan Item
+  const updateEvent1 = () => {
+
+    //Expected values
+    expectedName = "UpdateEvent Asset Scan"
+    expectedResult = "Compass updateEvent success"
+
+    //Actions
+    const config = getConfigSuccess()
+    config.payload.storeConfig.bluedotEnabled = false
+    Helper.writeJsonToFile(new MockBackend(getAssetSuccess(), config, getAisleSuccess()))
+    setTestName("UpdateEvent Asset Scan")
+    var eventType = EventType.ASSET_SCAN
+    var eventValue = '3466238'
+    var map = new Map<any, any>()
+    Helper.runAfterInitialize(
+      storeId,
+      () => {
+        setTimeout(() => {
+          console.log('Saneet calling updateEvent');
+          CompassSdkRn.updateEvent(eventType, eventValue, map)
+            .then((data: any) => {
+              console.log('Saneet success updateEvent', data);
+              setAPIResult(data);
+            })
+            .catch((err: any) => {
+              console.log('Saneet error updateEvent', err);
+              setAPIResult(err);
+            });
+          }, 10000);
+      },
+    )
+  }
+
+  //Test 2 - UpdateEvent Compass Not Initialized
+  const updateEvent2 = () => {
+    //Expected values
+    expectedName = "UpdateEvent Compass Not Initialized"
+    expectedResult = Error("Compass updateEvent failed")
+
+    //Actions
+    Helper.writeJsonToFile(new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess()))
+    setTestName("UpdateEvent Compass Not Initialized")
+    var eventType = EventType.ASSET_SCAN
+    var eventValue = '3466238'
+    var map = new Map<any, any>()
+    Helper.initializeFixitError(
+      storeId,
+      (data) => {
+        console.log(data)
+      },
+      (err) => {
+        console.log(err)
+        CompassSdkRn.updateEvent(eventType, eventValue, map)
+          .then((data: any) => {
+            setAPIResult(data);
+          })
+          .catch((err: any) => {
+            console.log('error updateEvent', err);
+            setAPIResult(err);
+          });
+      }
+    )
+  }
+
+  //Test 3 - UpdateEvent Default
+  const updateEvent3 = () => {
+    //Expected values
+    expectedName = "UpdateEvent No Event Type"
+    expectedResult = Error("Compass updateEvent failed")
+
+    //Actions
+    Helper.writeJsonToFile(new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess()))
+    setTestName("UpdateEvent No Event Type")
+    var eventType = '';
+    var eventValue = 'peter123'
+    var map = new Map<any, any>()
+    Helper.runAfterInitialize(
+      storeId,
+      () => {
+        // @ts-expect-error
+        CompassSdkRn.updateEvent(eventType, eventValue, map)
+          .then((data: any) => {
+            setAPIResult(data);
+          })
+          .catch((err: any) => {
+            console.log('error updateEvent', err);
+            setAPIResult(err);
+          });
+      })
+  }
+
+  /**
+   * Tests for getUserDistance
+   */
+
+  //Test 1 - getUserDistance Success
+  const getUserDistanceTest1 = () => {
+    //Expected values
+    expectedName = "GetUserDistance Success"
+    expectedResult = "getUserDistance success"
+
+    //Actions
+    Helper.writeJsonToFile(new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess()))
+    setTestName("GetUserDistance Success")
+    
+    const pins: Pin[] = [
+      {
+        type: PinType.ITEM,
+        id: '123',
+        locationType: LocationType.AISLE,
+        location: {
+          type: LocationType.AISLE,
+          zone: 'A',
+          aisle: '3',
+          section: '2',
+        } as AislePinLocation
+      } as Pin,
+    ];
+
+    Helper.runAfterInitialize(
+      storeId,
+      () => {
+        setTimeout(() => {
+          console.log('Calling getUserDistance');
+          CompassSdkRn.getUserDistance(pins)
+            .then((data: any) => {
+              console.log('getUserDistance success: ', data);
+              setAPIResult("getUserDistance success");
+            })
+            .catch((err: any) => {
+              console.log('Error while getUserDistance: ', err);
+              setAPIResult(err);
+            });
+          }, 10000);
+      },
+    )
+  }
+
+  //Test 2 - getUserDistance Compass Not Initialized
+  const getUserDistanceTest2 = () => {
+    //Expected values
+    expectedName = "GetUserDistance Compass Not Initialized"
+    expectedResult = Error("Compass getUserDistance failed")
+
+    //Actions
+    Helper.writeJsonToFile(new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess()))
+    setTestName("GetUserDistance Compass Not Initialized")
+    
+    const pins: Pin[] = [
+      {
+        type: PinType.ITEM,
+        id: '123',
+        locationType: LocationType.AISLE,
+        location: {
+          type: LocationType.AISLE,
+          zone: 'A',
+          aisle: '3',
+          section: '2',
+        } as AislePinLocation
+      } as Pin,
+    ];
+
+    Helper.initializeFixitError(
+      storeId,
+      (data) => {
+        console.log(data)
+      },
+      (err) => {
+        console.log(err)
+        CompassSdkRn.getUserDistance(pins)
+          .then((data: any) => {
+            setAPIResult(data);
+          })
+          .catch((err: any) => {
+            console.log('error getUserDistance', err);
+            setAPIResult(err);
+          });
+      }
+    )
+  }
+
+  const runGetUserDistanceTest = async (test: Test) => {
+    setTestName(test.name)
+    expectedName = test.name
+    expectedPayloads = test.asserts.expectedPayload()
+    //If no payloads are expected then trigger check and forget
+    if (isEqual(expectedPayloads, [])) {
+      setPayloads([])
+    }
+    expectedResult = test.asserts.expectedResult
+    console.log('Expected values set for getUserDistance.')
+    const mock = test.setup.mockBackend()
+    await Helper.writeJsonToFile(mock)
+    console.log('Mock backend written for getUserDistance.')
+    switch (test.setup.autoInitialize) {
+      case AutoInitialize.FIXIT: {
+        Helper.initializeFixitSuccess(storeId, true, () => {
+          console.log('Autoinitialize done for getUserDistance.')
+          test.test().then((data: any) => {
+            console.log(`getUserDistance test run ${data}`)
+            setAPIResult(data)
+          }).catch((err) =>
+            setAPIResult(err)
+          )
+        }, (err) => {
+          setAPIResult("Init Failed erroneously: " + err)
+        })
+        break;
+      }
+      case AutoInitialize.SS: {
+        Helper.initializeShopperSuccess(storeId, true, () => {
+          test.test().then((data: any) => {
+            setAPIResult(data)
+          }).catch((err) =>
+            setAPIResult(err)
+          )
+        }, (err) => {
+          setAPIResult("Init Failed erroneously: " + err)
+        })
+        break;
+      }
+      case AutoInitialize.FAIL: {
+        Helper.initializeFixitError(storeId, (data) => {
+          setAPIResult("Init Succeeded erroneously: " + data)
+        }, () => {
+          test.test().then((data: any) => {
+            setAPIResult(data)
+          }).catch((err) =>
+            setAPIResult(err))
+        })
+        break;
+      }
+      case AutoInitialize.NO: {
+        test.test().then((data: any) => {
+          console.log("getUserDistance result: " + JSON.stringify(data))
+          setAPIResult(data)
+        }).catch((err) => {
+          console.log("getUserDistance result: " + JSON.stringify(err))
+          setAPIResult(err)
+        })
+        break;
+      }
+    }
+  }
+
+  const displayPinsWithAssets = () => {
+    CompassSdkRn.displayPins(["3466238", "3465864", "3465905"], PinType.ASSET, {
+      enableManualPinDrop: true
+    })
+      .then((data: any) => {
+        setAPIResult(data)
+      })
+      .catch((error: any) => {
+        setAPIResult(error)
+      })
+  }
+
+  const displayPinTest = () => {
+    console.log('**** Displaying pin from home screen');
+    const pins: Pin[] = [
+      {
+        type: PinType.ITEM,
+        id: '123',
+        locationType: LocationType.AISLE,
+        location: {
+          type: LocationType.AISLE,
+          zone: 'A',
+          aisle: '3',
+          section: '2',
+        } as AislePinLocation,
+      } as Pin,
+    ];
+    CompassSdkRn.displayPinsV2(pins, {
+      enableManualPinDrop: false,
+      resetZoom: true
+    })
+      .then((data: any) => {
+        console.log('displayPinsV2 result: ', data);
+        setAPIResult(data);
+      })
+      .catch((err: any) => {
+        console.log('Error while displayPinsV2: ', err);
+        setAPIResult(err);
+      });
+  };
+
+  const initializeTests: Test[] = [
+    {
+      name: 'Fixit Success',
+      id: 'test1',
+      setup: {
+        mockBackend: () => { 
+          const config = getConfigSuccess()
+          config.payload.storeConfig.bluedotEnabled = false
+          return new MockBackend(getAssetSuccess(), config, getAisleSuccess()) },
+        autoInitialize: AutoInitialize.NO,
+      },
+      test: () => {
+        return CompassSdkRn.initialize(
+          ENV.REACT_APP_FIXIT_CLIENT_KEY,
+          ENV.REACT_APP_FIXIT_CONSUMER_ID,
+          Helper.ACCOUNT_ID,
+          TokenType.IAM,
+          Number(2280),
+          Environment.STAGE,
+          { mockUser: true }
+        )
+      },
+      asserts: {
+        expectedResult: "Compass Initialization success",
+        expectedPayload: () => {
+          return [
+            { "COMPASS_STATUS_EVENT": { "EventType": "POSITION_LOCKED", "EventCode": 0 } },
+            { "COMPASS_MAP_EVENT": { "success": true } }
+          ]
+        },
+      }
+    },
+    {
+      name: 'SS Success',
+      id: 'test2',
+      setup: {
+        mockBackend: () => { return new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess()) },
+        autoInitialize: AutoInitialize.NO,
+      },
+      test: () => {
+        return CompassSdkRn.initialize(
+          ENV.REACT_APP_SS_TOKEN,
+          ENV.REACT_APP_SS_CONSUMER_ID,
+          Helper.ACCOUNT_ID,
+          TokenType.USER,
+          Number(2280),
+          Environment.STAGE,
+          { mockUser: false }
+        )
+      },
+      asserts: {
+        expectedResult: "Compass Initialization success",
+        expectedPayload: () => {
+          return [
+            { "COMPASS_STATUS_EVENT": {} },
+            { "COMPASS_MAP_EVENT": { "success": true } }
+          ]
+        },
+      }
+    },
+    {
+      name: 'Fixit incorrect client sec',
+      id: 'test3',
+      setup: {
+        mockBackend: () => { return new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess()) },
+        autoInitialize: AutoInitialize.NO,
+      },
+      test: () => {
+        return CompassSdkRn.initialize(
+          ENV.REACT_APP_FIXIT_CLIENT_KEY + "abcd",
+          ENV.REACT_APP_FIXIT_CONSUMER_ID,
+          Helper.ACCOUNT_ID,
+          TokenType.IAM,
+          Number(2280),
+          Environment.STAGE,
+          { mockUser: false }
+        )
+      },
+      asserts: {
+        expectedResult: Error("Auth token failed to generate"),
+        expectedPayload: () => {
+          return []
+        },
+      }
+    },
+  ];
+
+ const initSelectorData: DropItem[] = [
+    // {label: 'InitFixit', value: 'Initfixit'},
+    // {label: 'InitSS', value: 'InitSS'},
+    {label: 'Test 1', value: 'test1', itemTestIDField: 'test1', itemAccessibilityLabelField: 'test1'},
+    {label: 'Test 2', value: 'test2', itemTestIDField: 'test2', itemAccessibilityLabelField: 'test2'},
+    {label: 'Test 3', value: 'test3', itemTestIDField: 'test3', itemAccessibilityLabelField: 'test3'},
+    {label: 'Test 4', value: 'test4', itemTestIDField: 'test4', itemAccessibilityLabelField: 'test4'},
+    ...initializeTests.map(test => ({
+      label: test.id + " - " + test.name,
+      value: test.id,
+      itemTestIDField: test.id,
+      itemAccessibilityLabelField: test.id,    
+    } as DropItem))
+  ];
+
+  const displayPinsTests: Test[] = [
+    {
+      name: 'asset - Success',
+      id: 'test1',
+      setup: {
+        mockBackend: () => { return new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess()) },
+        autoInitialize: AutoInitialize.FIXIT,
+      },
+      test: () => {
+        return CompassSdkRn.displayPins(['848515'], PinType.ASSET, {
+          enableManualPinDrop: false
+        })
+      },
+      asserts: {
+        expectedResult: "displaypin success",
+        expectedPayload: () => {
+          return [{
+            "PIN_CALLBACK_EVENT": {
+              "longPressed": false,
+              "mapType": "WalmartMap",
+              "encodedLocation": "YzAvWy0xRTIsVHRdLzE=",
+              "assets": {
+                "848515": {
+                  "locations": [AISLE_REGEX, AISLE_REGEX, AISLE_REGEX],
+                  "assetId": "848515"
+                }
+              },
+            }
+          }]
+        },
+      }
+    },
+    {
+      name: 'invalid asset',
+      id: 'test2',
+      setup: {
+        mockBackend: () => {
+          return new MockBackend(getAssetNotFound(), getConfigSuccess(), getAisleSuccess())
+        },
+        autoInitialize: AutoInitialize.FIXIT,
+      },
+      test: () => {
+        return CompassSdkRn.displayPins(['IncorrectAsset'], PinType.ASSET, {
+          enableManualPinDrop: false
+        })
+      },
+      asserts: {
+        expectedResult: "displaypin success",
+        expectedPayload: () => {
+          return [{
+            "PIN_CALLBACK_EVENT": {
+              "longPressed": false,
+              "mapType": "WalmartMap",
+              "encodedLocation": "YzAvW10vMQ==",
+              "assets": {
+                "IncorrectAsset": {
+                  "locations": [],
+                  "assetId": "IncorrectAsset"
+                }
+              },
+            }
+          }]
+        },
+      }
+    },
+    {
+      name: 'generic - Success',
+      id: 'test3',
+      setup: {
+        mockBackend: () => {
+          return new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess())
+        },
+        autoInitialize: AutoInitialize.FIXIT,
+      },
+      test: () => {
+        return CompassSdkRn.displayPins(['YzAvWy0xRTIsVHRdLzE='], PinType.GENERIC, {
+          enableManualPinDrop: false
+        })
+      },
+      asserts: {
+        expectedResult: "displaypin success",
+        expectedPayload: () => {
+          return [{
+            "PIN_CALLBACK_EVENT": {
+              "longPressed": false,
+              "mapType": "WalmartMap",
+              "encodedLocation": "YzAvWy0xRTIsVHRdLzE=",
+              "assets": {
+                "YzAvWy0xRTIsVHRdLzE=": {
+                  "locations": [AISLE_REGEX, AISLE_REGEX, AISLE_REGEX],
+                  "assetId": "YzAvWy0xRTIsVHRdLzE="
+                }
+              },
+            }
+          }]
+        },
+      }
+    },
+    {
+      name: 'generic - Invalid',
+      id: 'test4',
+      setup: {
+        mockBackend: () => {
+          return new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess())
+        },
+        autoInitialize: AutoInitialize.FIXIT,
+      },
+      test: () => {
+        return CompassSdkRn.displayPins(['InvalidYzAvWy0xRTIsVHRdLzE='], PinType.GENERIC, {
+          enableManualPinDrop: false
+        })
+      },
+      asserts: {
+        expectedResult: "displaypin success",
+        expectedPayload: () => {
+          return [{
+            "PIN_CALLBACK_EVENT": {
+              "longPressed": false,
+              "mapType": "WalmartMap",
+              "encodedLocation": "InvalidYzAvWy0xRTIsVHRdLzE=",
+              "assets": {},
+            }
+          }]
+        },
+      }
+    },
+    {
+      name: 'without Initialize',
+      id: 'test5',
+      setup: {
+        mockBackend: () => {
+          return new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess())
+        },
+        autoInitialize: AutoInitialize.FAIL,
+      },
+      test: () => {
+        setMapLoaded(true)
+        return CompassSdkRn.displayPins(['InvalidYzAvWy0xRTIsVHRdLzE='], PinType.GENERIC, {
+          enableManualPinDrop: false
+        })
+      },
+      asserts: {
+        expectedResult: "displaypin success",
+        expectedPayload: () => {
+          return []
+        },
+      }
+    },
+    {
+      name: 'asset - long press',
+      id: 'test6',
+      setup: {
+        mockBackend: () => {
+          return new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess())
+        },
+        autoInitialize: AutoInitialize.FIXIT,
+      },
+      test: () => {
+        setNeedsTap(true)
+        return CompassSdkRn.displayPins(["3466238"], PinType.ASSET,
+          { enableManualPinDrop: true } as DisplayPinsConfig)
+      },
+      asserts: {
+        expectedResult: "displaypin success",
+        expectedPayload: () => {
+          return [{
+            PIN_CALLBACK_EVENT: {
+              mapType: "WalmartMap",
+              longPressed: true,
+              encodedLocation: Helper.ENCODED_LOCATION_REGEX,
+              assets: {
+                "3466238": {
+                  "locations": [AISLE_REGEX, AISLE_REGEX],
+                  assetId: "3466238"
+                }
+              }
+            }
+          }]
+        },
+      }
+    },
+    {
+      name: 'asset - multipin',
+      id: 'test7',
+      setup: {
+        mockBackend: () => {
+          return new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess())
+        },
+        autoInitialize: AutoInitialize.FIXIT,
+      },
+      test: () => {
+        return CompassSdkRn.displayPins(["3466238", "3465864", "3465905"], PinType.ASSET,
+          { enableManualPinDrop: false } as DisplayPinsConfig)
+      },
+      asserts: {
+        expectedResult: "displaypin success",
+        expectedPayload: () => {
+          return [{
+            PIN_CALLBACK_EVENT: {
+              mapType: "WalmartMap",
+              longPressed: false,
+              encodedLocation: Helper.ENCODED_LOCATION_REGEX,
+              assets: {
+                "3466238": {
+                  "locations": [AISLE_REGEX],
+                  assetId: "3466238"
+                },
+                "3465864": {
+                  "locations": [AISLE_REGEX],
+                  assetId: "3465864"
+                },
+                "3465905": {
+                  "locations": [AISLE_REGEX],
+                  assetId: "3465905"
+                }
+              }
+            }
+          }]
+        },
+      }
+    },
+    {
+      name: 'aisle - success',
+      id: 'test8',
+      setup: {
+        mockBackend: () => {
+          return new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess())
+        },
+        autoInitialize: AutoInitialize.FIXIT,
+      },
+      test: () => {
+        return CompassSdkRn.displayPinsV2([{
+          id: '1',
+          locationType: LocationType.AISLE,
+          type: PinType.ITEM,
+          location: {
+            type: LocationType.AISLE,
+            zone: 'A',
+            aisle: '1',
+            section: '2'
+          } as AislePinLocation
+        } as Pin],
+          { enableManualPinDrop: true } as DisplayPinsConfig)
+      },
+      asserts: {
+        expectedResult: "",
+        expectedPayload: () => {
+          return [{
+            PIN_CALLBACK_EVENT: {
+              mapType: "WalmartMap",
+              longPressed: false,
+              pins: [{
+                  success: true,
+                  id: '1',
+                  location: {
+                    section: '2',
+                    zone: 'A',
+                    aisle: '1'
+              }}]
+          }}]
+        },
+      }
+    },
+    {
+      name: 'aisle - multipin',
+      id: 'test9',
+      setup: {
+        mockBackend: () => {
+          return new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess())
+        },
+        autoInitialize: AutoInitialize.FIXIT,
+      },
+      test: () => {
+        return CompassSdkRn.displayPinsV2(
+          [
+          {
+            id: '1',
+            locationType: LocationType.AISLE,
+            type: PinType.ITEM,
+            location: {
+              type: LocationType.AISLE,
+              zone: 'A',
+              aisle: '1',
+              section: '2'
+            } as AislePinLocation
+          } as Pin,
+          {
+            id: '2',
+            locationType: LocationType.AISLE,
+            type: PinType.ITEM,
+            location: {
+              type: LocationType.AISLE,
+              zone: 'H',
+              aisle: '5',
+              section: '2'
+            } as AislePinLocation
+          } as Pin
+        ],
+          { enableManualPinDrop: true } as DisplayPinsConfig)
+      },
+      asserts: {
+        expectedResult: "",
+        expectedPayload: () => {
+          return [{
+            PIN_CALLBACK_EVENT: {
+              mapType: "WalmartMap",
+              longPressed: false,
+              pins: [
+                {
+                  success: true,
+                  id: '1',
+                  location: {
+                    zone: 'A',
+                    aisle: '1',
+                    section: '2',
+                  }
+                },
+                {
+                  success: true,
+                  id: '2',
+                  location: {
+                    zone: 'H',
+                    aisle: '5',
+                    section: '2',
+              }}]
+            }
+          }]
+        },
+      }
+    },
+    {
+      name: 'displayPinsV2 - enhanced',
+      id: 'test10',
+      setup: {
+        mockBackend: () => {
+          return new MockBackend(getAssetSuccess(), getConfigSuccess(), getAisleSuccess())
+        },
+        autoInitialize: AutoInitialize.FIXIT,
+      },
+      test: () => {
+        const pins: Pin[] = [
+          {
+            id: '123',
+            locationType: LocationType.AISLE,
+            type: PinType.ITEM,
+            location: {
+              type: LocationType.AISLE,
+              zone: 'A',
+              aisle: '3',
+              section: '2'
+            } as AislePinLocation
+          } as Pin
+        ];
+        return CompassSdkRn.displayPinsV2(pins, {
+          enableManualPinDrop: false,
+          resetZoom: true
+        })
+      },
+      asserts: {
+        expectedResult: "displaypin success",
+        expectedPayload: () => {
+          return [{
+            PIN_CALLBACK_EVENT: {
+              mapType: "WalmartMap",
+              longPressed: false,
+              pins: [{
+                success: true,
+                id: '123',
+                location: {
+                  zone: 'A',
+                  aisle: '3',
+                  section: '2',
+                }
+              }]
+            }
+          }]
+        },
+      }
+    },
+  ];
+
+  const displayPinSelectorData: DropItem[] = [
+    {label: 'Display Pin', value: 'displayPin', itemTestIDField: 'displayPin', itemAccessibilityLabelField: 'displayPin'},
+    {label: 'Test 1', value: 'test1', itemTestIDField: 'test1', itemAccessibilityLabelField: 'test1'},
+    {label: 'Test 2', value: 'test2', itemTestIDField: 'test2', itemAccessibilityLabelField: 'test2'},
+    {label: 'Test 3', value: 'test3', itemTestIDField: 'test3', itemAccessibilityLabelField: 'test3'},
+    {label: 'Test 4', value: 'test4', itemTestIDField: 'test4', itemAccessibilityLabelField: 'test4'},
+    {label: 'Test 5', value: 'test5', itemTestIDField: 'test5', itemAccessibilityLabelField: 'test5'},
+    ...displayPinsTests.map(test => ({
+      label: test.id + " - " + test.name,
+      value: test.id,
+      itemTestIDField: test.id,
+      itemAccessibilityLabelField: test.id,      
+    } as DropItem))
+  ];
+
+  const getUserDistanceSelectorData2: DropItem[] = [
+    {label: 'Get User Distance', value: 'getUserDistance', itemTestIDField: 'getUserDistance', itemAccessibilityLabelField: 'getUserDistance'},
+    ...getUserDistanceTests.map(test => ({
+      label: test.id + " - " + test.name,
+      value: test.id,
+      itemTestIDField: test.id,
+      itemAccessibilityLabelField: test.id,      
+    } as DropItem))
+  ];
+
+  return (
+    <SafeAreaView style={Helper.Styles.container}>
+      <View style={Helper.Styles.row}>
+        <Text style={Helper.Styles.textStyle}>
+          StoreID:
+        </Text>
+        <TextInput
+          style={Helper.Styles.input}
+          onChangeText={onChangeStoreId}
+          value={storeId}
+          placeholder="Enter store ID"
+          keyboardType="numeric"
+          accessibilityLabel={'storeId'}
+          testID={tID("storeId")}
+        />
+        <View style={{ flex: 1 }}>
+          <Helper.DropdownComponent 
+        dropdownData={initSelectorData}
+        selectedValue={initSelector}
+        onValueChange={setInitSelector} 
+        testIDArg={tID('InitializeSelect')}
+        accessibilityLabelArg={'InitializeSelect'}
+        />
+        </View>
+
+        <View style={Helper.Styles.touchButton}>
+          <Button
+            onPress={initializeRouter}
+            title="initialize"
+            accessibilityLabel={'initialize'}
+            testID={tID("initialize")}
+          />
+        </View>
+      </View>
+      <View style={Helper.Styles.row}>
+        <View style={{ flex: 1 }}>
+          <Helper.DropdownComponent 
+          dropdownData={clearMapSelectorData}
+          selectedValue={clearMapSelector}
+          onValueChange={setClearMapSelector} 
+          />
+        </View>
+        <View style={Helper.Styles.touchButton}>
+          <Button
+            onPress={clearMapRouter}
+            title="ClearMap"
+            accessibilityLabel={'clearmap'}
+            testID={tID("clearmap")}
+          />
+        </View>
+      </View>
+<View style={Helper.Styles.row}>
+        <View style={{ flex: 1 }}>
+          <Helper.DropdownComponent
+          dropdownData={updateEventSelectorData}
+          selectedValue={updateEventSelector}
+          onValueChange={setUpdateEventSelector} 
+          />
+        </View>
+        <View style={Helper.Styles.touchButton}>
+          <Button
+            onPress={updateEventRouter}
+            title="UpdateEvent"
+            accessibilityLabel={'updateevent'}
+            testID={tID("updateevent")}
+          />
+        </View>
+      </View>
+
+ <View style={Helper.Styles.row}>
+        <View style={{ flex: 1 }}>
+          <Helper.DropdownComponent 
+          dropdownData={displayPinSelectorData}
+          selectedValue={displayPinSelector}
+          onValueChange={setDisplayPinSelector} 
+          />
+        </View>
+        <View style={Helper.Styles.touchButton}>
+          <Button
+            onPress={() => {
+              const selectedTest = displayPinsTests.find(test => test.id === displayPinSelector);
+              if (selectedTest) {
+                runDisplayPinTest(selectedTest)
+                console.log(`Running ${selectedTest.name}`);
+              } else {
+                switch (displayPinSelector) {
+                  case 'displayPins with Assets':
+                    displayPinsWithAssets();
+                    break;
+                  case 'displayPin':
+                    displayPinTest();
+                    break;
+                }
+              }
+            }}
+            title="DisplayPin"
+            accessibilityLabel={'displaypin'}
+            testID={tID("displaypin")}
+          />
+        </View>
+      </View>
+
+      <View style={Helper.Styles.row}>
+        <View style={{ flex: 1 }}>
+          <Helper.DropdownComponent 
+          dropdownData={getUserDistanceSelectorData2}
+          selectedValue={getUserDistanceSelector}
+          onValueChange={setGetUserDistanceSelector} 
+          />
+        </View>
+        <View style={Helper.Styles.touchButton}>
+          <Button
+            onPress={getUserDistanceRouter}
+            title="GetUserDistance"
+            accessibilityLabel={'getUserDistance'}
+            testID={tID("getUserDistance")}
+          />
+        </View>
+      </View>
+
+      <View style={Helper.Styles.row}>
+      <View style={{ flex: 1 }}>
+        <TextInput
+          style={Helper.Styles.testInput}
+          onChangeText={onChangeTestInput}
+          value={testInput}
+          placeholder="For Automation Only"
+          keyboardType="default"
+          accessibilityLabel={'testInput'}
+          testID={tID("testInput")}
+        />
+        </View>
+      <View style={Helper.Styles.touchButton}>
+        <Button
+          onPress={testRunner}
+          title="Run Test"
+          accessibilityLabel={'runTest'}
+          testID={tID("runTest")}
+        />
+      </View>
+    </View>
+    <View style={Helper.Styles.row}>
+      <View style={{ flex: 1 }} />
+      <View style={Helper.Styles.touchButton}>
+        <Button
+          onPress={() => setFeatureFlagsVisible(true)}
+          title="Feature Flags"
+          accessibilityLabel={'featureFlags'}
+          testID={tID("featureFlags")}
+        />
+      </View>
+    </View>
+      <View style={Helper.Styles.box}
+        accessibilityLabel={'map_container'}
+        testID={tID("map_container")}
+      >
+        {init == true &&
+          <CompassMapView
+            workflowType={Helper.WORKFLOW_TYPE}
+            workflowId={Helper.WORKFLOW_ID}
+            workflowValue={Helper.WORKFLOW_VALUE}
+            height={Helper.windowHeight / 3}
+            width={Helper.windowWidth - 10}
+          />
+        }
+      </View>
+<ScrollView accessibilityLabel={'scrollView'} testID={tID("scrollView")}>
+        <View style={Helper.Styles.row}>
+          {isMapLoaded && (<Text
+            style={Helper.Styles.textStyle}
+            accessibilityLabel={'mapStatus'}
+            testID={tID("mapStatus")} >
+            Map Loaded Successfully
+          </Text>)}
+          {isNeedsTap && (<Text
+            style={Helper.Styles.textStyle}
+            accessibilityLabel={'needsClick'}
+            testID={tID("needsClick")} >
+            { }        Map needs tap
+          </Text>)}
+        </View>
+        <View style={Helper.Styles.row}>
+          {isMapLoaded && (<Text
+            style={Helper.Styles.textStyle}
+            accessibilityLabel={'mapStatus'}
+            testID={tID("mapStatus")} >
+            Map Loaded Successfully
+          </Text>)}
+          {isNeedsTap && (<Text
+            style={Helper.Styles.textStyle}
+            accessibilityLabel={'needsClick'}
+            testID={tID("needsClick")} >
+            { }        Map needs tap
+          </Text>)}
+        </View>
+        <View style={Helper.Styles.row}>
+          <Text
+            style={Helper.Styles.textStyleHeader} >
+            Passed
+          </Text>
+          <Text style={Helper.Styles.textStyleHeader}>
+            { } Outputs
+          </Text>
+        </View>
+        <View style={Helper.Styles.row}>
+          <Switch
+            accessibilityLabel={'nameCheckbox'}
+            testID={tID("nameCheckbox")}
+            disabled={false}
+            value={nameCheckbox}
+          />
+          <Text style={Helper.Styles.textBox} accessibilityLabel={'name'} testID={tID("name")}>
+            {testName}
+          </Text>
+        </View>
+        <View style={Helper.Styles.row}>
+          <Switch
+            accessibilityLabel={'resultCheckbox'}
+            testID={tID("resultCheckbox")}
+            disabled={false}
+            value={resultCheckbox}
+          />
+          <Text style={Helper.Styles.textBox} accessibilityLabel={'result'} testID={tID("result")}>
+            {JSON.stringify(testAPIResult)}
+          </Text>
+        </View>
+        <View style={Helper.Styles.row}>
+          <Switch
+            accessibilityLabel={'payloadsCheckbox'}
+            testID={tID("payloadsCheckbox")}
+            disabled={false}
+            value={payloadsCheckbox}
+          />
+          <Text style={Helper.Styles.textBox} accessibilityLabel={'payload'} testID={tID("payload")}>
+            {JSON.stringify(testPayloads)}
+          </Text>
+        </View>
+      </ScrollView>
+
+      <Modal
+        visible={featureFlagsVisible}
+        animationType="slide"
+        onRequestClose={() => setFeatureFlagsVisible(false)}
+      >
+        <FeatureFlagsView onClose={() => setFeatureFlagsVisible(false)} />
+      </Modal>
+
+      
+    </SafeAreaView>
+  );
+} 
+export default App;
