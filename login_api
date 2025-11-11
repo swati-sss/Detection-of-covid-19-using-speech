@@ -1,468 +1,66 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Button,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import CompassSdkRn from '@walmart/compass-sdk-rn';
+import SwiftUI
+  import LivingDesign
 
-type FlagType = 'boolean' | 'double' | 'integer' | 'string';
-
-type SectionKey =
-  | 'generalBoolean'
-  | 'generalNumeric'
-  | 'text'
-  | 'navigation'
-  | 'mapUi'
-  | 'pins'
-  | 'offset';
-
-type Flag = {
-  id: string;
-  key: string;
-  name: string;
-  type: FlagType;
-  section: SectionKey;
-  parentKey?: string;
-  value: boolean | string;
-};
-
-type FlagGroup = {
-  section: SectionKey;
-  title: string;
-  flags: Flag[];
-};
-
-type StoreConfig = Record<string, any>;
-
-type FeatureFlagsViewProps = {
-  onClose: () => void;
-};
-
-const SECTION_META: { key: SectionKey; title: string }[] = [
-  { key: 'generalBoolean', title: 'Boolean Flags' },
-  { key: 'generalNumeric', title: 'Numeric Flags' },
-  { key: 'text', title: 'Text Flags' },
-  { key: 'navigation', title: 'Navigation Config' },
-  { key: 'mapUi', title: 'Map UI Config' },
-  { key: 'pins', title: 'Pins Config' },
-  { key: 'offset', title: 'Offset Config' },
-];
-
-const FeatureFlagsView: React.FC<FeatureFlagsViewProps> = ({ onClose }) => {
-  const [flags, setFlags] = useState<Flag[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [hasOverrides, setHasOverrides] = useState(false);
-  const [storeId, setStoreId] = useState<number | null>(null);
-
-  const groupedFlags = useMemo<FlagGroup[]>(() => {
-    return SECTION_META.map(section => ({
-      section: section.key,
-      title: section.title,
-      flags: flags.filter(flag => flag.section === section.key),
-    })).filter(group => group.flags.length > 0);
-  }, [flags]);
-
-  const refreshFlags = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [config, overridesApplied] = await Promise.all([
-        CompassSdkRn.getCurrentStoreConfig(),
-        CompassSdkRn.hasFeatureFlagOverridesApplied(),
-      ]);
-
-      setHasOverrides(overridesApplied);
-
-      if (!config) {
-        setFlags([]);
-        setStoreId(null);
-        setError('Store configuration is not available. Initialize Compass first.');
-      } else {
-        const { flags: parsedFlags, storeId: configStoreId } = buildFlags(config);
-        setFlags(parsedFlags);
-        setStoreId(
-          typeof configStoreId === 'number' && Number.isFinite(configStoreId)
-            ? configStoreId
-            : null
-        );
-        setError(null);
+  struct SnackbarDemoView: View {
+      var body: some View {
+          SnackbarDemoControllerWrapper()
+              .navigationTitle("LD Snackbar Demo")
+              .navigationBarTitleDisplayMode(.inline)
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message);
-      setFlags([]);
-      setStoreId(null);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refreshFlags();
-  }, [refreshFlags]);
-
-  const updateFlagValue = useCallback((id: string, value: boolean | string) => {
-    setFlags(current =>
-      current.map(flag => (flag.id === id ? { ...flag, value } : flag)),
-    );
-  }, []);
-
-  const handleApply = useCallback(async () => {
-    try {
-      const overrides = buildOverrides(flags);
-      await CompassSdkRn.applyFeatureFlagOverrides(overrides);
-      Alert.alert('Success', 'Local overrides applied.');
-      await refreshFlags();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      Alert.alert('Apply failed', message);
-    }
-  }, [flags, refreshFlags]);
-
-  const handleRevert = useCallback(async () => {
-    try {
-      await CompassSdkRn.revertFeatureFlagOverrides();
-      Alert.alert('Reverted', 'Local overrides cleared.');
-      await refreshFlags();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      Alert.alert('Revert failed', message);
-    }
-  }, [refreshFlags]);
-
-  return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>
-          {hasOverrides ? 'Feature Flags (mod)' : 'Feature Flags'}
-        </Text>
-        {storeId != null && (
-          <Text style={styles.storeLabel}>Store {storeId}</Text>
-        )}
-      </View>
-
-      <View style={styles.headerButtons}>
-        <Button title="Refresh" onPress={refreshFlags} />
-        <Button title="Revert" onPress={handleRevert} disabled={!hasOverrides} />
-        <Button title="Close" onPress={onClose} />
-      </View>
-
-      {loading ? (
-        <View style={styles.centerContent}>
-          <ActivityIndicator />
-        </View>
-      ) : error ? (
-        <View style={styles.centerContent}>
-          <Text style={styles.errorText}>{error}</Text>
-        </View>
-      ) : (
-        <>
-          <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-            {groupedFlags.map(group => (
-              <View key={group.section} style={styles.section}>
-                <Text style={styles.sectionTitle}>{group.title}</Text>
-                {group.flags.map(flag => (
-                  <View key={flag.id} style={styles.row}>
-                    <Text style={styles.flagLabel}>{flag.name}</Text>
-                    {flag.type === 'boolean' ? (
-                      <Switch
-                        value={Boolean(flag.value)}
-                        onValueChange={next => updateFlagValue(flag.id, next)}
-                      />
-                    ) : (
-                      <TextInput
-                        style={styles.input}
-                        value={String(flag.value ?? '')}
-                        onChangeText={text => updateFlagValue(flag.id, text)}
-                        keyboardType={flag.type === 'integer' ? 'number-pad' : 'decimal-pad'}
-                      />
-                    )}
-                  </View>
-                ))}
-              </View>
-            ))}
-          </ScrollView>
-
-          <View style={styles.footerButtons}>
-            <Button title="Apply" onPress={handleApply} />
-          </View>
-        </>
-      )}
-    </View>
-  );
-};
-
-function buildFlags(config: StoreConfig): { flags: Flag[]; storeId?: number } {
-  const flags: Flag[] = [];
-  const storeId = typeof config.storeId === 'number' ? config.storeId : undefined;
-
-  const boolFlag = (
-    name: string,
-    key: string,
-    value: unknown,
-    section: SectionKey,
-    parentKey?: string,
-  ) => {
-    flags.push({
-      id: `${parentKey ?? 'root'}:${key}`,
-      name,
-      key,
-      section,
-      parentKey,
-      type: 'boolean',
-      value: Boolean(value),
-    });
-  };
-
-  const doubleFlag = (
-    name: string,
-    key: string,
-    value: unknown,
-    section: SectionKey,
-    parentKey?: string,
-  ) => {
-    flags.push({
-      id: `${parentKey ?? 'root'}:${key}`,
-      name,
-      key,
-      section,
-      parentKey,
-      type: 'double',
-      value: formatNumber(value),
-    });
-  };
-
-  const intFlag = (
-    name: string,
-    key: string,
-    value: unknown,
-    section: SectionKey,
-    parentKey?: string,
-  ) => {
-    flags.push({
-      id: `${parentKey ?? 'root'}:${key}`,
-      name,
-      key,
-      section,
-      parentKey,
-      type: 'integer',
-      value: formatNumber(value, true),
-    });
-  };
-
-  const stringFlag = (
-    name: string,
-    key: string,
-    value: unknown,
-    section: SectionKey,
-    parentKey?: string,
-  ) => {
-    flags.push({
-      id: `${parentKey ?? 'root'}:${key}`,
-      name,
-      key,
-      section,
-      parentKey,
-      type: 'string',
-      value: value != null ? String(value) : '',
-    });
-  };
-
-  boolFlag('Blue Dot Enabled', 'bluedotEnabled', config.bluedotEnabled, 'generalBoolean');
-  boolFlag('Blue Dot Displayed', 'bluedotDisplayed', config.bluedotDisplayed, 'generalBoolean');
-  boolFlag('Dynamic Map Enabled', 'dynamicMapEnabled', config.dynamicMapEnabled, 'generalBoolean');
-  boolFlag('Zoom Control Enabled', 'zoomControlEnabled', config.zoomControlEnabled, 'generalBoolean');
-  boolFlag('Error Screens Enabled', 'errorScreensEnabled', config.errorScreensEnabled, 'generalBoolean');
-  boolFlag('Dynamic Map Rotation', 'dynamicMapRotationEnabled', config.dynamicMapRotationEnabled, 'generalBoolean');
-  boolFlag('Spinner Enabled', 'spinnerEnabled', config.spinnerEnabled, 'generalBoolean');
-  boolFlag('Use Background Service', 'useBackgroundService', config.useBackgroundService, 'generalBoolean');
-  boolFlag('Heart Beat In Location', 'heartbeatInLocation', config.heartbeatInLocation, 'generalBoolean');
-  boolFlag('Heart Beat In User', 'heartBeatInUser', config.heartBeatInUser, 'generalBoolean');
-  boolFlag('Navigation Enabled Flag', 'navigationEnabled', config.navigationEnabled, 'generalBoolean');
-  boolFlag('Valid', 'valid', config.valid, 'generalBoolean');
-  boolFlag('Analytics Enabled', 'analytics', config.analytics, 'generalBoolean');
-
-  doubleFlag('Background Service Timeout', 'backgroundServiceTimeout', config.backgroundServiceTimeout, 'generalNumeric');
-  doubleFlag('Geofence Check Timeout', 'geoFenceCheckTimeout', config.geoFenceCheckTimeout, 'generalNumeric');
-  doubleFlag('Positioning Session Timeout', 'positioningSessionTimeout', config.positioningSessionTimeout, 'generalNumeric');
-  doubleFlag('Geofence Radius', 'geofenceRadius', config.geofenceRadius, 'generalNumeric');
-  intFlag('Session Refresh Time', 'sessionRefreshTime', config.sessionRefreshTime, 'generalNumeric');
-  doubleFlag('Heartbeat Interval', 'heartbeatInterval', config.heartbeatInterval, 'generalNumeric');
-  doubleFlag('Batch Interval', 'batchInterval', config.batchInterval, 'generalNumeric');
-  doubleFlag('Latitude', 'latitude', config.latitude, 'generalNumeric');
-  doubleFlag('Longitude', 'longitude', config.longitude, 'generalNumeric');
-  doubleFlag('Created At', 'createdAt', config.createdAt, 'generalNumeric');
-  doubleFlag('Updated At', 'updatedAt', config.updatedAt, 'generalNumeric');
-  intFlag('Store ID', 'storeId', config.storeId, 'generalNumeric');
-
-  stringFlag('Map Type', 'mapType', config.mapType, 'text');
-  stringFlag('Supported Event List', 'supportedEventList', config.supportedEventList, 'text');
-
-  const navigationConfig = asDictionary(config.navigation);
-  boolFlag('Navigation Config Enabled', 'enabled', navigationConfig.enabled, 'navigation', 'navigation');
-  doubleFlag('Refresh Duration', 'refreshDuration', navigationConfig.refreshDuration, 'navigation', 'navigation');
-  boolFlag('Automatic Navigation Enabled', 'isAutomaticNavigation', navigationConfig.isAutomaticNavigation ?? true, 'navigation', 'navigation');
-
-  const mapUiConfig = asDictionary(config.mapUi);
-  boolFlag('Banner Enabled', 'bannerEnabled', mapUiConfig.bannerEnabled, 'mapUi', 'mapUi');
-  boolFlag('Snack Bar Enabled', 'snackBarEnabled', mapUiConfig.snackBarEnabled, 'mapUi', 'mapUi');
-  boolFlag(
-    'Pin Location Unavailable Banner',
-    'pinLocationUnavailableBannerEnabled',
-    mapUiConfig.pinLocationUnavailableBannerEnabled,
-    'mapUi',
-    'mapUi',
-  );
-
-  const pinsConfig = asDictionary(config.pins);
-  boolFlag('Action Alley Enabled', 'actionAlleyEnabled', pinsConfig.actionAlleyEnabled, 'pins', 'pins');
-  boolFlag('Group Pins Enabled', 'groupPinsEnabled', pinsConfig.groupPinsEnabled ?? true, 'pins', 'pins');
-
-  const offsetConfig = asDictionary(config.offset);
-  doubleFlag('Map Offset X', 'x', offsetConfig.x, 'offset', 'offset');
-  doubleFlag('Map Offset Y', 'y', offsetConfig.y, 'offset', 'offset');
-
-  return { flags, storeId };
-}
-
-function buildOverrides(flags: Flag[]): Record<string, any> {
-  return flags.reduce<Record<string, any>>((acc, flag) => {
-    const value = mapValueForOverride(flag);
-    if (flag.parentKey) {
-      const nested = acc[flag.parentKey] ?? {};
-      nested[flag.key] = value;
-      acc[flag.parentKey] = nested;
-    } else {
-      acc[flag.key] = value;
-    }
-    return acc;
-  }, {});
-}
-
-function mapValueForOverride(flag: Flag): any {
-  switch (flag.type) {
-    case 'boolean':
-      return Boolean(flag.value);
-    case 'integer': {
-      const parsed = parseInt(String(flag.value), 10);
-      return Number.isNaN(parsed) ? 0 : parsed;
-    }
-    case 'double': {
-      const parsed = parseFloat(String(flag.value));
-      return Number.isNaN(parsed) ? 0 : parsed;
-    }
-    default:
-      return String(flag.value ?? '');
-  }
-}
-
-function asDictionary(value: unknown): Record<string, any> {
-  if (value && typeof value === 'object') {
-    return value as Record<string, any>;
-  }
-  return {};
-}
-
-function formatNumber(value: unknown, forceInteger = false): string {
-  if (value == null) {
-    return '';
   }
 
-  const numberValue = typeof value === 'number' ? value : Number(value);
-  if (Number.isNaN(numberValue)) {
-    return forceInteger ? '' : '';
+  /// Wraps a plain UIKit view controller so we can use LD’s snackbar APIs
+  private struct SnackbarDemoControllerWrapper: UIViewControllerRepresentable {
+      func makeUIViewController(context: Context) -> SnackbarDemoViewController {
+          SnackbarDemoViewController()
+      }
+
+      func updateUIViewController(_ controller: SnackbarDemoViewController, context: Context) { }
   }
 
-  if (forceInteger) {
-    return Math.trunc(numberValue).toString();
+  private final class SnackbarDemoViewController: UIViewController {
+      private var snackbar: LivingDesign.LDSnackbar?
+
+      override func viewDidLoad() {
+          super.viewDidLoad()
+          view.backgroundColor = .systemBackground
+
+          let button = UIButton(type: .system)
+          button.translatesAutoresizingMaskIntoConstraints = false
+          button.setTitle("Show LD Snackbar", for: .normal)
+          button.titleLabel?.font = .preferredFont(forTextStyle: .headline)
+          button.addTarget(self, action: #selector(showSnackbar), for: .touchUpInside)
+
+          view.addSubview(button)
+          NSLayoutConstraint.activate([
+              button.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+              button.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+              button.heightAnchor.constraint(equalToConstant: 48),
+              button.widthAnchor.constraint(equalToConstant: 220)
+          ])
+      }
+
+      @objc private func showSnackbar() {
+          snackbar?.removeFromSuperview()
+
+          let model = LivingDesign.LDSnackbar.Model(
+              message: "Hello from LivingDesign!",
+              duration: 3.5
+          )
+
+          let snackbar = LivingDesign.LDSnackbar(dataModel: model)
+          snackbar.showSnackbar(in: view) { snackbar in
+              [
+                  snackbar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant:
+  16),
+                  snackbar.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor,
+  constant: -16),
+                  snackbar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant:
+  -16),
+                  snackbar.heightAnchor.constraint(greaterThanOrEqualToConstant: 50)
+              ]
+          }
+
+          self.snackbar = snackbar
+      }
   }
-
-  return Number.isInteger(numberValue)
-    ? numberValue.toString()
-    : numberValue.toString();
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
-  header: {
-    marginBottom: 8,
-  },
-  headerButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  footerButtons: {
-    paddingVertical: 12,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '600',
-  },
-  storeLabel: {
-    fontSize: 14,
-    color: '#555',
-    marginTop: 4,
-  },
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingBottom: 24,
-  },
-  section: {
-    marginBottom: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#ccc',
-    paddingBottom: 12,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  flagLabel: {
-    flex: 1,
-    fontSize: 14,
-    marginRight: 12,
-  },
-  input: {
-    width: 120,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 4,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    textAlign: 'right',
-  },
-  centerContent: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  errorText: {
-    color: '#d00',
-    textAlign: 'center',
-    paddingHorizontal: 16,
-  },
-});
-
-export default FeatureFlagsView;
