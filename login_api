@@ -1,66 +1,48 @@
-import SwiftUI
-  import LivingDesign
+let snackbar = LivingDesign.LDSnackbar(
+      dataModel: LivingDesign.LDSnackbar.Model(
+          message: LocalizedKey.selectPinBeforeRoute.localized,
+          duration: 30
+      ),
+      onDismiss: { [weak hostView] in
+          // Clean up any lingering shadow layers
+          DispatchQueue.main.async {
+              guard let hostView = hostView else { return }
 
-  struct SnackbarDemoView: View {
-      var body: some View {
-          SnackbarDemoControllerWrapper()
-              .navigationTitle("LD Snackbar Demo")
-              .navigationBarTitleDisplayMode(.inline)
-      }
-  }
+              // Remove shadow-related subviews that might be left behind
+              hostView.subviews.forEach { subview in
+                  let className = String(describing: type(of: subview))
+                  if className.contains("Shadow") ||
+                     className.contains("Elevation") ||
+                     className.contains("_LD") {
+                      // Check if it's not a legitimate view
+                      if subview.constraints.isEmpty && subview.subviews.isEmpty {
+                          subview.removeFromSuperview()
+                      }
+                  }
+              }
 
-  /// Wraps a plain UIKit view controller so we can use LD’s snackbar APIs
-  private struct SnackbarDemoControllerWrapper: UIViewControllerRepresentable {
-      func makeUIViewController(context: Context) -> SnackbarDemoViewController {
-          SnackbarDemoViewController()
-      }
-
-      func updateUIViewController(_ controller: SnackbarDemoViewController, context: Context) { }
-  }
-
-  private final class SnackbarDemoViewController: UIViewController {
-      private var snackbar: LivingDesign.LDSnackbar?
-
-      override func viewDidLoad() {
-          super.viewDidLoad()
-          view.backgroundColor = .systemBackground
-
-          let button = UIButton(type: .system)
-          button.translatesAutoresizingMaskIntoConstraints = false
-          button.setTitle("Show LD Snackbar", for: .normal)
-          button.titleLabel?.font = .preferredFont(forTextStyle: .headline)
-          button.addTarget(self, action: #selector(showSnackbar), for: .touchUpInside)
-
-          view.addSubview(button)
-          NSLayoutConstraint.activate([
-              button.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-              button.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-              button.heightAnchor.constraint(equalToConstant: 48),
-              button.widthAnchor.constraint(equalToConstant: 220)
-          ])
-      }
-
-      @objc private func showSnackbar() {
-          snackbar?.removeFromSuperview()
-
-          let model = LivingDesign.LDSnackbar.Model(
-              message: "Hello from LivingDesign!",
-              duration: 3.5
-          )
-
-          let snackbar = LivingDesign.LDSnackbar(dataModel: model)
-          snackbar.showSnackbar(in: view) { snackbar in
-              [
-                  snackbar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant:
-  16),
-                  snackbar.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor,
-  constant: -16),
-                  snackbar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant:
-  -16),
-                  snackbar.heightAnchor.constraint(greaterThanOrEqualToConstant: 50)
-              ]
+              // Force layout update
+              hostView.setNeedsLayout()
+              hostView.layoutIfNeeded()
           }
-
-          self.snackbar = snackbar
       }
+  )
+  snackbar.elevation = nil
+  snackbar.layer.masksToBounds = true
+
+  snackbar.showSnackbar(in: hostView) { snackbar in
+      [
+          snackbar.leadingAnchor.constraint(
+              equalTo: hostView.safeAreaLayoutGuide.leadingAnchor,
+              constant: LDSpacing.space16
+          ),
+          snackbar.trailingAnchor.constraint(
+              equalTo: hostView.safeAreaLayoutGuide.trailingAnchor,
+              constant: -LDSpacing.space16
+          ),
+          snackbar.bottomAnchor.constraint(
+              equalTo: hostView.safeAreaLayoutGuide.bottomAnchor,
+              constant: -LDSpacing.space16
+          )
+      ]
   }
