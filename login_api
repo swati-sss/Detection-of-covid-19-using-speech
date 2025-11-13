@@ -23,8 +23,9 @@ enum StoreMapError: Error {
 }
 
 private enum MapButtonColor {
-    static let accentBlue = UIColor(red: 0, green: 0.44, blue: 0.86, alpha: 1)
-    static let charcoal = UIColor(red: 0.18, green: 0.184, blue: 0.196, alpha: 1)
+    static let blue = UIColor(red: 0, green: 0.44, blue: 0.86, alpha: 1)
+    static let black = UIColor.black
+    static let gray = UIColor(red: 0.73, green: 0.73, blue: 0.75, alpha: 1)
 }
 
 protocol StoreMapsViewDelegate: AnyObject {
@@ -235,7 +236,7 @@ class StoreMapView: UIView, StoreMapsViewDelegate, UIGestureRecognizerDelegate {
         applyIconButtonStyle(
             mapCenterButton,
             image: Asset.Image.mapCenter.image,
-            iconColor: MapButtonColor.charcoal,
+            iconColor: MapButtonColor.gray,
             backgroundColor: .white
         )
         navigationButton.isHidden = true
@@ -244,7 +245,7 @@ class StoreMapView: UIView, StoreMapsViewDelegate, UIGestureRecognizerDelegate {
             navigationButton,
             image: Asset.Image.routePreviewStart.image,
             iconColor: .white,
-            backgroundColor: MapButtonColor.accentBlue
+            backgroundColor: MapButtonColor.blue
         )
         backgroundColor = .white
         translatesAutoresizingMaskIntoConstraints = false
@@ -537,7 +538,7 @@ private extension StoreMapView {
             return
         }
 
-        let iconColor = isCenterButtonClicked ? MapButtonColor.accentBlue : MapButtonColor.charcoal
+        let iconColor = isCenterButtonClicked ? MapButtonColor.blue : MapButtonColor.black
         DispatchQueue.dispatchToMainIfNeeded {
             self.mapCenterButton.isHidden = false
             self.applyIconButtonStyle(
@@ -567,8 +568,8 @@ private extension StoreMapView {
 
         DispatchQueue.dispatchToMainIfNeeded {
             self.navigationButton.isHidden = false
-            let iconColor = self.isNavigationButtonClicked ? MapButtonColor.charcoal : UIColor.white
-            let backgroundColor = self.isNavigationButtonClicked ? UIColor.white : MapButtonColor.accentBlue
+            let iconColor = self.isNavigationButtonClicked ? MapButtonColor.black : UIColor.white
+            let backgroundColor = self.isNavigationButtonClicked ? UIColor.white : MapButtonColor.blue
             let image = self.isNavigationButtonClicked ? Asset.Image.routePreviewStop.image : Asset.Image.routePreviewStart.image
             self.applyIconButtonStyle(
                 self.navigationButton,
