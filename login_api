@@ -1,34 +1,32 @@
-let snackbar = LivingDesign.LDSnackbar(
+// Create custom appearance without elevation
+  let tokens = LivingDesign.LDToken(
+      in: Bundle(for: LivingDesign.LDRootViewController.self),
+      for: "LDToken"
+  )
+  var customAppearance = LivingDesign.LDSnackbar.Appearance(tokens)
+  // Note: We can't modify the appearance struct directly since its properties are 'let'
+  // So we'll use the onDismiss callback to clean up
+
+  let snackbar = LivingDesign.LDSnackbar(
       dataModel: LivingDesign.LDSnackbar.Model(
           message: LocalizedKey.selectPinBeforeRoute.localized,
           duration: 30
       ),
-      onDismiss: { [weak hostView] in
-          // Clean up any lingering shadow layers
-          DispatchQueue.main.async {
-              guard let hostView = hostView else { return }
-
-              // Remove shadow-related subviews that might be left behind
-              hostView.subviews.forEach { subview in
-                  let className = String(describing: type(of: subview))
-                  if className.contains("Shadow") ||
-                     className.contains("Elevation") ||
-                     className.contains("_LD") {
-                      // Check if it's not a legitimate view
-                      if subview.constraints.isEmpty && subview.subviews.isEmpty {
-                          subview.removeFromSuperview()
-                      }
-                  }
+      onDismiss: { [weak self] in
+          // Force removal of any lingering shadow layers
+          self?.view.subviews.forEach { subview in
+              if String(describing: type(of: subview)).contains("Shadow") {
+                  subview.removeFromSuperview()
               }
-
-              // Force layout update
-              hostView.setNeedsLayout()
-              hostView.layoutIfNeeded()
           }
       }
   )
+
+  // Set elevation to nil BEFORE showing
   snackbar.elevation = nil
   snackbar.layer.masksToBounds = true
+  // Also try removing elevation explicitly
+  snackbar.removeElevation()
 
   snackbar.showSnackbar(in: hostView) { snackbar in
       [
