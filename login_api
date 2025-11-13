@@ -22,6 +22,11 @@ enum StoreMapError: Error {
     case noInternetConnection(Error)
 }
 
+private enum MapButtonColor {
+    static let accentBlue = UIColor(red: 0, green: 0.44, blue: 0.86, alpha: 1)
+    static let charcoal = UIColor(red: 0.18, green: 0.184, blue: 0.196, alpha: 1)
+}
+
 protocol StoreMapsViewDelegate: AnyObject {
     var webView: WKWebView { get }
     var isWebViewLoaded: Bool { get set}
@@ -227,8 +232,20 @@ class StoreMapView: UIView, StoreMapsViewDelegate, UIGestureRecognizerDelegate {
     func constructView() {
         mapCenterButton.isHidden = true
         mapCenterButton.addTarget(self, action: #selector(mapCenterButtonTapped), for: .touchUpInside)
+        applyIconButtonStyle(
+            mapCenterButton,
+            image: Asset.Image.mapCenter.image,
+            iconColor: MapButtonColor.charcoal,
+            backgroundColor: .white
+        )
         navigationButton.isHidden = true
         navigationButton.addTarget(self, action: #selector(navigationButtonTapped), for: .touchUpInside)
+        applyIconButtonStyle(
+            navigationButton,
+            image: Asset.Image.routePreviewStart.image,
+            iconColor: .white,
+            backgroundColor: MapButtonColor.accentBlue
+        )
         backgroundColor = .white
         translatesAutoresizingMaskIntoConstraints = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
@@ -520,14 +537,14 @@ private extension StoreMapView {
             return
         }
 
-        let color: LivingDesign.LDIconButton.Color = isCenterButtonClicked ? .default : .white
+        let iconColor = isCenterButtonClicked ? MapButtonColor.accentBlue : MapButtonColor.charcoal
         DispatchQueue.dispatchToMainIfNeeded {
             self.mapCenterButton.isHidden = false
-            self.mapCenterButton.dataModel = LivingDesign.LDIconButton.Model(
-                size: .large,
+            self.applyIconButtonStyle(
+                self.mapCenterButton,
                 image: Asset.Image.mapCenter.image,
-                color: color,
-                shape: .round
+                iconColor: iconColor,
+                backgroundColor: .white
             )
         }
     }
@@ -548,17 +565,67 @@ private extension StoreMapView {
             return
         }
 
-        let model = LivingDesign.LDIconButton.Model(
-            size: .large,
-            image: isNavigationButtonClicked ? Asset.Image.routePreviewStop.image : Asset.Image.routePreviewStart.image,
-            color: isNavigationButtonClicked ? .white : .default,
-            shape: .round
-        )
         DispatchQueue.dispatchToMainIfNeeded {
             self.navigationButton.isHidden = false
-            self.navigationButton.dataModel = model
+            let iconColor = self.isNavigationButtonClicked ? MapButtonColor.charcoal : UIColor.white
+            let backgroundColor = self.isNavigationButtonClicked ? UIColor.white : MapButtonColor.accentBlue
+            let image = self.isNavigationButtonClicked ? Asset.Image.routePreviewStop.image : Asset.Image.routePreviewStart.image
+            self.applyIconButtonStyle(
+                self.navigationButton,
+                image: image,
+                iconColor: iconColor,
+                backgroundColor: backgroundColor
+            )
             self.navigationButton.accessibilityIdentifier = self.isNavigationButtonClicked ? "routePreviewStop" : "routePreviewStart"
         }
+    }
+
+    private func applyIconButtonStyle(
+        _ button: LivingDesign.LDIconButton,
+        image: UIImage,
+        iconColor: UIColor,
+        backgroundColor: UIColor
+    ) {
+        let highlightedBackground = backgroundColor.withAlphaComponent(0.95)
+        let disabledBackground = backgroundColor.withAlphaComponent(0.5)
+        let highlightedIconColor = iconColor
+        let disabledIconColor = iconColor.withAlphaComponent(0.5)
+
+        let normalColors = LivingDesign.LDIconButton.Appearance.ButtonColors(
+            iconColor: iconColor,
+            backgroundColor: backgroundColor
+        )
+        let highlightedColors = LivingDesign.LDIconButton.Appearance.ButtonColors(
+            iconColor: highlightedIconColor,
+            backgroundColor: highlightedBackground
+        )
+        let disabledColors = LivingDesign.LDIconButton.Appearance.ButtonColors(
+            iconColor: disabledIconColor,
+            backgroundColor: disabledBackground
+        )
+
+        let variant = LivingDesign.LDIconButton.Appearance.ButtonVariant(
+            normal: normalColors,
+            highlighted: highlightedColors,
+            disabled: disabledColors
+        )
+
+        button.appearance = LivingDesign.LDIconButton.Appearance(normal: variant, white: variant)
+        button.dataModel = LivingDesign.LDIconButton.Model(
+            size: .large,
+            image: image,
+            color: .default,
+            shape: .round
+        )
+        applyFloatingShadow(to: button)
+    }
+
+    private func applyFloatingShadow(to button: UIView) {
+        button.layer.shadowColor = UIColor.black.cgColor
+        button.layer.shadowOpacity = 0.3
+        button.layer.shadowOffset = CGSize(width: 0, height: 2)
+        button.layer.shadowRadius = 4
+        button.layer.masksToBounds = false
     }
 
     func getZoomButtonModel(for actionType: ButtonModel.ActionType) -> ButtonModel {
