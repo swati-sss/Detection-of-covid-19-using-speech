@@ -1,46 +1,17 @@
-// Create custom appearance without elevation
-  let tokens = LivingDesign.LDToken(
-      in: Bundle(for: LivingDesign.LDRootViewController.self),
-      for: "LDToken"
-  )
-  var customAppearance = LivingDesign.LDSnackbar.Appearance(tokens)
-  // Note: We can't modify the appearance struct directly since its properties are 'let'
-  // So we'll use the onDismiss callback to clean up
+      if !UserDefaults.standard.bool(forKey: "didShowSnackBarTest") {
+          UserDefaults.standard.set(true, forKey: "didShowSnackBarTest")
 
-  let snackbar = LivingDesign.LDSnackbar(
-      dataModel: LivingDesign.LDSnackbar.Model(
-          message: LocalizedKey.selectPinBeforeRoute.localized,
-          duration: 30
-      ),
-      onDismiss: { [weak self] in
-          // Force removal of any lingering shadow layers
-          self?.view.subviews.forEach { subview in
-              if String(describing: type(of: subview)).contains("Shadow") {
-                  subview.removeFromSuperview()
-              }
-          }
-      }
-  )
-
-  // Set elevation to nil BEFORE showing
-  snackbar.elevation = nil
-  snackbar.layer.masksToBounds = true
-  // Also try removing elevation explicitly
-  snackbar.removeElevation()
-
-  snackbar.showSnackbar(in: hostView) { snackbar in
-      [
-          snackbar.leadingAnchor.constraint(
-              equalTo: hostView.safeAreaLayoutGuide.leadingAnchor,
-              constant: LDSpacing.space16
-          ),
-          snackbar.trailingAnchor.constraint(
-              equalTo: hostView.safeAreaLayoutGuide.trailingAnchor,
-              constant: -LDSpacing.space16
-          ),
-          snackbar.bottomAnchor.constraint(
-              equalTo: hostView.safeAreaLayoutGuide.bottomAnchor,
-              constant: -LDSpacing.space16
+          // Use the UIViewController convenience method instead
+          self.showLDSnackbar(
+              dataModel: LivingDesign.LDSnackbar.Model(
+                  message: LocalizedKey.selectPinBeforeRoute.localized,
+                  duration: 30
+              ),
+              additionalInsets: UIEdgeInsets(
+                  top: 0,
+                  left: LDSpacing.space16,
+                  bottom: LDSpacing.space16,
+                  right: LDSpacing.space16
+              )
           )
-      ]
-  }
+      }
