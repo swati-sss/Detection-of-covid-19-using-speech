@@ -591,9 +591,10 @@ private extension StoreMapView {
         size: LivingDesign.LDIconButton.Size = .large,
         shape: LivingDesign.LDIconButton.Shape = .round,
         cornerRadius: CGFloat? = nil,
-        applyShadow: Bool = true
+        applyShadow: Bool = true,
+        highlightedBackgroundColor: UIColor? = nil
     ) {
-        let highlightedBackground = backgroundColor.withAlphaComponent(0.95)
+        let highlightedBackground = highlightedBackgroundColor ?? backgroundColor.withAlphaComponent(0.95)
         let disabledBackground = backgroundColor.withAlphaComponent(0.5)
         let highlightedIconColor = iconColor
         let disabledIconColor = iconColor.withAlphaComponent(0.5)
@@ -646,16 +647,6 @@ private extension StoreMapView {
         button.layer.masksToBounds = false
     }
 
-    private func animateZoomButtonFeedback(_ button: UIView) {
-        UIView.animate(withDuration: 0.1, animations: {
-            button.backgroundColor = UIColor(red: 0.89, green: 0.894, blue: 0.898, alpha: 1)
-        }, completion: { _ in
-            UIView.animate(withDuration: 0.2) {
-                button.backgroundColor = .white
-            }
-        })
-    }
-
     func createZoomButton(actionType: ButtonModel.ActionType) -> LivingDesign.LDIconButton {
         let image = actionType == .zoomIn ? Asset.Image.zoomIn.image : Asset.Image.zoomOut.image
         let zoomButton = LivingDesign.LDIconButton(
@@ -669,7 +660,6 @@ private extension StoreMapView {
             self.webViewLoaderViewModel?.onStoreMapZoomChange(
                 zoomType: actionType == .zoomIn ? .zoomIn : .zoomOut, nil
             )
-            self.animateZoomButtonFeedback(zoomButton)
         }, for: .primaryActionTriggered)
         applyIconButtonStyle(
             zoomButton,
@@ -680,7 +670,8 @@ private extension StoreMapView {
             size: .medium,
             shape: .square,
             cornerRadius: 4,
-            applyShadow: false
+            applyShadow: false,
+            highlightedBackgroundColor: UIColor(red: 0.89, green: 0.894, blue: 0.898, alpha: 1)
         )
         zoomControlStackView.addArrangedSubview(zoomButton)
         return zoomButton
