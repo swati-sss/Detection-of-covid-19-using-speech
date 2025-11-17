@@ -1,5 +1,6 @@
 import WebKit
 import Combine
+import UIKit
 @_implementationOnly import LivingDesign
 
 typealias StoreMapsCompletion = () -> Void
@@ -267,9 +268,9 @@ class StoreMapView: UIView, StoreMapsViewDelegate, UIGestureRecognizerDelegate {
             locationStatusContainer.addArrangedSubview(locationActivityIndicator)
             locationStatusContainer.addArrangedSubview(locationStatusLabel)
         }
-        let zoomInButton = createZoomButton(with: getZoomButtonModel(for: ButtonModel.ActionType.zoomIn))
+        let zoomInButton = createZoomButton(actionType: .zoomIn)
         zoomControlStackView.addArrangedSubview(divider)
-        let zoomOutButton = createZoomButton(with: getZoomButtonModel(for: ButtonModel.ActionType.zoomOut))
+        let zoomOutButton = createZoomButton(actionType: .zoomOut)
         floorOneButton = createFloorButton(with: getFloorButtonModel(for: ButtonModel.ActionType.floorOne))
         floorTwoButton = createFloorButton(with: getFloorButtonModel(for: ButtonModel.ActionType.floorTwo))
         floorOneButton?.isSelected = true
@@ -297,7 +298,7 @@ class StoreMapView: UIView, StoreMapsViewDelegate, UIGestureRecognizerDelegate {
         ])
     }
 
-    func constructZoomControlConstraints(zoomInButton: CustomButton, zoomOutButton: CustomButton) {
+    func constructZoomControlConstraints(zoomInButton: LivingDesign.LDIconButton, zoomOutButton: LivingDesign.LDIconButton) {
         var constraints: [NSLayoutConstraint] = [
             zoomControlStackView.trailingAnchor.constraint(
                 equalTo: safeAreaLayoutGuide.trailingAnchor,
@@ -585,7 +586,10 @@ private extension StoreMapView {
         _ button: LivingDesign.LDIconButton,
         image: UIImage,
         iconColor: UIColor,
-        backgroundColor: UIColor
+        backgroundColor: UIColor,
+        inset: CGFloat = 12,
+        size: LivingDesign.LDIconButton.Size = .large,
+        applyShadow: Bool = true
     ) {
         let highlightedBackground = backgroundColor.withAlphaComponent(0.95)
         let disabledBackground = backgroundColor.withAlphaComponent(0.5)
@@ -613,55 +617,59 @@ private extension StoreMapView {
 
         button.appearance = LivingDesign.LDIconButton.Appearance(normal: variant, white: variant)
         button.dataModel = LivingDesign.LDIconButton.Model(
-            size: .large,
+            size: size,
             image: image,
             color: .default,
             shape: .round
         )
-        applyFloatingShadow(to: button)
+        button.contentEdgeInsets = UIEdgeInsets(top: inset, left: inset, bottom: inset, right: inset)
+        if applyShadow {
+            applyFloatingShadow(to: button)
+        } else {
+            button.layer.shadowOpacity = 0
+        }
     }
 
     private func applyFloatingShadow(to button: UIView) {
         button.layer.shadowColor = UIColor.black.cgColor
-        button.layer.shadowOpacity = 0.3
+        button.layer.shadowOpacity = 0.5
         button.layer.shadowOffset = CGSize(width: 0, height: 2)
         button.layer.shadowRadius = 4
         button.layer.masksToBounds = false
     }
 
-    func getZoomButtonModel(for actionType: ButtonModel.ActionType) -> ButtonModel {
-        let image = actionType == .zoomIn ?
-        Asset.Image.zoomIn.image : Asset.Image.zoomOut.image
-
-        return ButtonModel(
-            type: actionType,
-            backgroundColor: .white,
-            highlightedBackgroundColor: .gray,
-            image: image
-        )
+    private func animateZoomButtonFeedback(_ button: UIView) {
+        UIView.animate(withDuration: 0.1, animations: {
+            button.backgroundColor = UIColor(red: 0.89, green: 0.894, blue: 0.898, alpha: 1)
+        }, completion: { _ in
+            UIView.animate(withDuration: 0.2) {
+                button.backgroundColor = .white
+            }
+        })
     }
 
-    func createZoomButton(with model: ButtonModel) -> CustomButton {
-        let zoomButton = CustomButton(with: model) { [weak self] actionType in
+    func createZoomButton(actionType: ButtonModel.ActionType) -> LivingDesign.LDIconButton {
+        let image = actionType == .zoomIn ? Asset.Image.zoomIn.image : Asset.Image.zoomOut.image
+        let zoomButton = LivingDesign.LDIconButton(dataModel: LivingDesign.LDIconButton.Model(size: .medium, image: image))
+        zoomButton.translatesAutoresizingMaskIntoConstraints = false
+        zoomButton.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
             Log.debug("Zoom Button Tapped with actionType \(actionType)")
-            self?.resetCenterButtonAndStatus()
-            self?.webViewLoaderViewModel?.onStoreMapZoomChange(
+            self.resetCenterButtonAndStatus()
+            self.webViewLoaderViewModel?.onStoreMapZoomChange(
                 zoomType: actionType == .zoomIn ? .zoomIn : .zoomOut, nil
             )
-
-            _ = self?.zoomControlStackView.arrangedSubviews.map { ContainerView in
-                guard  let currentButton = ContainerView as? CustomButton else { return }
-                guard  currentButton.type == actionType else {
-                    currentButton.backgroundColor = UIColor.clear
-                    return
-                }
-                currentButton.backgroundColor =  UIColor(red: 0.89, green: 0.894, blue: 0.898, alpha: 1)
-
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    currentButton.backgroundColor = UIColor.clear
-                }
-            }
-        }
+            self.animateZoomButtonFeedback(zoomButton)
+        }, for: .primaryActionTriggered)
+        applyIconButtonStyle(
+            zoomButton,
+            image: image,
+            iconColor: MapButtonColor.black,
+            backgroundColor: .white,
+            inset: 8,
+            size: .medium,
+            applyShadow: false
+        )
         zoomControlStackView.addArrangedSubview(zoomButton)
         return zoomButton
     }
