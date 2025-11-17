@@ -589,6 +589,8 @@ private extension StoreMapView {
         backgroundColor: UIColor,
         inset: CGFloat = 12,
         size: LivingDesign.LDIconButton.Size = .large,
+        shape: LivingDesign.LDIconButton.Shape = .round,
+        cornerRadius: CGFloat? = nil,
         applyShadow: Bool = true
     ) {
         let highlightedBackground = backgroundColor.withAlphaComponent(0.95)
@@ -620,9 +622,15 @@ private extension StoreMapView {
             size: size,
             image: image,
             color: .default,
-            shape: .round
+            shape: shape
         )
         button.contentEdgeInsets = UIEdgeInsets(top: inset, left: inset, bottom: inset, right: inset)
+        if let cornerRadius {
+            button.layer.cornerRadius = cornerRadius
+            button.clipsToBounds = true
+        } else {
+            button.clipsToBounds = false
+        }
         if applyShadow {
             applyFloatingShadow(to: button)
         } else {
@@ -650,7 +658,9 @@ private extension StoreMapView {
 
     func createZoomButton(actionType: ButtonModel.ActionType) -> LivingDesign.LDIconButton {
         let image = actionType == .zoomIn ? Asset.Image.zoomIn.image : Asset.Image.zoomOut.image
-        let zoomButton = LivingDesign.LDIconButton(dataModel: LivingDesign.LDIconButton.Model(size: .medium, image: image))
+        let zoomButton = LivingDesign.LDIconButton(
+            dataModel: LivingDesign.LDIconButton.Model(size: .medium, image: image, shape: .square)
+        )
         zoomButton.translatesAutoresizingMaskIntoConstraints = false
         zoomButton.addAction(UIAction { [weak self] _ in
             guard let self else { return }
@@ -668,6 +678,8 @@ private extension StoreMapView {
             backgroundColor: .white,
             inset: 8,
             size: .medium,
+            shape: .square,
+            cornerRadius: 4,
             applyShadow: false
         )
         zoomControlStackView.addArrangedSubview(zoomButton)
