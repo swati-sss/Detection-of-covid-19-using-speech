@@ -51,7 +51,7 @@ extension StoreMapLoaderViewModel {
 
     private func handleMapLoadedResponse(_ mapLoaded: MapLoaded) {
         mapLoadedData = mapLoaded
-        mapViewDelegate?.toggleLoadingView(true)
+        mapViewDelegate?.setLoadingVisible(true)
         // Loading this particular map version is needed for POI_CLICKED click event or it wont work
         request(.version(VersionRequest(version: StoreMapConfig.webAppVersion)))
         startTimerForMapDataReadyRequest()
@@ -62,7 +62,7 @@ extension StoreMapLoaderViewModel {
         Log.debug("Coordinate Space Discovery Tap Requested is enabled")
         statusService.emitMapStatusEvent(isSuccess: true)
         removeUserPositionIndicator()
-        mapViewDelegate?.floorControlStackView.isHidden = !(mapLoaded.floors.count > 1)
+        mapViewDelegate?.setFloorControlsVisible(mapLoaded.floors.count > 1)
     }
 
     private func handleCoordinateSpaceDiscoveryTap(_ coordinateSpaceDiscoveryTap: CoordinateSpaceDiscoveryTap) {
@@ -70,7 +70,7 @@ extension StoreMapLoaderViewModel {
         onMapLongPressed(coordPayLoad: coordinateSpaceDiscoveryTap)
     }
 
-    private func handlePinsActionAlleyRenderedResponse(_ message: PinsActionAlleyRenderedResponse) {
+    private func handlePinsActionAlleyRenderedResponse(_ message: PinRenderedMessage) {
         Log.debug("pinsActionAlleyRenderedResponse with message: \(message)")
         zoomOnLocation(topLeft: message.topLeft, bottomRight: message.bottomRight)
     }
@@ -435,7 +435,7 @@ extension StoreMapLoaderViewModel {
     func zoomToMapCenter() {
         Log.debug("zoom To MapCenter")
         hasMapViewZoomed = true
-        mapViewDelegate?.toggleLoadingView(false)
+        mapViewDelegate?.setLoadingVisible(false)
         DispatchQueue.main.asyncAfter(deadline: .now() + StoreMapConfig.zoomPinAnimationDelay) { [weak self] in
             guard let self = self else { return }
             self.mapViewDelegate?.zoomOut(with: self.preferredZoomScale)
@@ -453,7 +453,7 @@ extension StoreMapLoaderViewModel {
         guard (mapLoadedData?.floors.count ?? 1) > 1 && configuration.pin != nil else { return }
         Log.debug("zoom To Pins")
         hasMapViewZoomed = true
-        mapViewDelegate?.toggleLoadingView(false)
+        mapViewDelegate?.setLoadingVisible(false)
         guard let renderedPinsZoomRect = renderedPinsZoomRect else {
             zoomToMapCenter()
             return
