@@ -156,6 +156,109 @@ extension StoreMapLoaderViewModel {
         indoorNavigationService.navigationSessionState?.hasPinsOnMap = hasPinsOnMap
         mapViewDelegate?.refreshNavigationButtonState(hasPinsOnMap)
     }
+
+    func renderFeatureLocationPinsIfNeeded(for pinRenderedMessage: PinRenderedMessage) {
+        guard let pins = pinRenderedMessage.pins,
+              !pins.isEmpty,
+              pinsConfig.actionAlleyEnabled else { return }
+
+        let errorPins = pins
+            .filter(\.shouldFetchData)
+            .filter { $0.errorData != nil }
+        let aisleIdList = errorPins.map { "\(($0.zone ?? "").uppercased()).\($0.aisle ?? 0).\($0.section ?? 0)" }
+
+        guard !aisleIdList.isEmpty else {
+            Log.debug("No valid aisle IDs found for feature locations.")
+            return
+        }
+
+        assetService.fetchFeatureLocations(forAisleIds: aisleIdList) { [weak self] results in
+            guard let self = self else { return }
+
+            let pinsToDraw = DrawPinWithZone.from(
+                points: results,
+                type: PinIdentifier.actionAlleyPin.rawValue,
+                offset: self.assetService.storeConfigOffset
+            )
+
+            if !pinsToDraw.isEmpty {
+                Log.info(
+                   """
+                   • Fetched feature locations for aisle IDs:
+                   \(aisleIdList)
+                   • Response wasp points with aisle Ids:
+                   \(results)
+                   • Converted store map pins:
+                   \(pinsToDraw)
+                   """
+                )
+                request(.renderActionAlleyPinRequested(PinListWithZone(pins: pinsToDraw)))
+            }
+        }
+    }
+
+    func updateNavigationServicesIfNeeded(for pinRenderedMessage: PinRenderedMessage) {
+        // Check if there are pins to process
+        guard !isStaticPathVisible,
+              let pins = pinRenderedMessage.pins,
+              !pins.isEmpty,
+              navigationEnabled == true else {
+            // Hide navigation button if no pins or disabled navigation
+            mapViewDelegate?.refreshNavigationButtonState(false)
+            return
+        }
+
+        // Reset navigation waypoints
+        indoorNavigationService.resetWaypoints(shouldClearBlueDot: false, shouldClearPinList: true)
+
+        // Filter pins that are selected and valid
+        let validPins = pins.filter { $0.selected && $0.errorData == nil }
+
+        // Convert valid pins to Point list
+        let pointList = validPins.compactMap { $0.location.map { Point(x: $0.x, y: $0.y) } }
+
+        // Check if there are any valid pins
+        let hasValidPin = !validPins.isEmpty
+
+        // Only update if navigation is not in progress
+        let shouldUpdatePinList = indoorNavigationService.navigationSessionState?.navigationStatus != .inProgress
+
+        // Prepare render request if needed
+        let renderPinsRequest: RenderPinsRequest? = shouldUpdatePinList ? .init(
+            pins: pins, pinGroupingEnabled: pinsConfig.groupPinsEnabled) : nil
+
+        // Update navigation state with new pins
+        self.indoorNavigationService.updateNavigationState(
+            currentLocation: nil,
+            pinWaypoint: nil,
+            renderRequest: renderPinsRequest,
+            pinListUpdate: nil
+        )
+
+        mapViewDelegate?.handleNavigationInterruption(for: 1, status: navigationSessionState?.navigationStatus)
+
+        // If there are valid pins
+        if hasValidPin {
+            if let navigationConfig = self.indoorNavigationService.navigationConfig,
+               navigationConfig.isAutomaticNavigation {
+                self.indoorNavigationService.navigationSessionState?.navigationStatus = .inProgress
+                setPathfindingEnabled(true, duration: 0.2, force: true)
+            }
+            // Add navigation route for these pins
+            updateNavigationRoute(
+                with: pointList,
+                at: 1,
+                using: nil,
+                renderPinsRequest: renderPinsRequest
+            )
+        } else {
+            // Reset navigation session state if no valid pins
+            indoorNavigationService.resetNavigationSessionState()
+        }
+
+        // Update navigation button state
+        refreshNavigationState(withPins: pins)
+    }
 }
 
 internal extension StoreMapLoaderViewModel {
