@@ -1,454 +1,521 @@
+import XCTest
+@testable import compass_sdk_ios
 import WebKit
-import Combine
 import LivingDesign
-import UIKit
 
-typealias StoreMapsCompletion = () -> Void
-
-enum ZoomActionType {
-    case zoomIn
-    case zoomOut
-}
-
-enum FloorLevelType: String {
-    case floorOne = "1"
-    case floorTwo = "2"
-}
-
-enum StoreMapError: Error {
-    case invalidStatusCode(Int)
-    case invalidResponse
-    case failedToLoadContent(Error)
-    case mapLoadTimedOut
-    case noInternetConnection(Error)
-}
-
-internal enum MapButtonColor {
-    static let blue = UIColor(red: 0, green: 0.44, blue: 0.86, alpha: 1)
-    static let black = UIColor.black
-    static let gray = UIColor(red: 0.73, green: 0.73, blue: 0.75, alpha: 1)
-}
-
-protocol StoreMapsViewDelegate: AnyObject {
-    var webView: WKWebView { get }
-    var isWebViewLoaded: Bool { get set}
-    var isCenterButtonClicked: Bool { get set}
-    var isLocationStatusVisible: Bool { get set }
-
-    func zoomOnRegion(with rect: CGRect, zoomAnimationDelay: TimeInterval, completion: StoreMapsCompletion?)
-    func toggleLoadingView(_ shouldShow: Bool)
-    func reloadWebView()
-    func zoomOut(with zoomScale: CGFloat?, _ completion: @escaping (() -> Void))
-    func zoom(to rect: CGRect, isAnimated: Bool)
-    func setZoomScale(to zoomScale: CGFloat, zoomType: ZoomActionType, _ completion: StoreMapsCompletion?)
-    func handleNavigationInterruption(for index: Int, status: NavigationStatus?)
-    func refreshNavigationButtonState(_ isVisible: Bool?)
-    func previewSetUp(isStaticPathVisible: Bool)
-    func updateZoomInteraction(enabled: Bool)
-    func displayPinErrorBanner(_ enabled: Bool)
-    func setFloorControlsVisible(_ isVisible: Bool)
-    func setLoadingVisible(_ shouldShow: Bool)
-}
-
-extension StoreMapsViewDelegate {
-    func zoomOut(with zoomScale: CGFloat? = nil, _ completion: @escaping (() -> Void) = {}) {
-        zoomOut(with: zoomScale, completion)
-    }
-}
-
-class StoreMapView: UIView, StoreMapsViewDelegate, UIGestureRecognizerDelegate {
-    struct Options {
-        let dynamicMapEnabled: Bool
-        let zoomControlEnabled: Bool
-        let errorScreensEnabled: Bool
-        let spinnerEnabled: Bool
-        let dynamicMapRotationEnabled: Bool
-        let navigationConfig: NavigationConfig
-        let mapUiConfig: MapUiConfig
-        let pinsConfig: PinsConfig
-    }
-
-    internal var options: Options
-    internal var isCenterButtonClicked: Bool
-    internal var isNavigationButtonClicked: Bool
-    weak var webViewLoaderViewModel: StoreMapViewActionable?
-    let webView: WKWebView
-    internal var currentIsPositionLocked: Bool?
-    internal var lastNavigationButtonVisibility: Bool?
-    private var snackbar: LivingDesign.LDSnackbar?
-    var mapCenterButton: LivingDesign.LDIconButton = {
-        let button = LivingDesign.LDIconButton(
-            dataModel: LivingDesign.LDIconButton.Model(
-                size: .large,
-                image: Asset.Image.mapCenter.image,
-                color: .white,
-                shape: .round
-            )
-        )
-        button.translatesAutoresizingMaskIntoConstraints = false
-        return button
-    }()
-
-    internal let navigationButton: LivingDesign.LDIconButton = {
-        let button = LivingDesign.LDIconButton(
-            dataModel: LivingDesign.LDIconButton.Model(
-                size: .large,
-                image: Asset.Image.routePreviewStart.image,
-                color: .default,
-                shape: .round
-            )
-        )
-        button.translatesAutoresizingMaskIntoConstraints = false
-        return button
-    }()
-
-    internal let buttonStackView: UIStackView = {
-        let stackView = UIStackView()
-        stackView.translatesAutoresizingMaskIntoConstraints = false
-        stackView.axis = .vertical
-        stackView.spacing = LDSpacing.space8
-        stackView.alignment = .center
-        return stackView
-    }()
-
-    var isLocationStatusVisible: Bool = false {
-        didSet {
-            locationStatusLabel.isHidden = !isLocationStatusVisible
-            locationStatusContainer.isHidden = !isLocationStatusVisible
-            Log.debug("Location status visibility set to: \(isLocationStatusVisible)")
-        }
-    }
-
-    internal let locationStatusLabel: UILabel = {
-        let label = UILabel()
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.text = LocalizedKey.findingLocation.localized
-        label.textAlignment = .left
-        label.font = UIFont.bogle(ofSize: LDSpacing.space12, weight: .bold)
-        label.numberOfLines = 0
-        label.textColor = .white
-        return label
-    }()
-
-    internal let locationActivityIndicator: LivingDesign.LDSpinner = {
-        let locationActivityIndicator = LDSpinner(style: .inverse, size: .large)
-        locationActivityIndicator.translatesAutoresizingMaskIntoConstraints = false
-        return locationActivityIndicator
-    }()
-
-    internal let locationStatusContainer: UIStackView = {
-        let stack = UIStackView()
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.axis = .horizontal
-        stack.spacing = 8
-        stack.alignment = .center
-        stack.distribution = .fill
-        stack.isHidden = true
-        stack.backgroundColor = UIColor(red: 0, green: 0.176, blue: 0.345, alpha: 1)
-        stack.layer.cornerRadius = 12
-        stack.layer.masksToBounds = true
-        stack.layoutMargins = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
-        stack.isLayoutMarginsRelativeArrangement = true
-        return stack
-    }()
-
-    internal var zoomControlStackView: UIStackView = {
-        let stackView = UIStackView(axis: .vertical)
-        stackView.distribution = .fill
-        stackView.backgroundColor = .white
-        stackView.layer.cornerRadius = 5
-        stackView.layer.shadowColor = UIColor.black.cgColor
-        stackView.layer.shadowOpacity = 0.3
-        stackView.layer.shadowOffset = CGSize(width: 1, height: 1)
-        stackView.layer.shadowRadius = 5
-        stackView.layer.masksToBounds = false
-        return stackView
-    }()
-
-    internal var floorControlStackView: UIStackView = {
-        let stackView = UIStackView(axis: .vertical)
-        stackView.distribution = .equalSpacing
-        stackView.backgroundColor = .white
-        stackView.layer.cornerRadius = 5
-        stackView.layer.shadowColor = UIColor.black.cgColor
-        stackView.layer.shadowOpacity = 0.3
-        stackView.layer.shadowOffset = CGSize(width: 1, height: 1)
-        stackView.layer.shadowRadius = 5
-        stackView.layer.masksToBounds = false
-        return stackView
-    }()
-
-    internal let pinErrorBanner: LDAlert = {
-        return LDAlert(dataModel: LDAlert.Model(message: NSAttributedString(string: ""), messageType: .warning))
-    }()
-
-    var floorOneButton: CustomButton?
-    var floorTwoButton: CustomButton?
-    internal let divider = LDDivider()
-    var isWebViewLoaded = false
-    @Published var mapState: StoreMapState?
-
-    public init(webViewLoaderViewModel: StoreMapViewActionable, options: Options) {
-        self.webViewLoaderViewModel = webViewLoaderViewModel
-        let configuration = WKWebViewConfiguration()
-        let controller = WKUserContentController()
-        controller.add(webViewLoaderViewModel.messageParser, name: "deviceBridge")
-        configuration.userContentController = controller
-        configuration.allowsInlineMediaPlayback = false
-        configuration.allowsAirPlayForMediaPlayback = false
-        configuration.allowsPictureInPictureMediaPlayback = false
-        configuration.preferences.isFraudulentWebsiteWarningEnabled = false
-        configuration.dataDetectorTypes = []
-
-        let wkWebView = WKWebView(frame: .zero, configuration: configuration)
-        wkWebView.scrollView.isDirectionalLockEnabled = false
-        wkWebView.scrollView.showsHorizontalScrollIndicator = false
-        wkWebView.scrollView.showsVerticalScrollIndicator = false
-        wkWebView.scrollView.contentInset = .zero
-        wkWebView.scrollView.contentOffset = .zero
-        wkWebView.scrollView.minimumZoomScale = StoreMapZoomLevel.first.minimumZoomScale
-        wkWebView.scrollView.maximumZoomScale = StoreMapZoomLevel.fourth.maximumZoomScale
-        wkWebView.scrollView.scrollsToTop = false
-        wkWebView.isOpaque = true
-        wkWebView.accessibilityElementsHidden = false
-        self.options = options
-        self.isCenterButtonClicked = options.dynamicMapEnabled
-        self.isNavigationButtonClicked = false
-        webView = wkWebView
-        super.init(frame: .zero)
-        webViewLoaderViewModel.mapViewDelegate = self
-        constructView()
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    deinit {
-        webView.uiDelegate = nil
-        webView.navigationDelegate = nil
-        webView.scrollView.delegate = nil
-    }
-
-    func constructView() {
-        mapCenterButton.isHidden = true
-        mapCenterButton.addTarget(self, action: #selector(mapCenterButtonTapped), for: .touchUpInside)
-        applyIconButtonStyle(
-            mapCenterButton,
-            image: Asset.Image.mapCenter.image,
-            iconColor: MapButtonColor.gray,
-            backgroundColor: .white
-        )
-        navigationButton.isHidden = true
-        navigationButton.addTarget(self, action: #selector(navigationButtonTapped), for: .touchUpInside)
-        applyIconButtonStyle(
-            navigationButton,
-            image: Asset.Image.routePreviewStart.image,
-            iconColor: .white,
-            backgroundColor: MapButtonColor.blue
-        )
-        backgroundColor = .white
-        translatesAutoresizingMaskIntoConstraints = false
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
-        webView.navigationDelegate = self
-        webView.scrollView.delegate = self
-        addAutoLayoutSubview(webView)
-        addAutoLayoutSubview(buttonStackView)
-        buttonStackView.addArrangedSubview(mapCenterButton)
-        buttonStackView.addArrangedSubview(navigationButton)
-        addAutoLayoutSubview(zoomControlStackView)
-        addAutoLayoutSubview(floorControlStackView)
-        if options.mapUiConfig.pinLocationUnavailableBannerEnabled == true {
-            configurePinErrorBanner()
-            addAutoLayoutSubview(pinErrorBanner)
-        }
-        if options.mapUiConfig.bannerEnabled == true {
-            addAutoLayoutSubview(locationStatusContainer)
-            locationStatusContainer.addArrangedSubview(locationActivityIndicator)
-            locationStatusContainer.addArrangedSubview(locationStatusLabel)
-        }
-        let zoomInButton = createZoomButton(actionType: .zoomIn)
-        zoomControlStackView.addArrangedSubview(divider)
-        let zoomOutButton = createZoomButton(actionType: .zoomOut)
-        floorOneButton = createFloorButton(with: getFloorButtonModel(for: ButtonModel.ActionType.floorOne))
-        floorTwoButton = createFloorButton(with: getFloorButtonModel(for: ButtonModel.ActionType.floorTwo))
-        floorOneButton?.isSelected = true
-        floorTwoButton?.isSelected = false
-        constructZoomControlConstraints(zoomInButton: zoomInButton, zoomOutButton: zoomOutButton)
-        constructFloorControlConstraints()
-        constructPinErrorBannerConstraints()
-        constructButtonStackViewConstraints()
-        constructWebViewConstraints()
-
-        // check zoomControlEnabled feature flag
-        zoomControlStackView.isHidden = !options.zoomControlEnabled
-    }
-
-    func reloadWebView() {
-        Analytics.telemetry(payload: TelemetryAnalytics(event: DisplayMap.DISPLAY_MAP_REQUESTED.rawValue))
-#if DEBUG
-        if let localURL = CompassDebugOverrides.localMapURL {
-            if FileManager.default.fileExists(atPath: localURL.path) {
-                Log.info("Loading map from local HTML: \(localURL)")
-                webView.loadFileURL(localURL, allowingReadAccessTo: localURL.deletingLastPathComponent())
-                return
-            } else {
-                Log.warning("Local map HTML not found at path: \(localURL.path). Falling back to backend map.")
-                CompassDebugOverrides.localMapURL = nil
-            }
-        }
-#endif
-        guard let request = APIPath.customStoreMapRequest ?? webViewLoaderViewModel?.getMapURLRequest() else {
-            Analytics.telemetry(payload: TelemetryAnalytics(
-                isError: true,
-                event: DisplayMap.DISPLAY_MAP_ERROR_INVALID_CONTAINER.rawValue
-            ))
-            return
-        }
-        setMapState(.loading(true))
-        webView.load(request)
-
-        disableTextSelection()
-
-        // Extract headers from the request
-        let headers = request.allHTTPHeaderFields ?? [:]
-        let isCustom = (APIPath.customStoreMapRequest != nil)
-
-        Log.info("""
-                 - Request Info -
-                 URL Type: \(isCustom ? "Custom" : "Default")
-                 URL: \(String(describing: request.url))
-                 Method: \(request.httpMethod ?? "GET")
-                 Body: \(String(data: request.httpBody ?? Data(), encoding: .utf8) ?? "nil")
-                 Headers:
-                 \(headers.map { "\($0.key): \($0.value)" }.joined(separator: "\n"))
-                 """)
+class MockMapViewDelegate: StoreMapsViewDelegate, TestMockable {
+    func previewSetUp(isStaticPathVisible: Bool) {
+        
     }
 
     func updateZoomInteraction(enabled: Bool) {
-        webView.scrollView.isUserInteractionEnabled = enabled
+
     }
 
-    func constructPinErrorBannerConstraints() {
-        guard options.mapUiConfig.pinLocationUnavailableBannerEnabled == true else { return }
-        NSLayoutConstraint.activate([
-            pinErrorBanner.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: LDSpacing.space16),
-            pinErrorBanner.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor,
-                                                    constant: LDSpacing.space16),
-            pinErrorBanner.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor,
-                                                     constant: -LDSpacing.space16)
-        ])
+    func displayPinErrorBanner(_ enabled: Bool) {
+
     }
 
-    func updateButtons(isPositionLocked: Bool = true) {
-        guard isPositionLocked != currentIsPositionLocked else { return }
+    var isLocationStatusVisible: Bool = false
 
-        currentIsPositionLocked = isPositionLocked
-        updateMapCenterButton()
-        updateNavigationButton()
+    func handleNavigationInterruption(for index: Int, status: compass_sdk_ios.NavigationStatus?) {
+        // Mock implementation
+    }
+
+    func refreshNavigationButtonState(_ isVisible: Bool?) {
+        // Mock implementation
+    }
+
+    var dynamicMapEnabled: Bool = true
+    var isCenterButtonClicked: Bool = true
+    var webView: WKWebView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+    var isWebViewLoaded: Bool = true
+
+    var _zoomRenderedPinsCalled = false
+    var _toggleLoadingViewCalled = false
+    var _reloadWebViewCalled = false
+    var _zoomCalled = false
+    var _setZoomScaleCalled = false
+    var _zoomOutCalled = false
+    var _isMapButtonClicked = false
+
+    func zoomOnRegion(with rect: CGRect, zoomAnimationDelay: TimeInterval, completion: compass_sdk_ios.StoreMapsCompletion?) {
+        _zoomRenderedPinsCalled = true
+    }
+
+    func toggleLoadingView(_ shouldShow: Bool) {
+        _toggleLoadingViewCalled = true
+    }
+
+    func reloadWebView() {
+        _reloadWebViewCalled = true
+    }
+
+    func zoom(to rect: CGRect, isAnimated: Bool) {
+        _zoomCalled = true
+    }
+
+    func zoomOut(with zoomScale: CGFloat?, _ completion: @escaping (() -> Void)) {
+        _zoomOutCalled = true
+    }
+
+    func setZoomScale(to zoomScale: CGFloat, zoomType: compass_sdk_ios.ZoomActionType, _ completion: compass_sdk_ios.StoreMapsCompletion?) {
+        _setZoomScaleCalled = true
+        completion?()
+    }
+
+    func _resetMock() {
+        _zoomRenderedPinsCalled = false
+        _toggleLoadingViewCalled = false
+        _reloadWebViewCalled = false
+        _zoomCalled = false
+        _setZoomScaleCalled = false
+        _zoomOutCalled = false
+    }
+
+    func setFloorControlsVisible(_ isVisible: Bool) {}
+
+    func setLoadingVisible(_ shouldShow: Bool) {
+        _toggleLoadingViewCalled = true
     }
 }
 
-extension StoreMapView {
-    func previewSetUp(isStaticPathVisible: Bool) {
-        buttonStackView.isHidden = isStaticPathVisible
-        if options.zoomControlEnabled {
-            zoomControlStackView.isHidden = isStaticPathVisible
-        }
+class MockMessageParser: NSObject, MessageParsing, TestMockable {
+    var delegate: (any MessageParserDelegate)?
+    var _shouldFail = false
+    var _expectedResponse: MessageResponse = .mapLoaded(MapLoaded(floors: ["1", "2"]))
 
-        if let isPositionLocked = currentIsPositionLocked, !isPositionLocked {
-            isLocationStatusVisible = !isStaticPathVisible
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if _shouldFail {
+            delegate?.messageParser(self, didFailWithError: StoreMapDecodingError(defaultValue: .none, model: "", error: TestData.error, errorMessage: "Mock error"))
+        } else {
+            delegate?.messageParser(self, didParseMessageResponse: _expectedResponse)
         }
+    }
+
+    func _resetMock() {
+        _shouldFail = false
+        _expectedResponse = .mapLoaded(MapLoaded(floors: ["1", "2"]))
     }
 }
 
-internal extension StoreMapView {
-    func applyIconButtonStyle(
-        _ button: LivingDesign.LDIconButton,
-        image: UIImage,
-        iconColor: UIColor,
-        backgroundColor: UIColor,
-        inset: CGFloat = 12,
-        size: LivingDesign.LDIconButton.Size = .medium,
-        shape: LivingDesign.LDIconButton.Shape = .round,
-        cornerRadius: CGFloat? = nil,
-        applyShadow: Bool = true,
-        highlightedBackgroundColor: UIColor? = nil
-    ) {
-        let highlightedBackground = highlightedBackgroundColor ?? backgroundColor.withAlphaComponent(0.95)
-        let disabledBackground = backgroundColor.withAlphaComponent(0.5)
-        let highlightedIconColor = iconColor
-        let disabledIconColor = iconColor.withAlphaComponent(0.5)
+final class StoreMapLoaderViewModelTests: XCTestCase {
+    private var messageSender: MockMessageSender!
+    private var serviceLocator: MockServiceLocator!
+    private var storeMapLoaderViewModel: StoreMapLoaderViewModel!
+    private var messageParser: MockMessageParser!
+    private var mapViewDelegate: MockMapViewDelegate!
 
-        let normalColors = LivingDesign.LDIconButton.Appearance.ButtonColors(
-            iconColor: iconColor,
-            backgroundColor: backgroundColor
-        )
-        let highlightedColors = LivingDesign.LDIconButton.Appearance.ButtonColors(
-            iconColor: highlightedIconColor,
-            backgroundColor: highlightedBackground
-        )
-        let disabledColors = LivingDesign.LDIconButton.Appearance.ButtonColors(
-            iconColor: disabledIconColor,
-            backgroundColor: disabledBackground
-        )
-
-        let variant = LivingDesign.LDIconButton.Appearance.ButtonVariant(
-            normal: normalColors,
-            highlighted: highlightedColors,
-            disabled: disabledColors
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        let workflow =  Workflow(id: "sample_app_id", type: "sample_app_flow", value: "sa_val")
+        Analytics.workflow = workflow
+        serviceLocator = MockServiceLocator()
+        messageSender = serviceLocator.getWebViewMessageSender() as? MockMessageSender
+        messageParser = serviceLocator.getWebViewMessageParser() as? MockMessageParser
+        storeMapLoaderViewModel = StoreMapLoaderViewModel(
+            blueDotMode: .visible,
+            pinsConfig: PinsConfig(),
+            navigationConfig: NavigationConfig(enabled: false, refreshDuration: 0.0),
+            serviceLocator: serviceLocator,
+            zoomAnalyticsLogger: ZoomAnalyticsLogger(
+                buttonZoomScale: 1.0,
+                pnchZoomScale: 1.0,
+                buttonZoomInTaps: 2,
+                buttonZoomOutTaps: 2,
+                pinchZoomInActions: 3,
+                pinchZoomOutActions: 4,
+                workflow: workflow
+            )
         )
 
-        button.appearance = LivingDesign.LDIconButton.Appearance(normal: variant, white: variant)
-        button.dataModel = LivingDesign.LDIconButton.Model(
-            size: size,
-            image: image,
-            color: .default,
-            shape: shape
-        )
-        button.contentEdgeInsets = UIEdgeInsets(top: inset, left: inset, bottom: inset, right: inset)
-        if let cornerRadius {
-            button.layer.cornerRadius = cornerRadius
-            button.clipsToBounds = true
-        } else {
-            button.clipsToBounds = false
-        }
-        if applyShadow {
-            applyFloatingShadow(to: button)
-        } else {
-            button.layer.shadowOpacity = 0
-        }
+        mapViewDelegate = MockMapViewDelegate()
+        storeMapLoaderViewModel.mapViewDelegate = mapViewDelegate
     }
 
-    func applyFloatingShadow(to button: UIView) {
-        button.layer.shadowColor = UIColor.black.cgColor
-        button.layer.shadowOpacity = 0.5
-        button.layer.shadowOffset = CGSize(width: 0, height: 2)
-        button.layer.shadowRadius = 4
-        button.layer.masksToBounds = false
+    override func tearDownWithError() throws {
+        mapViewDelegate._resetMock()
+        serviceLocator._resetMock()
+        storeMapLoaderViewModel = nil
+        serviceLocator = nil
+        try super.tearDownWithError()
     }
 
-    func setupLocationStatusConstraints(constraints: inout [NSLayoutConstraint]) {
-        guard options.mapUiConfig.bannerEnabled else { return }
+    func testViewDidAppear() {
+        messageParser.userContentController(WKUserContentController(), didReceive: WKScriptMessage())
+        storeMapLoaderViewModel.viewDidAppear()
+        XCTAssert(serviceLocator.getMapFocusManager().isMapViewPresent.value)
+    }
 
-        constraints += [
-            locationStatusContainer.topAnchor.constraint(
-                equalTo: safeAreaLayoutGuide.topAnchor, constant: LDSpacing.space8),
-            locationStatusContainer.leadingAnchor.constraint(
-                greaterThanOrEqualTo: safeAreaLayoutGuide.leadingAnchor, constant: 60),
-            locationStatusContainer.trailingAnchor.constraint(
-                lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -60),
-            locationStatusContainer.centerXAnchor.constraint(equalTo: centerXAnchor)
-        ]
+    func testViewDidAppearBluDotModeNone() {
+        (serviceLocator.getMapFocusManager() as? MockMapFocusManager)?.isMapViewPresent.value = false
+        storeMapLoaderViewModel = StoreMapLoaderViewModel(
+            blueDotMode: .none,
+            pinsConfig: PinsConfig(),
+            navigationConfig: NavigationConfig(enabled: false, refreshDuration: 0.0),
+            serviceLocator: serviceLocator
+        )
+        storeMapLoaderViewModel.viewDidAppear()
+        XCTAssertFalse(serviceLocator.getMapFocusManager().isMapViewPresent.value)
+    }
 
-        NSLayoutConstraint.activate([
-            locationActivityIndicator.widthAnchor.constraint(equalToConstant: LDSpacing.space24),
-            locationActivityIndicator.heightAnchor.constraint(equalToConstant: LDSpacing.space24)
-        ])
+    func testViewWillDisappear() {
+        serviceLocator.mapFocusManager?.isMapViewPresent.value = true
+        storeMapLoaderViewModel.viewWillDisappear()
+        XCTAssertFalse(serviceLocator.getMapFocusManager().isMapViewPresent.value)
+    }
 
-        locationStatusContainer.setContentHuggingPriority(.required, for: .horizontal)
-        locationStatusContainer.setContentCompressionResistancePriority(.required, for: .horizontal)
-        locationStatusContainer.setContentHuggingPriority(.required, for: .vertical)
-        locationStatusContainer.setContentCompressionResistancePriority(.required, for: .vertical)
+    func testViewWillDisappearBlueDotNone() {
+        storeMapLoaderViewModel = StoreMapLoaderViewModel(
+            blueDotMode: .none,
+            pinsConfig: PinsConfig(),
+            navigationConfig: NavigationConfig(enabled: false, refreshDuration: 0.0),
+            serviceLocator: serviceLocator
+        )
+        serviceLocator.mapFocusManager?.isMapViewPresent.value = true
+        storeMapLoaderViewModel.viewWillDisappear()
+        XCTAssert(serviceLocator.getMapFocusManager().isMapViewPresent.value)
+    }
+
+    func testDidConstructView() {
+        mapViewDelegate.isWebViewLoaded = true
+        storeMapLoaderViewModel.didConstructView()
+        XCTAssert(mapViewDelegate._reloadWebViewCalled)
+    }
+
+    func testDidLoadWebView() {
+        let expectation = expectation(description: #function)
+        messageParser.userContentController(WKUserContentController(), didReceive: WKScriptMessage())
+        messageParser._expectedResponse = .mapData(MapData(mapBoundaries: .zero, poi: [], restRoomCount: 0, departments: []))
+        messageParser.userContentController(WKUserContentController(), didReceive: WKScriptMessage())
+        mapViewDelegate.isWebViewLoaded = true
+        storeMapLoaderViewModel.configuration = StoreMapView.Configuration(isPinSelectionEnabled: false ,pin: Pin(type: .aisleSection),preferredFloor: "1")
+        storeMapLoaderViewModel.didLoadWebView()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.25) { [mapViewDelegate, expectation] in
+            XCTAssert(mapViewDelegate!._toggleLoadingViewCalled)
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 3.0)
+    }
+
+    func testUpdateZoomLevel() {
+        messageSender.sentMessages = []
+        let workflow =  Workflow(id: "sample_app_id_1", type: "sample_app_flow_1", value: "sa_val")
+        Analytics.workflow = workflow
+        storeMapLoaderViewModel.updateZoomLevel(with: 2.5)
+        XCTAssert(messageSender.sentMessages.contains(.zoomLevelChange(ZoomLevelChangeRequest(zoom: 4))))
+    }
+
+    func testClearRenderedPin() {
+        messageSender.sentMessages = []
+        storeMapLoaderViewModel.clearRenderedPin(mapConfig: MapConfig(resetZoom: true))
+        XCTAssert(messageSender.sentMessages.contains(.renderPins(RenderPinsRequest([]))))
+        XCTAssert(messageSender.sentMessages.contains(.renderXYLocationPinRequested(PinList(pins: []))))
+    }
+
+    func testHandleError() {
+        let expectation = expectation(description: #function)
+        var statusService = serviceLocator.getStatusService()
+        statusService.eventEmitterHandler = { eventEmitter in
+            guard let mapStatusEventEmitter = eventEmitter as? MapStatusEventEmitter else {
+                return
+            }
+
+            var dict = mapStatusEventEmitter.toDictionary()
+            dict["eventType"] = nil
+            XCTAssertEqual(mapStatusEventEmitter.eventType, .mapStatusEventEmitter)
+            XCTAssertEqual((dict as! [String: AnyHashable]), ["success": false, "errorCode": "", "errorMessage": ""])
+            expectation.fulfill()
+        }
+        storeMapLoaderViewModel.handleError()
+        waitForExpectations(timeout: 2.0)
+    }
+
+    func testZoomOut() {
+        let expectation = expectation(description: #function)
+        messageSender.sentMessages = []
+        mapViewDelegate.isCenterButtonClicked = false
+        storeMapLoaderViewModel.zoomOut()
+        XCTAssert(messageSender.sentMessages.contains(.zoomLevelChange(.init(zoom: 0))))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+            XCTAssert(self.mapViewDelegate!._zoomOutCalled)
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 5.0)
+    }
+
+    func testRenderPins() {
+        messageSender.sentMessages = []
+        let renderPinsRequest = RenderPinsRequest([Pin(type: .aisleSection)])
+        storeMapLoaderViewModel.renderPins(renderPinsRequest, config: DisplayPinConfig(enableManualPinDrop: false))
+        XCTAssert(messageSender.sentMessages.contains(.renderPins(renderPinsRequest)))
+    }
+
+    func testRenderPinsFromPoints() {
+        messageSender.sentMessages = []
+        storeMapLoaderViewModel.renderPins(from: [CGPoint(x: 2, y: 234)], config: DisplayPinConfig(enableManualPinDrop: false))
+        XCTAssert(messageSender.sentMessages.contains(.renderXYLocationPinRequested(PinList(pins: [DrawPin(type: "xy-pin-location", x: 2.0, y: -234.0, location: Point(x: 2.0, y: -234.0),errorData: nil)]))))
+    }
+
+    func testUpdateUserPosition() {
+        messageSender.sentMessages = []
+        storeMapLoaderViewModel.updateUserPosition(x: 2, y: 980, accuracy: 43)
+        XCTAssert(messageSender.sentMessages.contains(.showUserLocation(UserPosition(x: 2, y: 980, ringRadius: 43))))
+    }
+
+    func testUpdateUserRotation() {
+        messageSender.sentMessages = []
+        storeMapLoaderViewModel.updateUserRotation(angle: 213.77, rotateMap: false)
+        XCTAssert(messageSender.sentMessages.contains(.rotateUser(UserRotation(angle: 213.77, rotateMap: false))))
+    }
+
+    func testOnStoreMapZoomChange() {
+        let expectation = expectation(description: #function)
+        storeMapLoaderViewModel.onStoreMapZoomChange(zoomType: .zoomIn, {
+            XCTAssert(self.mapViewDelegate._setZoomScaleCalled)
+            XCTAssertTrue(((self.storeMapLoaderViewModel.mapViewDelegate?.isCenterButtonClicked) != nil))
+            expectation.fulfill()
+        })
+        waitForExpectations(timeout: 2.0)
+    }
+
+    func testOnStoreMapFloorChange() {
+        messageSender.sentMessages = []
+        storeMapLoaderViewModel.onStoreMapFloorChange(levelType:  .floorTwo, nil)
+        XCTAssert(self.messageSender.sentMessages.contains(.floorLevelChange(.init(floor: "2"))))
+    }
+
+    func testDidParseMessage() {
+        let expectation = expectation(description: #function)
+        messageSender.sentMessages = []
+        messageParser._expectedResponse = .mapLoaded(MapLoaded(floors: ["1"]))
+        var statusService = serviceLocator.getStatusService()
+        statusService.eventEmitterHandler = { eventEmitter in
+            guard let mapStatusEventEmitter = eventEmitter as? MapStatusEventEmitter else {
+                return
+            }
+
+            var dict = mapStatusEventEmitter.toDictionary()
+            dict["eventType"] = nil
+            XCTAssertEqual(mapStatusEventEmitter.eventType, .mapStatusEventEmitter)
+            XCTAssertEqual((dict as! [String: AnyHashable]), ["success": true, "errorCode": "", "errorMessage": ""])
+            expectation.fulfill()
+        }
+        storeMapLoaderViewModel.messageParser(messageParser, didParseMessageResponse: .mapLoaded(MapLoaded(floors: ["B", "G", "1", "M", "2"])))
+        XCTAssert(messageSender.sentMessages.contains(.version(.init(version: StoreMapConfig.webAppVersion))))
+        XCTAssert(messageSender.sentMessages.contains(.mapData))
+        XCTAssert(messageSender.sentMessages.contains(.coordinateSpaceDiscoveryTapRequested(CoordinateSpaceDiscoveryTapRequest(enabled: true))))
+        waitForExpectations(timeout: 2.0)
+    }
+
+    func testPinClickedParseMessage() {
+        let expectation = expectation(description: #function)
+        let pinClicked = MessageResponse.pinClicked(
+            PinClicked(pinRect: Rect(cgRect: CGRect(x: 1.0,
+                                                    y: 1.0,
+                                                    width: 10.0,
+                                                    height: 10.0)),
+                       data: .init(
+                        zone: "A",
+                        aisle: 8,
+                        section: 3,
+                        floor: 0,
+                        count: 1,
+                        selected: true,
+                        isSeasonal: false
+                       )))
+        messageSender.sentMessages = []
+        messageParser._expectedResponse = pinClicked
+        var statusService = serviceLocator.getStatusService()
+        statusService.eventEmitterHandler = { eventEmitter in
+            guard let pinClickedEventEmitter = eventEmitter as? PinClickedEventEmitter else {
+                return
+            }
+
+            var dict = pinClickedEventEmitter.toDictionary()
+            dict["eventType"] = nil
+            XCTAssertEqual(pinClickedEventEmitter.eventType, .pinClickedEventEmitter)
+            expectation.fulfill()
+        }
+        storeMapLoaderViewModel.messageParser(messageParser, didParseMessageResponse: pinClicked)
+        waitForExpectations(timeout: 2.0)
+    }
+
+    func testMessageParserDidFailWithError() {
+        messageParser.delegate?.messageParser(messageParser, didFailWithError: StoreMapDecodingError(defaultValue: .mapLoaded(MapLoaded(floors: ["1"])), model: "test_model", error: TestData.error, errorMessage: "test_error"))
+        XCTAssert(messageSender.sentMessages.contains(.version(.init(version: StoreMapConfig.webAppVersion))))
+        XCTAssert(messageSender.sentMessages.contains(.mapData))
+        XCTAssert(messageSender.sentMessages.contains(.coordinateSpaceDiscoveryTapRequested(CoordinateSpaceDiscoveryTapRequest(enabled: true))))
+    }
+
+    func testHandleCoordinateSpaceDiscoveryTapped() {
+        messageSender.sentMessages = []
+        storeMapLoaderViewModel.renderPins(RenderPinsRequest([]), config: DisplayPinConfig(enableManualPinDrop: true))
+        messageParser._expectedResponse = .coordinateSpaceDiscoveryTap(CoordinateSpaceDiscoveryTap(screenSpace: Point(x: 1, y: 1), svgSpace: Point(x: 20, y: 20)))
+        let statusService = serviceLocator.getStatusService()
+        messageParser.userContentController(WKUserContentController(), didReceive: WKScriptMessage())
+        statusService.emitBootstrapEvent(description: "test")
+        XCTAssert(messageSender.sentMessages.contains(.renderXYLocationPinRequested(PinList(pins: [DrawPin(type: "xy-pin-location", x: 20, y: 20, location: Point(x: 20, y: 20),errorData: nil)]))))
+    }
+
+    func testHandlePinRenderedMessage() {
+        let expectation = expectation(description: #function)
+        messageSender.sentMessages = []
+        messageParser._expectedResponse = .pinRenderedMessage(PinRenderedMessage(newPinsRendered: true, pins: [Pin(type: .aisleSection)]))
+        var stausService = serviceLocator.getStatusService()
+        stausService.eventEmitterHandler = { eventEmitter in
+            guard let pinDropEventEmitter = eventEmitter as? PinDropEventEmitter else {
+                return
+            }
+
+            let dict = pinDropEventEmitter.toDictionary()
+            XCTAssert(pinDropEventEmitter.eventType == .aislesPinListEventEmitter)
+            XCTAssert(dict["idType"] as! String == "assets")
+            XCTAssert(dict["longPressed"] as! Bool == false)
+            XCTAssert(dict["mapType"] as! String == "WalmartMap")
+            expectation.fulfill()
+        }
+        messageParser.userContentController(WKUserContentController(), didReceive: WKScriptMessage())
+        waitForExpectations(timeout: 2.0)
+    }
+
+    func testHandlePinsActionAlleyRenderedMessage() {
+        messageSender.sentMessages = []
+        storeMapLoaderViewModel.renderPins(from: [], config: DisplayPinConfig(enableManualPinDrop: false, resetZoom: true, shouldZoomOnPins: true))
+        messageParser._expectedResponse = .pinsActionAlleyRenderedResponse(PinRenderedMessage(newPinsRendered: true, pins: [Pin(type: .aisleSection)]))
+        messageParser.userContentController(WKUserContentController(), didReceive: WKScriptMessage())
+        XCTAssert(mapViewDelegate._zoomRenderedPinsCalled)
+    }
+
+    func testHandlePinRenderedCYMessage() {
+        messageSender.sentMessages = []
+        storeMapLoaderViewModel.renderPins(from: [], config: DisplayPinConfig(enableManualPinDrop: false, resetZoom: true, shouldZoomOnPins: true))
+        messageParser._expectedResponse = .pinXYRenderedMessage(PinXYRenderedMessage(newPinsRendered: true,topLeft: Point(x: 0, y: 0), bottomRight: Point(x: 100, y: 100), xyLocationPins: [DrawPin(type: "xy-pin-location", x: 29, y: 73, location: Point(x: 29, y: 73),errorData: nil)], pins: [DrawPin(type: "xy-pin-location", x: 29, y: 73, location: Point(x: 29, y: 73),errorData: nil)]))
+        messageParser.userContentController(WKUserContentController(), didReceive: WKScriptMessage())
+        XCTAssert(mapViewDelegate._zoomRenderedPinsCalled)
+    }
+
+    func test_getMapURLRequest_shouldGetValidMapURLRequest() {
+
+        let urlRequest = storeMapLoaderViewModel.getMapURLRequest()
+        let urlString = "https://developer.api.us.stg.walmart.com/api-proxy/service/COMPASS/SERVICE/v1/instore-map/store/0/map"
+        XCTAssertNotNil(urlRequest, "URLRequest is nil")
+        XCTAssertNotNil(urlRequest!.url, "URL is nil")
+        XCTAssertEqual(urlRequest!.url!.absoluteString, urlString)
+    }
+
+    func test_cacheAndBootstrapAsset_withCoordinateSpaceDiscoveryTapped_shouldBootstrap() {
+        messageSender.sentMessages = []
+        storeMapLoaderViewModel.renderPins(RenderPinsRequest([]), config: DisplayPinConfig(enableManualPinDrop: true))
+        messageParser._expectedResponse = .coordinateSpaceDiscoveryTap(CoordinateSpaceDiscoveryTap(screenSpace: Point(x: 1, y: 1), svgSpace: Point(x: 20, y: 20)))
+        let statusService = serviceLocator.getStatusService()
+        messageParser.userContentController(WKUserContentController(), didReceive: WKScriptMessage())
+        statusService.emitBootstrapEvent(description: "test")
+        XCTAssert(messageSender.sentMessages.contains(.renderXYLocationPinRequested(PinList(pins: [DrawPin(type: "xy-pin-location", x: 20, y: 20, location: Point(x: 20, y: 20),errorData: nil)]))))
+    }
+
+    func test_cacheAndBootstrapAsset_withCoordinateSpaceDiscoveryTapped_shouldNotBootstrap() {
+        serviceLocator.eventService?._shouldFail = true
+        UserDefaults.standard.setValue(["test123"], forKey: UserDefaultsKey.uuidList.rawValue)
+        test_cacheAndBootstrapAsset_withCoordinateSpaceDiscoveryTapped_shouldBootstrap()
+        messageParser.userContentController(WKUserContentController(), didReceive: WKScriptMessage())
+        XCTAssert(messageSender.sentMessages.contains(.renderXYLocationPinRequested(PinList(pins: [DrawPin(type: "xy-pin-location", x: 20, y: 20, location: Point(x: 20, y: 20),errorData: nil)]))))
+        UserDefaults.standard.removeObject(forKey: UserDefaultsKey.uuidList.rawValue)
+    }
+
+
+    func test_encodeGeneric_withCoordinateSpaceDiscoveryTapped_shouldBootstrap() {
+        messageSender.sentMessages = []
+        serviceLocator.assetService?.idType = .generic
+        storeMapLoaderViewModel.renderPins(RenderPinsRequest([]), config: DisplayPinConfig(enableManualPinDrop: true))
+        messageParser._expectedResponse = .coordinateSpaceDiscoveryTap(CoordinateSpaceDiscoveryTap(screenSpace: Point(x: 1, y: 1), svgSpace: Point(x: 20, y: 20)))
+        let statusService = serviceLocator.getStatusService()
+        messageParser.userContentController(WKUserContentController(), didReceive: WKScriptMessage())
+        statusService.emitBootstrapEvent(description: "test")
+        XCTAssert(messageSender.sentMessages.contains(.renderXYLocationPinRequested(PinList(pins: [DrawPin(type: "xy-pin-location", x: 0, y: 0, location: Point(x: 0, y: 0),errorData: nil)]))))
+    }
+
+    func test_getUpdateScale_shouldZoomOut() {
+        let expectation = expectation(description: #function)
+        let workflow =  Workflow(id: "sample_app_id_1", type: "sample_app_flow", value: "sa_val")
+        Analytics.workflow = workflow
+        storeMapLoaderViewModel.onStoreMapZoomChange(zoomType: .zoomOut, {
+            XCTAssert(self.mapViewDelegate._setZoomScaleCalled)
+            expectation.fulfill()
+        })
+        waitForExpectations(timeout: 2.0)
+    }
+    func testUpdateUserLoading() {
+           messageSender.sentMessages = []
+           // Test with percentage = 0 (should send 1)
+           storeMapLoaderViewModel.updateUserLoading(percentage: 0)
+           XCTAssert(messageSender.sentMessages.contains(.showUserLoading(UserLoading(percentage: 1))))
+           // Test with percentage = 50 (should send 50)
+           storeMapLoaderViewModel.updateUserLoading(percentage: 50)
+           XCTAssert(messageSender.sentMessages.contains(.showUserLoading(UserLoading(percentage: 50))))
+       }
+    
+    func testHandleUserLocationRenderedMessage() {
+        messageSender.sentMessages = []
+        let expectation = expectation(description: #function)
+        let topLeft = Point(x: 10, y: 20)
+        let bottomRight = Point(x: 100, y: 200)
+        let userLocationRenderedMessage = UserLocationRenderedMessage(topLeft: topLeft, bottomRight: bottomRight)
+        mapViewDelegate._zoomRenderedPinsCalled = false
+        storeMapLoaderViewModel.messageParser(messageParser, didParseMessageResponse: .userLocationRenderedMessage(userLocationRenderedMessage))
+        // Wait for async zoomOnRegion
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            XCTAssert(self.mapViewDelegate._zoomRenderedPinsCalled)
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 2.0)
+    }
+    
+//    func testZoomToPins_withRenderedPinsZoomRect_shouldCallZoomOnRegion() {
+//            // Arrange
+//            let pin = Pin(type: .aisleSection)
+//            storeMapLoaderViewModel.configuration = StoreMapView.Configuration(isPinSelectionEnabled: false, pin: pin, preferredFloor: "1")
+//            // Simulate mapLoadedData with >1 floor
+//            let mapLoaded = MapLoaded(floors: ["1", "2"])
+//            // Use key paths to set private properties via reflection
+//            let mapLoadedDataKey = \StoreMapLoaderViewModel.mapLoadedData
+//            let renderedPinsZoomRectKey = \StoreMapLoaderViewModel.renderedPinsZoomRect
+//            storeMapLoaderViewModel[keyPath: mapLoadedDataKey] = mapLoaded
+//            let rect = CGRect(x: 10, y: 10, width: 100, height: 100)
+//            storeMapLoaderViewModel[keyPath: renderedPinsZoomRectKey] = rect
+//            mapViewDelegate._zoomRenderedPinsCalled = false
+//            // Act
+//            storeMapLoaderViewModel.zoomToPins()
+//            // Assert
+//            XCTAssertTrue(mapViewDelegate._zoomRenderedPinsCalled, "zoomOnRegion should be called when renderedPinsZoomRect is set")
+//        }
+    
+    func testMakeZoomRect_widthLessThanMinimum_shouldExpandAndRecenterX() {
+        // Arrange
+        let viewModel = StoreMapLoaderViewModel(
+            blueDotMode: .visible,
+            pinsConfig: PinsConfig(),
+            navigationConfig: NavigationConfig(),
+            serviceLocator: serviceLocator
+        )
+        let mockDelegate = MockMapViewDelegate()
+        let mockWebView = WKWebView(frame: CGRect(x: 0, y: 0, width: 200, height: 300))
+        mockDelegate.webView = mockWebView
+        viewModel.mapViewDelegate = mockDelegate
+        // width = 40, minimumZoomWidth = 100
+        let topLeft = CGPoint(x: 10, y: 10)
+        let bottomRight = CGPoint(x: 50, y: 50)
+        let scale: CGFloat = 2.0 // minimumZoomWidth = 200/2 = 100
+        // Act
+        let rect = viewModel.makeZoomRect(topLeft: topLeft, bottomRight: bottomRight, scale: scale)
+        // Assert
+        XCTAssertEqual(rect.width, 100, accuracy: 0.01)
+        // The original x was -22 (10-32), so recentering should move it left
+        // The new origin.x should be -22 - (100-40)/2 = -22 - 30 = -52
+        // But if origin.x < 0, it will be clamped to 0 and width reduced
+        XCTAssertEqual(rect.origin.x, 0, accuracy: 0.01)
+        // The width should be reduced by the amount origin.x was negative (52), so 100-52=48
+        // But since the minimum width is enforced, the final width should be 100
+        // So, the test checks that the minimum width logic and recentering are covered
     }
 }
