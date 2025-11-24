@@ -1,285 +1,460 @@
-import Foundation
+import WebKit
 import Combine
-import UIKit
 import LivingDesign
+import UIKit
 
-// MARK: - StoreMapState Enum
+typealias StoreMapsCompletion = () -> Void
 
-enum StoreMapState {
-    case loading(Bool) // Indicates if the map is loading.
-    case warning       // Represents a warning state.
-    case error         // Represents an error state
+enum ZoomActionType {
+    case zoomIn
+    case zoomOut
 }
 
-// MARK: - MapStateModel Struct
+enum FloorLevelType: String {
+    case floorOne = "1"
+    case floorTwo = "2"
+}
 
-struct MapStateModel {
-    // Warning State Properties
-    var warningImage: UIImage?
-    var warningText: String
-    var warningTryAgainText: String
-    var warningButtonIcon: LDIconValue
-    var warningButtonText: String
+enum StoreMapError: Error {
+    case invalidStatusCode(Int)
+    case invalidResponse
+    case failedToLoadContent(Error)
+    case mapLoadTimedOut
+    case noInternetConnection(Error)
+}
 
-    // Error State Properties
-    var errorImage: UIImage?
-    var errorText: String
-    var errorTryAgainText: String
-    var errorButtonText: String
+internal enum MapButtonColor {
+    static let blue = UIColor(red: 0, green: 0.44, blue: 0.86, alpha: 1)
+    static let black = UIColor.black
+    static let gray = UIColor(red: 0.73, green: 0.73, blue: 0.75, alpha: 1)
+}
 
-    init(warningImage: UIImage? = Asset.Image.mapWarning.image,
-         warningText: String = LocalizedKey.mapNotAvailableCheckInternet.localized,
-         warningTryAgainText: String = LocalizedKey.mapNotAvailable.localized,
-         warningButtonIcon: LDIconValue = .primitive(.refresh),
-         warningButtonText: String = LocalizedKey.reload.localized,
-         errorImage: UIImage? = Asset.Image.mapError.image,
-         errorText: String = LocalizedKey.errorLoadingMap.localized,
-         errorTryAgainText: String = LocalizedKey.errorLoadingMapTryAgain.localized,
-         errorButtonText: String = LocalizedKey.reloadMap.localized) {
-        self.warningImage = warningImage
-        self.warningText = warningText
-        self.warningTryAgainText = warningTryAgainText
-        self.warningButtonIcon = warningButtonIcon
-        self.warningButtonText = warningButtonText
-        self.errorImage = errorImage
-        self.errorText = errorText
-        self.errorTryAgainText = errorTryAgainText
-        self.errorButtonText = errorButtonText
+protocol StoreMapsViewDelegate: AnyObject {
+    var webView: WKWebView { get }
+    var isWebViewLoaded: Bool { get set}
+    var isCenterButtonClicked: Bool { get set}
+    var isLocationStatusVisible: Bool { get set }
+
+    func zoomOnRegion(with rect: CGRect, zoomAnimationDelay: TimeInterval, completion: StoreMapsCompletion?)
+    func toggleLoadingView(_ shouldShow: Bool)
+    func reloadWebView()
+    func zoomOut(with zoomScale: CGFloat?, _ completion: @escaping (() -> Void))
+    func zoom(to rect: CGRect, isAnimated: Bool)
+    func setZoomScale(to zoomScale: CGFloat, zoomType: ZoomActionType, _ completion: StoreMapsCompletion?)
+    func handleNavigationInterruption(for index: Int, status: NavigationStatus?)
+    func refreshNavigationButtonState(_ isVisible: Bool?)
+    func previewSetUp(isStaticPathVisible: Bool)
+    func updateZoomInteraction(enabled: Bool)
+    func displayPinErrorBanner(_ enabled: Bool)
+    func mapLoadingDidStart()
+    func mapLoadingDidFinish()
+    func didUpdateFloorCount(_ count: Int)
+}
+
+extension StoreMapsViewDelegate {
+    func zoomOut(with zoomScale: CGFloat? = nil, _ completion: @escaping (() -> Void) = {}) {
+        zoomOut(with: zoomScale, completion)
     }
+
+    func mapLoadingDidStart() {}
+    func mapLoadingDidFinish() {}
+    func didUpdateFloorCount(_ count: Int) {}
 }
 
-// MARK: - StoreMapReloadDelegate Protocol
+class StoreMapView: UIView, StoreMapsViewDelegate, UIGestureRecognizerDelegate {
+    struct Options {
+        let dynamicMapEnabled: Bool
+        let zoomControlEnabled: Bool
+        let errorScreensEnabled: Bool
+        let spinnerEnabled: Bool
+        let dynamicMapRotationEnabled: Bool
+        let navigationConfig: NavigationConfig
+        let mapUiConfig: MapUiConfig
+        let pinsConfig: PinsConfig
+    }
 
-protocol StoreMapReloadDelegate: AnyObject {
-    /// Called when map reload is requested
-    func reloadStoreMap()
-}
-
-// MARK: - StoreMapStatesViewController Class
-
-class StoreMapStatesViewController: LDRootViewController {
-    var storeMapState: StoreMapState = .loading(true)
-    weak var storeMapReloadDelegate: StoreMapReloadDelegate?
-
-    private var mapStateModel: MapStateModel
-    private var warningStackView: UIStackView = {
-        let stackView = UIStackView()
-        stackView.axis = .vertical
-        stackView.alignment = .center
-        stackView.spacing = LDSpacing.space12 + LDSpacing.space2
-        return stackView
-    }()
-    private var warningImageView: UIImageView = UIImageView()
-    private var warningTitleLabel: UILabel = UILabel()
-    private let warningButton: LDLinkButton = {
-        let button = LDLinkButton(dataModel: LDLinkButton.Model(size: .large))
+    internal var options: Options
+    internal var isCenterButtonClicked: Bool
+    internal var isNavigationButtonClicked: Bool
+    weak var webViewLoaderViewModel: StoreMapViewInteracting?
+    let webView: WKWebView
+    internal var currentIsPositionLocked: Bool?
+    internal var lastNavigationButtonVisibility: Bool?
+    private var snackbar: LivingDesign.LDSnackbar?
+    var mapCenterButton: LivingDesign.LDIconButton = {
+        let button = LivingDesign.LDIconButton(
+            dataModel: LivingDesign.LDIconButton.Model(
+                size: .large,
+                image: Asset.Image.mapCenter.image,
+                color: .white,
+                shape: .round
+            )
+        )
+        button.translatesAutoresizingMaskIntoConstraints = false
         return button
     }()
-    private let errorAlert: LDAlert = {
-        let alert = LDAlert(
-            dataModel: LDAlert.Model(message: NSAttributedString(string: ""),
-                                     messageType: .error)
+
+    internal let navigationButton: LivingDesign.LDIconButton = {
+        let button = LivingDesign.LDIconButton(
+            dataModel: LivingDesign.LDIconButton.Model(
+                size: .large,
+                image: Asset.Image.routePreviewStart.image,
+                color: .default,
+                shape: .round
+            )
         )
-        return alert
+        button.translatesAutoresizingMaskIntoConstraints = false
+        return button
     }()
-    private var errorMapImageView: UIImageView = UIImageView()
-    private lazy var spinner: LDSpinner = {
-        let spinner = LDSpinner(style: .neutral, size: .small)
-        spinner.hidesWhenStopped = true
-        spinner.isUserInteractionEnabled = false
-        spinner.stopAnimating()
-        return spinner
+
+    internal let buttonStackView: UIStackView = {
+        let stackView = UIStackView()
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        stackView.axis = .vertical
+        stackView.spacing = LDSpacing.space8
+        stackView.alignment = .center
+        return stackView
     }()
-    // Change attempts to internal for test access
-    var attempts = 0
-    private var cancellable = Set<AnyCancellable>()
 
-    init(mapStateModel: MapStateModel) {
-        self.mapStateModel = mapStateModel
-        super.init(nibName: nil, bundle: nil)
+    var isLocationStatusVisible: Bool = false {
+        didSet {
+            locationStatusLabel.isHidden = !isLocationStatusVisible
+            locationStatusContainer.isHidden = !isLocationStatusVisible
+            Log.debug("Location status visibility set to: \(isLocationStatusVisible)")
+        }
+    }
 
-        applyMapStateModel()
+    internal let locationStatusLabel: UILabel = {
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.text = LocalizedKey.findingLocation.localized
+        label.textAlignment = .left
+        label.font = UIFont.bogle(ofSize: LDSpacing.space12, weight: .bold)
+        label.numberOfLines = 0
+        label.textColor = .white
+        return label
+    }()
+
+    internal let locationActivityIndicator: LivingDesign.LDSpinner = {
+        let locationActivityIndicator = LDSpinner(style: .inverse, size: .small)
+        locationActivityIndicator.translatesAutoresizingMaskIntoConstraints = false
+        return locationActivityIndicator
+    }()
+
+    internal let locationStatusContainer: UIStackView = {
+        let stack = UIStackView()
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.axis = .horizontal
+        stack.spacing = 8
+        stack.alignment = .center
+        stack.distribution = .fill
+        stack.isHidden = true
+        stack.backgroundColor = UIColor(red: 0, green: 0.176, blue: 0.345, alpha: 1)
+        stack.layer.cornerRadius = 12
+        stack.layer.masksToBounds = true
+        stack.layoutMargins = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+        stack.isLayoutMarginsRelativeArrangement = true
+        return stack
+    }()
+
+    internal var zoomControlStackView: UIStackView = {
+        let stackView = UIStackView(axis: .vertical)
+        stackView.alignment = .center
+        stackView.distribution = .fill
+        stackView.backgroundColor = .white
+        stackView.layer.cornerRadius = 5
+        stackView.layer.shadowColor = UIColor.black.cgColor
+        stackView.layer.shadowOpacity = 0.3
+        stackView.layer.shadowOffset = CGSize(width: 1, height: 1)
+        stackView.layer.shadowRadius = 5
+        stackView.layer.masksToBounds = false
+        return stackView
+    }()
+
+    internal var floorControlStackView: UIStackView = {
+        let stackView = UIStackView(axis: .vertical)
+        stackView.distribution = .equalSpacing
+        stackView.backgroundColor = .white
+        stackView.layer.cornerRadius = 5
+        stackView.layer.shadowColor = UIColor.black.cgColor
+        stackView.layer.shadowOpacity = 0.3
+        stackView.layer.shadowOffset = CGSize(width: 1, height: 1)
+        stackView.layer.shadowRadius = 5
+        stackView.layer.masksToBounds = false
+        return stackView
+    }()
+
+    internal let pinErrorBanner: LDAlert = {
+        return LDAlert(dataModel: LDAlert.Model(message: NSAttributedString(string: ""), messageType: .warning))
+    }()
+
+    var floorOneButton: CustomButton?
+    var floorTwoButton: CustomButton?
+    internal let divider = LDDivider()
+    var isWebViewLoaded = false
+    @Published var mapState: StoreMapState?
+
+    public init(webViewLoaderViewModel: StoreMapViewInteracting, options: Options) {
+        self.webViewLoaderViewModel = webViewLoaderViewModel
+        let configuration = WKWebViewConfiguration()
+        let controller = WKUserContentController()
+        controller.add(webViewLoaderViewModel.messageParser, name: "deviceBridge")
+        configuration.userContentController = controller
+        configuration.allowsInlineMediaPlayback = false
+        configuration.allowsAirPlayForMediaPlayback = false
+        configuration.allowsPictureInPictureMediaPlayback = false
+        configuration.preferences.isFraudulentWebsiteWarningEnabled = false
+        configuration.dataDetectorTypes = []
+
+        let wkWebView = WKWebView(frame: .zero, configuration: configuration)
+        wkWebView.scrollView.isDirectionalLockEnabled = false
+        wkWebView.scrollView.showsHorizontalScrollIndicator = false
+        wkWebView.scrollView.showsVerticalScrollIndicator = false
+        wkWebView.scrollView.contentInset = .zero
+        wkWebView.scrollView.contentOffset = .zero
+        wkWebView.scrollView.minimumZoomScale = StoreMapZoomLevel.first.minimumZoomScale
+        wkWebView.scrollView.maximumZoomScale = StoreMapZoomLevel.fourth.maximumZoomScale
+        wkWebView.scrollView.scrollsToTop = false
+        wkWebView.isOpaque = true
+        wkWebView.accessibilityElementsHidden = false
+        self.options = options
+        self.isCenterButtonClicked = options.dynamicMapEnabled
+        self.isNavigationButtonClicked = false
+        webView = wkWebView
+        super.init(frame: .zero)
+        webViewLoaderViewModel.mapViewDelegate = self
+        constructView()
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func constructView() {
-        super.constructView()
-
-        warningButton.addTarget(self, action: #selector(reloadMapButtonTapped), for: .primaryActionTriggered)
+    deinit {
+        webView.uiDelegate = nil
+        webView.navigationDelegate = nil
+        webView.scrollView.delegate = nil
     }
 
-    override func constructSubviewLayoutConstraints() {
-        super.constructSubviewLayoutConstraints()
+    func constructView() {
+        mapCenterButton.isHidden = true
+        mapCenterButton.addTarget(self, action: #selector(mapCenterButtonTapped), for: .touchUpInside)
+        applyIconButtonStyle(
+            mapCenterButton,
+            image: Asset.Image.mapCenter.image,
+            iconColor: MapButtonColor.gray,
+            backgroundColor: .white
+        )
+        navigationButton.isHidden = true
+        navigationButton.addTarget(self, action: #selector(navigationButtonTapped), for: .touchUpInside)
+        applyIconButtonStyle(
+            navigationButton,
+            image: Asset.Image.routePreviewStart.image,
+            iconColor: .white,
+            backgroundColor: MapButtonColor.blue
+        )
+        backgroundColor = .white
+        translatesAutoresizingMaskIntoConstraints = false
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.navigationDelegate = self
+        webView.scrollView.delegate = self
+        addAutoLayoutSubview(webView)
+        addAutoLayoutSubview(buttonStackView)
+        buttonStackView.addArrangedSubview(mapCenterButton)
+        buttonStackView.addArrangedSubview(navigationButton)
+        addAutoLayoutSubview(zoomControlStackView)
+        addAutoLayoutSubview(floorControlStackView)
+        if options.mapUiConfig.pinLocationUnavailableBannerEnabled == true {
+            configurePinErrorBanner()
+            addAutoLayoutSubview(pinErrorBanner)
+        }
+        if options.mapUiConfig.bannerEnabled == true {
+            addAutoLayoutSubview(locationStatusContainer)
+            locationStatusContainer.addArrangedSubview(locationActivityIndicator)
+            locationStatusContainer.addArrangedSubview(locationStatusLabel)
+        }
+        let zoomInButton = createZoomButton(actionType: .zoomIn)
+        zoomControlStackView.addArrangedSubview(divider)
+        let zoomOutButton = createZoomButton(actionType: .zoomOut)
+        floorOneButton = createFloorButton(with: getFloorButtonModel(for: ButtonModel.ActionType.floorOne))
+        floorTwoButton = createFloorButton(with: getFloorButtonModel(for: ButtonModel.ActionType.floorTwo))
+        floorOneButton?.isSelected = true
+        floorTwoButton?.isSelected = false
+        constructZoomControlConstraints(zoomInButton: zoomInButton, zoomOutButton: zoomOutButton)
+        constructFloorControlConstraints()
+        constructPinErrorBannerConstraints()
+        constructButtonStackViewConstraints()
+        constructWebViewConstraints()
 
-        spinner.translatesAutoresizingMaskIntoConstraints = false
+        // check zoomControlEnabled feature flag
+        zoomControlStackView.isHidden = !options.zoomControlEnabled
+    }
 
-        view.backgroundColor = .white
-        view.addAutoLayoutSubview(spinner)
-        view.bringSubviewToFront(spinner)
-        view.addAutoLayoutSubview(warningStackView)
-        view.addAutoLayoutSubview(errorAlert)
-        view.addAutoLayoutSubview(errorMapImageView)
+    func reloadWebView() {
+        Analytics.telemetry(payload: TelemetryAnalytics(event: DisplayMap.DISPLAY_MAP_REQUESTED.rawValue))
+#if DEBUG
+        if let localURL = CompassDebugOverrides.localMapURL {
+            if FileManager.default.fileExists(atPath: localURL.path) {
+                Log.info("Loading map from local HTML: \(localURL)")
+                webView.loadFileURL(localURL, allowingReadAccessTo: localURL.deletingLastPathComponent())
+                return
+            } else {
+                Log.warning("Local map HTML not found at path: \(localURL.path). Falling back to backend map.")
+                CompassDebugOverrides.localMapURL = nil
+            }
+        }
+#endif
+        guard let request = APIPath.customStoreMapRequest ?? webViewLoaderViewModel?.getMapURLRequest() else {
+            Analytics.telemetry(payload: TelemetryAnalytics(
+                isError: true,
+                event: DisplayMap.DISPLAY_MAP_ERROR_INVALID_CONTAINER.rawValue
+            ))
+            return
+        }
+        setMapState(.loading(true))
+        webView.load(request)
 
-        warningStackView.addArrangedSubview(warningImageView)
-        warningStackView.addArrangedSubview(warningTitleLabel)
-        warningStackView.addArrangedSubview(warningButton)
+        disableTextSelection()
 
+        // Extract headers from the request
+        let headers = request.allHTTPHeaderFields ?? [:]
+        let isCustom = (APIPath.customStoreMapRequest != nil)
+
+        Log.info("""
+                 - Request Info -
+                 URL Type: \(isCustom ? "Custom" : "Default")
+                 URL: \(String(describing: request.url))
+                 Method: \(request.httpMethod ?? "GET")
+                 Body: \(String(data: request.httpBody ?? Data(), encoding: .utf8) ?? "nil")
+                 Headers:
+                 \(headers.map { "\($0.key): \($0.value)" }.joined(separator: "\n"))
+                 """)
+    }
+
+    func updateZoomInteraction(enabled: Bool) {
+        webView.scrollView.isUserInteractionEnabled = enabled
+    }
+
+    func constructPinErrorBannerConstraints() {
+        guard options.mapUiConfig.pinLocationUnavailableBannerEnabled == true else { return }
         NSLayoutConstraint.activate([
-            spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            spinner.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            spinner.widthAnchor.constraint(equalToConstant: LDSpacing.space24),
-            spinner.heightAnchor.constraint(equalToConstant: LDSpacing.space24),
-            warningStackView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            warningStackView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            warningStackView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space24),
-            warningStackView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space24),
-            warningImageView.widthAnchor.constraint(equalToConstant: LDSpacing.space40+LDSpacing.space2),
-            warningImageView.heightAnchor.constraint(equalToConstant: LDSpacing.space32+LDSpacing.space4),
-            warningButton.heightAnchor.constraint(equalToConstant: LDSpacing.space32+LDSpacing.space4),
-            errorAlert.topAnchor.constraint(equalTo: view.topAnchor, constant: LDSpacing.space16),
-            errorAlert.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: LDSpacing.space8),
-            errorAlert.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -LDSpacing.space8),
-            errorMapImageView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            errorMapImageView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            errorMapImageView.widthAnchor.constraint(equalToConstant: LDSpacing.space32),
-            errorMapImageView.heightAnchor.constraint(equalToConstant: LDSpacing.space32)
+            pinErrorBanner.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: LDSpacing.space16),
+            pinErrorBanner.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor,
+                                                    constant: LDSpacing.space16),
+            pinErrorBanner.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor,
+                                                     constant: -LDSpacing.space16)
         ])
     }
 
-    func updateMapDisplayForState() {
-        switch storeMapState {
-        case .loading(let show):
-            Log.info("Map State loading with value \(show)")
-            spinner.isHidden = !show
-            toggleLoadingSpinner()
-            warningStackView.isHidden = true
-            errorMapImageView.isHidden = true
-            errorAlert.isHidden = true
-            view.isHidden = !show
-        case .warning:
-            Log.info("Map State warning")
-            spinner.isHidden = true
-            toggleLoadingSpinner()
-            warningStackView.isHidden = false
-            errorMapImageView.isHidden = true
-            errorAlert.isHidden = true
-            view.isHidden = false
-        case .error:
-            Log.info("Map State error")
-            spinner.isHidden = true
-            toggleLoadingSpinner()
-            warningStackView.isHidden = true
-            errorMapImageView.isHidden = false
-            errorAlert.isHidden = false
-            view.isHidden = false
-        }
-    }
+    func updateButtons(isPositionLocked: Bool = true) {
+        guard isPositionLocked != currentIsPositionLocked else { return }
 
-    @objc func reloadMapButtonTapped() {
-        Log.info("Reload Map")
-        let maxAttempts = 5
-        attempts += 1
-        if attempts > maxAttempts {
-            startCooldown()
-        } else {
-            storeMapReloadDelegate?.reloadStoreMap()
+        currentIsPositionLocked = isPositionLocked
+        updateMapCenterButton()
+        updateNavigationButton()
+    }
+}
+
+extension StoreMapView {
+    func previewSetUp(isStaticPathVisible: Bool) {
+        buttonStackView.isHidden = isStaticPathVisible
+        if options.zoomControlEnabled {
+            zoomControlStackView.isHidden = isStaticPathVisible
+        }
+
+        if let isPositionLocked = currentIsPositionLocked, !isPositionLocked {
+            isLocationStatusVisible = !isStaticPathVisible
         }
     }
 }
 
-private extension StoreMapStatesViewController {
-    func applyMapStateModel() {
-        spinner.isHidden = true
+internal extension StoreMapView {
+    func applyIconButtonStyle(
+        _ button: LivingDesign.LDIconButton,
+        image: UIImage,
+        iconColor: UIColor,
+        backgroundColor: UIColor,
+        inset: CGFloat = 12,
+        size: LivingDesign.LDIconButton.Size = .medium,
+        shape: LivingDesign.LDIconButton.Shape = .round,
+        cornerRadius: CGFloat? = nil,
+        applyShadow: Bool = true,
+        highlightedBackgroundColor: UIColor? = nil
+    ) {
+        let highlightedBackground = highlightedBackgroundColor ?? backgroundColor.withAlphaComponent(0.95)
+        let disabledBackground = backgroundColor.withAlphaComponent(0.5)
+        let highlightedIconColor = iconColor
+        let disabledIconColor = iconColor.withAlphaComponent(0.5)
 
-        warningStackView.distribution = .equalCentering
-        warningStackView.isHidden = true
-
-        warningImageView.image = mapStateModel.warningImage
-        warningImageView.contentMode = .scaleAspectFit
-
-        warningTitleLabel.text = mapStateModel.warningText
-        warningTitleLabel.textAlignment = .center
-        warningTitleLabel.numberOfLines = 0
-        warningTitleLabel.textColor = UIColor(
-            red: 0.18, green: 0.184, blue: 0.196, alpha: 1
+        let normalColors = LivingDesign.LDIconButton.Appearance.ButtonColors(
+            iconColor: iconColor,
+            backgroundColor: backgroundColor
         )
-        warningTitleLabel.font = UIFont.bogle(
-            ofSize: LivingDesign.LDSpacing.space12 + LivingDesign.LDSpacing.space2,
-            weight: .regular
+        let highlightedColors = LivingDesign.LDIconButton.Appearance.ButtonColors(
+            iconColor: highlightedIconColor,
+            backgroundColor: highlightedBackground
+        )
+        let disabledColors = LivingDesign.LDIconButton.Appearance.ButtonColors(
+            iconColor: disabledIconColor,
+            backgroundColor: disabledBackground
         )
 
-        warningButton.dataModel = LDLinkButton.Model(
-            size: .small,
-            text: mapStateModel.warningButtonText,
-            variant: .subtle,
-            leadingImage: resolveIcon(mapStateModel.warningButtonIcon)
+        let variant = LivingDesign.LDIconButton.Appearance.ButtonVariant(
+            normal: normalColors,
+            highlighted: highlightedColors,
+            disabled: disabledColors
         )
-        warningButton.addTarget(self, action: #selector(reloadMapButtonTapped), for: .primaryActionTriggered)
 
-        let errorAlertAttributed = NSAttributedString(string: mapStateModel.errorText)
-        errorAlert.dataModel =  LivingDesign.LDAlert.Model(
-            message: errorAlertAttributed,
-            messageType: .error,
-            detailsButtonTitle: mapStateModel.errorButtonText)
-        errorAlert.isHidden = true
-        errorAlert.onTapAlert = { [weak self] in
-            self?.reloadMapButtonTapped()
+        button.appearance = LivingDesign.LDIconButton.Appearance(normal: variant, white: variant)
+        button.dataModel = LivingDesign.LDIconButton.Model(
+            size: size,
+            image: image,
+            color: .default,
+            shape: shape
+        )
+        button.contentEdgeInsets = UIEdgeInsets(top: inset, left: inset, bottom: inset, right: inset)
+        if let cornerRadius {
+            button.layer.cornerRadius = cornerRadius
+            button.clipsToBounds = true
+        } else {
+            button.clipsToBounds = false
         }
-
-        errorMapImageView.image = mapStateModel.errorImage
-        errorMapImageView.contentMode = .scaleAspectFit
-        errorMapImageView.isHidden = true
-    }
-
-    func toggleLoadingSpinner() {
-        guard spinner.isHidden else {
-            spinner.startAnimating()
-            return
-        }
-
-        spinner.stopAnimating()
-    }
-
-    func startCooldown() {
-        // 5 minutes cool for warning state view
-        // 3 minutes cool for error state view
-        let cooldownPeriod: TimeInterval =  errorAlert.isHidden ? (5 * 60) : (3 * 60)
-        setReloadMap(isHidden: false)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + cooldownPeriod) { [weak self] in
-            self?.attempts = 0
-            self?.setReloadMap(isHidden: true)
+        if applyShadow {
+            applyFloatingShadow(to: button)
+        } else {
+            button.layer.shadowOpacity = 0
         }
     }
 
-    func setReloadMap(isHidden: Bool) {
-        let warningText = mapStateModel.warningText
-        let warningTryAgainText = mapStateModel.warningTryAgainText
-
-        let errorText = mapStateModel.errorText
-        let errorTryAgainText = mapStateModel.errorTryAgainText
-        let errorButtonText = mapStateModel.errorButtonText
-
-        warningTitleLabel.text = isHidden ? warningText : warningTryAgainText
-        warningButton.isEnabled = isHidden
-
-        let errorAlertAttributed = NSAttributedString(string: isHidden ? errorText : errorTryAgainText)
-        errorAlert.dataModel =  LivingDesign.LDAlert.Model(
-            message: errorAlertAttributed,
-            messageType: .error,
-            detailsButtonTitle: isHidden ? errorButtonText : ""
-        )
+    func applyFloatingShadow(to button: UIView) {
+        button.layer.shadowColor = UIColor.black.cgColor
+        button.layer.shadowOpacity = 0.5
+        button.layer.shadowOffset = CGSize(width: 0, height: 2)
+        button.layer.shadowRadius = 4
+        button.layer.masksToBounds = false
     }
 
-    private func resolveIcon(_ icon: LDIconValue) -> UIImage {
-        var tokens = LivingDesign.LDToken(
-            in: Bundle(for: LDRootViewController.self),
-            for: "LDToken"
-        )
-        tokens.update(with: traitCollection)
-        return icon.resolve(with: tokens)
+    func setupLocationStatusConstraints(constraints: inout [NSLayoutConstraint]) {
+        guard options.mapUiConfig.bannerEnabled else { return }
+
+        constraints += [
+            locationStatusContainer.topAnchor.constraint(
+                equalTo: safeAreaLayoutGuide.topAnchor, constant: LDSpacing.space8),
+            locationStatusContainer.leadingAnchor.constraint(
+                greaterThanOrEqualTo: safeAreaLayoutGuide.leadingAnchor, constant: 60),
+            locationStatusContainer.trailingAnchor.constraint(
+                lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -60),
+            locationStatusContainer.centerXAnchor.constraint(equalTo: centerXAnchor)
+        ]
+
+        NSLayoutConstraint.activate([
+            locationActivityIndicator.widthAnchor.constraint(equalToConstant: LDSpacing.space24),
+            locationActivityIndicator.heightAnchor.constraint(equalToConstant: LDSpacing.space24)
+        ])
+
+        locationStatusContainer.setContentHuggingPriority(.required, for: .horizontal)
+        locationStatusContainer.setContentCompressionResistancePriority(.required, for: .horizontal)
+        locationStatusContainer.setContentHuggingPriority(.required, for: .vertical)
+        locationStatusContainer.setContentCompressionResistancePriority(.required, for: .vertical)
     }
 }
