@@ -2,312 +2,425 @@ import CoreGraphics
 import Foundation
 
 extension StoreMapLoaderViewModel {
-    func reportPinAisleStatusEvent(for pins: [Pin]) {
-        let pinAisleEvents: [PinAisleEvent] = pins.map { pin in
-            let id = pin.id?.asString() ?? ""
-            let aisle = pin.aisle?.asString() ?? ""
-            let zone = pin.zone?.asString() ?? ""
-            let section = pin.section?.asString() ?? ""
-            let location = ["aisle": aisle, "zone": zone, "section": section]
-            return PinAisleEvent(id: id,
-                                 location: location,
-                                 success: pin.errorData != nil ? false : true)
-        }
-
-        statusService.emitAislesPinDropEvent(pinDropType: .autoPinDropAisleLocList,
-                                             mapType: MapIdentifier.WalmartMap,
-                                             pins: pinAisleEvents)
+    var navigationSessionState: NavigationSessionState? {
+        indoorNavigationService.navigationSessionState
     }
 
-    func handlePinRenderedMessage(_ pinRenderedMessage: PinRenderedMessage) {
-        pinRenderCoordinator.handleAislePinRenderedMessage(pinRenderedMessage)
+    var isNavigationActiveOrStopped: Bool {
+        guard let status = navigationSessionState?.navigationStatus else { return false }
+        return status == .inProgress || status == .stopped
     }
 
-    // Handles the rendering and navigation logic for XY pins
-    func handlePinXYRenderedMessage(_ message: PinXYRenderedMessage) {
-        pinRenderCoordinator.handleXYPinRenderedMessage(message)
+    var shouldSkipZoomOnLocation: Bool {
+        isNavigationActiveOrStopped &&
+        (mapViewDelegate?.isCenterButtonClicked == false)
     }
 
-    func renderFeatureLocationPinsIfNeeded(for pinRenderedMessage: PinRenderedMessage) {
-        guard let pins = pinRenderedMessage.pins,
-              !pins.isEmpty,
-              pinsConfig.actionAlleyEnabled else { return }
+    var isNavigationInProgress: Bool {
+        navigationSessionState?.navigationStatus == .inProgress
+    }
 
-        let errorPins = pins
-            .filter(\.shouldFetchData)
-            .filter { $0.errorData != nil }
-        let aisleIdList = errorPins.map { "\(($0.zone ?? "").uppercased()).\($0.aisle ?? 0).\($0.section ?? 0)" }
+    var shouldUpdateNavigationRoute: Bool {
+        guard let navigationSessionState = navigationSessionState else { return false }
+        let isCurrentLocationWaypointNil = navigationSessionState.currentLocationWaypoint == nil
+        let isNewRouteNeeded = isCurrentLocationWaypointNil ||
+        indoorNavigationService.areNavigationRequiredPointsAvailable()
+        let isInProgress = isCurrentLocationWaypointNil || navigationSessionState.navigationStatus == .inProgress
+        return navigationEnabled == true && isNewRouteNeeded && isInProgress
+    }
 
-        guard !aisleIdList.isEmpty else {
-            Log.debug("No valid aisle IDs found for feature locations.")
-            return
-        }
+    func setNavigation(enabled: inout Bool) -> Bool {
+        return indoorNavigationService.toggleNavigation(enabled: &enabled)
+    }
 
-        assetService.fetchFeatureLocations(forAisleIds: aisleIdList) { [weak self] results in
-            guard let self = self else { return }
+    func canDisplayNavigationButton() -> Bool {
+        return indoorNavigationService.navigationSessionState?.hasPinsOnMap ?? false
+    }
 
-            let pinsToDraw = DrawPinWithZone.from(
-                points: results,
-                type: PinIdentifier.actionAlleyPin.rawValue,
-                offset: self.assetService.storeConfigOffset
-            )
-
-            if !pinsToDraw.isEmpty {
-                Log.info(
-                   """
-                   • Fetched feature locations for aisle IDs:
-                   \(aisleIdList)
-                   • Response wasp points with aisle Ids:
-                   \(results)
-                   • Converted store map pins:
-                   \(pinsToDraw)
-                   """
-                )
-                request(.renderActionAlleyPinRequested(PinListWithZone(pins: pinsToDraw)))
+    func setupNavigationPaths() {
+        routeCancellable?.cancel()
+        routeCancellable = indoorNavigationService.handleRouteUpdate(
+            assetService: assetService,
+            indoorPositioningService: indoorPositioningService,
+            setPathfindingEnabled: { [weak self] enabled in
+                guard let self, !isStaticPathVisible else { return }
+                self.setPathfindingEnabled(enabled, duration: 0.2)
+            },
+            updateCustomRoute: { [weak self] coords, distance in
+                guard let self, !isStaticPathVisible else { return }
+                self.updateCustomRoute(coords: coords, distance: distance)
             }
-        }
-    }
-
-    func onMapLongPressed(coordPayLoad: CoordinateSpaceDiscoveryTap) {
-        if isStaticPathVisible { return }
-        if isNavigationInProgress { return }
-
-        Log.debug("Long pressed on map at: \(coordPayLoad)")
-        Analytics.telemetry(payload: TelemetryAnalytics(
-            event: DisplayPin.DISPLAY_PIN_LONG_PRESS_OFF_MAP.rawValue
-        ))
-        guard config.enableManualPinDrop else {
-            Log.debug("Manual pin drop is disabled")
-            return
-        }
-
-        Log.info("AssetService idType is  \(assetService.idType)")
-        guard let svgCoord = coordPayLoad.svgSpace else {
-            Log.debug("svgCoord from \(coordPayLoad) is not valid")
-            Analytics.telemetry(payload: TelemetryAnalytics(
-                isError: true,
-                event: DisplayPin.DISPLAY_PIN_ERROR_POST_LOCATION_ON_PRESS.rawValue
-            ))
-            return
-        }
-
-        pinList.current = PinList(pins: [
-            DrawPin(
-                type: PinIdentifier.xyPinLocation.rawValue,
-                x: svgCoord.cgPoint.x,
-                y: svgCoord.cgPoint.y,
-                location: Point(x: svgCoord.cgPoint.x, y: svgCoord.cgPoint.y),
-                errorData: nil
-            )
-        ])
-
-        if let currentPinList = pinList.current, !(navigationEnabled ?? false) {
-            request(.renderXYLocationPinRequested(currentPinList))
-        }
-
-        Log.debug("RenderXYLocationPinRequested is called pinList: \(pinList)")
-
-        let waspPosition = svgCoord.cgPoint.storeMapToWasp(offset: assetService.storeConfigOffset)
-
-        switch assetService.idType {
-        case .assets:
-            handleAsset(waspPosition: waspPosition)
-        case .generic:
-            encodeGeneric(waspPosition: waspPosition)
-        }
-    }
-
-    func handleAsset(waspPosition: CGPoint) {
-        Log.debug("Manual pin drop is asset type")
-        let defaults = UserDefaults.standard
-        guard let assetId = (defaults.object(forKey: UserDefaultsKey.uuidList.rawValue) as? [String])?.first else {
-            Log.info("No uuids in UserDefaults")
-            return
-        }
-
-        Log.debug("Found assetId: \(assetId) in UserDefaults")
-        Log.debug("Subscribing to compass event status updates")
-        statusService.bootstrapEventEmitter = { [weak self] eventEmitter  in
-            guard eventEmitter.eventType == .bootstrapEventEmitter else {
-                return
-            }
-
-            Log.debug("Successfully bootstrapped pin")
-
-            self?.pinList.last = self?.pinList.current
-            self?.evaluateAisle(for: assetId, waspPosition: waspPosition, idType: .assets)
-        }
-
-        let eventType = EventConstant.Category.assetScan.rawValue
-        let event = CompassEvent(eventType: eventType, eventValue: assetId, eventMetadata: [:])
-
-        eventService.cacheAndBootstrapAsset(event, position: waspPosition) { [weak self] bootstrapStatus in
-
-            guard bootstrapStatus == .notBootstrapped,
-                  let lastPinList = self?.pinList.last else {
-                Log.debug("Pin bootstrapped event API succeeded.")
-                return
-            }
-            Analytics.telemetry(payload: TelemetryAnalytics(
-                isError: true,
-                event: DisplayPin.DISPLAY_PIN_ERROR_POST_LOCATION_ON_PRESS.rawValue
-            ))
-            Log.debug("""
-            Pin bootstrapped event API failed, showing the last successfully bootstrapped pin list: \(lastPinList)
-            """)
-
-            self?.request(.renderXYLocationPinRequested(lastPinList))
-            return
-        }
-
-        Log.debug("Map Long Pressed for asset pin")
-    }
-
-    func encodeGeneric(waspPosition: CGPoint) {
-        Log.debug("Manual pin drop is generic type")
-        let coord = waspPosition.asCompassCoordinate()
-        let locationComData = LocationComData(store: assetService.storeId, coordinates: [coord], version: 1)
-        guard let encodedLocationString = LocationConverter.encodeMessage(data: locationComData) else {
-            Log.debug("Could not encode location: \(locationComData)")
-            return
-        }
-
-        Log.debug("assetId: \(encodedLocationString)")
-        evaluateAisle(for: encodedLocationString, waspPosition: waspPosition, idType: .generic)
-        Log.debug("Map Long Pressed for generic pin")
-    }
-
-    func evaluateAisle(for assetId: String, waspPosition: CGPoint, idType: PinDropMethod) {
-        assetService.idList.removeAll()
-        assetService.assetEvents.removeAll()
-        assetService.idList = [assetId]
-
-        Log.debug("AssetEvents is \(String(describing: assetService.assetEvents))")
-        Log.debug("idList is \(String(describing: assetService.idList))")
-
-        assetService.evaluateAisles(using: assetId,
-                                    pinDropType: .manualPinDropAisleLocList,
-                                    position: waspPosition) { [weak self] points in
-            self?.renderPins(from: points)
-        }
-
-        Analytics.displayPin(
-            payload: DisplayPinAnalytics(pinType: idType.analyticsStringValue,
-                                         pinValue: assetId,
-                                         pinCategory: "manual",
-                                         pinLocation: "\(waspPosition.x),\(waspPosition.y)",
-                                         success: true)
         )
     }
 
-    func render(_ pins: [Pin], replacingExisting: Bool = false) {
-        Log.debug("Requesting to render pins: \(pins), replacingExistingPins: \(replacingExisting)")
-        renderedPins = pins + (replacingExisting ? [] : renderedPins)
-        request(.renderPins(RenderPinsRequest(pins: renderedPins, pinGroupingEnabled: pinsConfig.groupPinsEnabled)))
-    }
-
-    func renderPins(from points: [CGPoint], config: DisplayPinConfig? = nil) {
-        if let config {
-            self.config = config
-        }
-        var pinsToDraw: [DrawPin] = []
-        points.forEach { point in
-            let mapPoint = point.waspToStoreMap(offset: assetService.storeConfigOffset)
-            let drawPin = DrawPin(
-                type: PinIdentifier.xyPinLocation.rawValue,
-                x: mapPoint.x,
-                y: mapPoint.y,
-                location: Point(x: mapPoint.x, y: mapPoint.y),
-                errorData: nil
-            )
-            pinsToDraw.append(drawPin)
-        }
-        pinList.last = PinList(pins: pinsToDraw)
-        if let lastPinList = pinList.last {
-            request(.renderXYLocationPinRequested(lastPinList))
-        }
-        Log.info("Show Pin with pinList: \(pinsToDraw)")
-    }
-
-    func renderPins(
-        _ renderPinsRequest: RenderPinsRequest,
-        config: DisplayPinConfig?,
-        completion: (([Pin]) -> Void)?
+    func updateNavigationRoute(
+        with coordinates: [Point]?, at index: Int, using pinList: PinList?,
+        renderPinsRequest: RenderPinsRequest?
     ) {
-        if let config = config {
-            self.config = config
+        Log.debug("[Navigation] enabled: \(String(describing: navigationEnabled)).")
+        guard let navigationEnabled,
+              navigationEnabled,
+              let coordinates = coordinates,
+              !coordinates.isEmpty,
+              let converter = indoorPositioningService.floorCoordinatesConverter else {
+            Log.debug("[Navigation] No coordinates found to add navigation route.")
+            return
         }
-        self.pinRenderCompletion = completion
+
+        Log.debug("""
+        [Navigation] Adding route coordinates (store map units): \(coordinates)
+          - Index: \(index)
+          - Floor selected: \(floorSelected)
+          - Converting to Oriient units and requesting route API.
+        """)
+
+        self.indoorNavigationService.updateNavigationState(
+            currentLocation: nil, pinWaypoint: nil,
+            renderRequest: renderPinsRequest, pinListUpdate: pinList
+        )
+
+        coordinates.forEach {
+            let transformedPoint = CGPoint(x: $0.x, y: $0.y)
+                .storeMapToWasp(offset: assetService.storeConfigOffset)
+                .convertToOriient(using: converter)
+                .asCGPoint()
+
+            let roundedPoint = CGPoint(
+                x: transformedPoint.x.rounded(toDecimalPlaces: 1),
+                y: transformedPoint.y.rounded(toDecimalPlaces: 1)
+            )
+            self.indoorNavigationService.addWaypoint(
+                at: index, coordinate: roundedPoint, floorSelected: floorSelected
+            )
+        }
+    }
+
+    func updateStaticPathRoute(with coordinates: [Point]?) {
+        guard let coordinates = coordinates,
+              !coordinates.isEmpty,
+              let converter = indoorPositioningService.floorCoordinatesConverter else {
+            Log.debug("[DisplayStaticPath] No coordinates found to add navigation route.")
+            return
+        }
+
+        Log.debug(
+                """
+                [DisplayStaticPath] Adding route coordinates (store map units): \(coordinates)
+                  - Floor selected: \(floorSelected)
+                  - Converting to Oriient units and requesting route API.
+                """
+        )
+
+        coordinates.enumerated().forEach {
+            let transformedPoint = CGPoint(x: $1.x, y: $1.y)
+                .storeMapToWasp(offset: assetService.storeConfigOffset)
+                .convertToOriient(using: converter)
+                .asCGPoint()
+
+            let roundedPoint = CGPoint(
+                x: transformedPoint.x.rounded(toDecimalPlaces: 1),
+                y: transformedPoint.y.rounded(toDecimalPlaces: 1)
+            )
+            self.staticPathPreviewService.addWaypoint(
+                coordinate: roundedPoint,
+                floorSelected: floorSelected,
+                shouldFetchRoute: coordinates.count == $0+1
+            )
+        }
+    }
+
+    func setPathfindingEnabled(_ enabled: Bool, duration: TimeInterval = 0.0, force: Bool = false) {
+        let performRequest = {
+            self.request(.setPathfindingEnabled(SetPathFindingRequest(pathfinderEnabled: enabled)))
+        }
+
+        if force {
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: performRequest)
+            return
+        }
+
+        if isStaticPathVisible {
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: performRequest)
+            return
+        }
+
+        guard lastPathfindingEnabled != enabled,
+              let navigationEnabled,
+              navigationEnabled else {
+            return
+        }
+
+        lastPathfindingEnabled = enabled
+        Log.info("[Navigation or DisplayStaticPath] Set pathfinding enabled: \(enabled).")
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: performRequest)
+    }
+
+    func setPinSelectionEnabled(_ enabled: Bool) {
+        Log.info("Set pinSelection enabled: \(enabled).")
+        self.request(.setPinSelectionEnabled(SetPinSelectionRequest(pinSelectionEnabled: enabled)))
+    }
+
+    func updateCustomRoute(coords: [Coord], distance: Double) {
+        let shouldRequest = distance.isNaN || (navigationEnabled ?? false)
+
+        guard shouldRequest else { return }
+
+        Log.info("[Navigation or DisplayStaticPath] Update custom route with coord: \(coords), distance: \(distance).")
+        request(.customRoute(CustomRouteRequest(coords: coords, distance: distance, useBluedot: !isStaticPathVisible)))
+    }
+
+    func displayStaticPath(
+        using renderPinsRequest: RenderPinsRequest,
+        startFromNearbyEntrance: Bool,
+        disableZoomGestures: Bool
+    ) {
+        staticPathPreviewService.previewWaypoints = []
+        showMapZoomedOut()
+        isStaticPathVisible = true
+        staticPathPreviewService.startFromNearbyEntrance = startFromNearbyEntrance
+        setPinSelectionEnabled(false)
+        mapViewDelegate?.displayPinErrorBanner(false)
+
         request(.renderPins(renderPinsRequest))
-    }
+        mapViewDelegate?.previewSetUp(isStaticPathVisible: true)
+        self.mapViewDelegate?.updateZoomInteraction(enabled: !disableZoomGestures)
 
-    func renderPins(_ renderPinsRequest: RenderPinsRequest, config: DisplayPinConfig?) {
-        clearStaticPath()
-        renderPins(renderPinsRequest, config: config, completion: nil)
-    }
-
-    func renderPins(_ pins: [Pin], config: DisplayPinConfig?) {
-        if let config = config {
-            self.config = config
+        staticPathPreviewCancellable?.cancel()
+        staticPathPreviewCancellable = staticPathPreviewService.handleRouteUpdate(
+            assetService: assetService,
+            indoorPositioningService: indoorPositioningService) { [weak self] enabled in
+                self?.setPathfindingEnabled(enabled)
+        } updateCustomRoute: { [weak self] coords in
+            self?.updateCustomRoute(coords: coords, distance: .nan)
         }
-        request(.renderPins(RenderPinsRequest(pins: pins, pinGroupingEnabled: pinsConfig.groupPinsEnabled)))
     }
 
-    func getUserDistance(_ request: GetPinLocationRequest, completion: PinLocationFetchCompletionHandler?) {
-        self.pinLocationFetchCompletionHandler = completion
-        Log.info("user location requested \(request)")
-        self.isPinDistanceFetched = true
-        self.request(.pinLocationRequested(request))
+    func updateStaticPathIfNeeded(for pinRenderedMessage: PinRenderedMessage) {
+        guard let pins = pinRenderedMessage.pins,
+              !pins.isEmpty,
+              isStaticPathVisible else {
+            return
+        }
+
+        let validPins = pins.filter { $0.errorData == nil }
+
+        guard validPins == pins else {
+            mapViewDelegate?.displayPinErrorBanner(true)
+            setPathfindingEnabled(false, force: true)
+            return
+        }
+
+        var pointList: [Point] = []
+        if staticPathPreviewService.startFromNearbyEntrance,
+           let entrance = mapLoadedData?.entrances.first {
+            pointList.append(Point(x: entrance.x, y: entrance.y))
+        }
+
+        pointList += validPins.compactMap { $0.location.map { Point(x: $0.x, y: $0.y) } }
+
+        if !validPins.isEmpty {
+            updateStaticPathRoute(with: pointList)
+        }
+    }
+
+    func updateUserPosition(x: Double, y: Double, accuracy: CGFloat?) {
+        request(.showUserLocation(UserPosition(x: x, y: y, ringRadius: accuracy)))
+
+        guard shouldUpdateNavigationRoute else { return }
+
+        let pointList = [Point(x: x, y: y)]
+        updateNavigationRoute(with: pointList, at: 0, using: nil, renderPinsRequest: nil)
+    }
+
+    func updateUserRotation(angle: CGFloat, rotateMap: Bool) {
+        guard !isStaticPathVisible else { return }
+        request(.rotateUser(UserRotation(angle: angle, rotateMap: rotateMap)))
+    }
+
+    func updateUserLoading(percentage: Int) {
+        request(.showUserLoading(UserLoading(
+            percentage: (percentage == 0) ? 1 : percentage))
+        )
+    }
+
+    func clearRenderedPin(mapConfig: MapConfig) {
+        Log.debug("Clear pins")
+        clearStaticPath()
+
+        request(.renderXYLocationPinRequested(PinList(pins: [])))
+        request(.renderPins(RenderPinsRequest(pins: [], pinGroupingEnabled: pinsConfig.groupPinsEnabled)))
+        indoorNavigationService.resetWaypoints(shouldClearBlueDot: false, shouldClearPinList: true)
+        indoorNavigationService.resetNavigationSessionState()
+        mapViewDelegate?.handleNavigationInterruption(for: 1, status: navigationSessionState?.navigationStatus)
+
+        if mapConfig.resetZoom {
+            Log.debug("Reset Zoom level")
+            showMapZoomedOut()
+        }
+    }
+
+    func clearStaticPath() {
+        isStaticPathVisible = false
+        mapViewDelegate?.displayPinErrorBanner(false)
+        setPinSelectionEnabled(true)
+        mapViewDelegate?.previewSetUp(isStaticPathVisible: false)
+        self.mapViewDelegate?.updateZoomInteraction(enabled: true)
+        setPathfindingEnabled(false, force: true)
     }
 }
 
-final class PinRenderCoordinator {
-    private unowned let viewModel: StoreMapLoaderViewModel
-    private let navigationCoordinator: NavigationCoordinator
+// MARK: - IndoorNavigationServiceDelegate
+extension StoreMapLoaderViewModel: IndoorNavigationServiceDelegate {
+    func requestRenderPins(_ pins: [Pin]?, pinList: PinList?, navigationEvent: NavigationAnalytics.Event?) {
+        if let pins = pins {
+            request(.renderPins(.init(pins: pins, pinGroupingEnabled: pinsConfig.groupPinsEnabled)))
 
-    init(viewModel: StoreMapLoaderViewModel, navigationCoordinator: NavigationCoordinator) {
-        self.viewModel = viewModel
-        self.navigationCoordinator = navigationCoordinator
+            guard let position = indoorPositioningService.lastPosition.value,
+                  position.isLocked else {
+                Log.info("[Navigation] The value of lastLockedPosition is nil")
+                return
+            }
+
+            guard let converter = indoorPositioningService.floorCoordinatesConverter else {
+                Log.info("[Navigation] The value of floorCoordinatesConverter is nil")
+                return
+            }
+
+            let compassPosition = position.convertToCompass(using: converter).asCGPoint()
+
+            let payload = NavigationAnalytics(
+                event: navigationEvent,
+                location: NavigationAnalytics.Location(x: compassPosition.x, y: compassPosition.y)
+            )
+
+            Analytics.mapNavigation(payload: payload)
+        } else if let pinList = pinList {
+            request(.renderXYLocationPinRequested(pinList))
+        }
     }
 
-    func handleAislePinRenderedMessage(_ pinRenderedMessage: PinRenderedMessage) {
-        Log.debug("Aisle pin rendered: \(pinRenderedMessage)")
+    func refreshNavigationButtonState(_ isVisible: Bool?) {
+        mapViewDelegate?.refreshNavigationButtonState(isVisible)
+    }
+}
 
-        guard !viewModel.isPinDistanceFetched else {
-            viewModel.isPinDistanceFetched = false
-            viewModel.pinLocationFetchCompletionHandler?(pinRenderedMessage)
+final class NavigationCoordinator {
+    private unowned let viewModel: StoreMapLoaderViewModel
+
+    init(viewModel: StoreMapLoaderViewModel) {
+        self.viewModel = viewModel
+    }
+
+    func handleAislePinNavigation(_ pinRenderedMessage: PinRenderedMessage) {
+        guard !viewModel.isStaticPathVisible,
+              let pins = pinRenderedMessage.pins,
+              !pins.isEmpty,
+              viewModel.navigationEnabled == true else {
+            viewModel.mapViewDelegate?.refreshNavigationButtonState(false)
             return
         }
 
-        viewModel.reportPinAisleStatusEvent(for: pinRenderedMessage.pins ?? [])
-        viewModel.renderFeatureLocationPinsIfNeeded(for: pinRenderedMessage)
-        navigationCoordinator.handleAislePinNavigation(pinRenderedMessage)
-        viewModel.updateStaticPathIfNeeded(for: pinRenderedMessage)
-        zoomOnPinsIfNeeded(
-            pins: pinRenderedMessage.pins,
-            topLeft: pinRenderedMessage.topLeft,
-            bottomRight: pinRenderedMessage.bottomRight
+        let indoorNavigationService = viewModel.indoorNavigationService
+        indoorNavigationService.resetWaypoints(shouldClearBlueDot: false, shouldClearPinList: true)
+
+        let validPins = pins.filter { $0.selected && $0.errorData == nil }
+        let pointList = validPins.compactMap { $0.location.map { Point(x: $0.x, y: $0.y) } }
+        let shouldUpdatePinList = indoorNavigationService.navigationSessionState?.navigationStatus != .inProgress
+
+        let renderPinsRequest: RenderPinsRequest? = shouldUpdatePinList ? .init(
+            pins: pins,
+            pinGroupingEnabled: viewModel.pinsConfig.groupPinsEnabled
+        ) : nil
+
+        indoorNavigationService.updateNavigationState(
+            currentLocation: nil,
+            pinWaypoint: nil,
+            renderRequest: renderPinsRequest,
+            pinListUpdate: nil
         )
+
+        viewModel.mapViewDelegate?.handleNavigationInterruption(
+            for: 1,
+            status: viewModel.navigationSessionState?.navigationStatus
+        )
+
+        if !validPins.isEmpty {
+            startAutomaticNavigationIfNeeded()
+            viewModel.updateNavigationRoute(
+                with: pointList,
+                at: 1,
+                using: nil,
+                renderPinsRequest: renderPinsRequest
+            )
+        } else {
+            indoorNavigationService.resetNavigationSessionState()
+        }
+
+        refreshNavigationState(withPins: pins)
     }
 
-    func handleXYPinRenderedMessage(_ message: PinXYRenderedMessage) {
-        Log.debug("XY pin rendered: \(message)")
+    func handleXYPinNavigation(pins: [DrawPin], topLeft: Point?, bottomRight: Point?) {
+        guard !pins.isEmpty else {
+            viewModel.mapViewDelegate?.refreshNavigationButtonState(false)
+            return
+        }
 
-        let allPins = (message.xyLocationPins?.isEmpty == false ? message.xyLocationPins : message.pins) ?? []
-        navigationCoordinator.handleXYPinNavigation(
-            pins: allPins,
-            topLeft: message.topLeft,
-            bottomRight: message.bottomRight
+        let indoorNavigationService = viewModel.indoorNavigationService
+        indoorNavigationService.resetWaypoints(shouldClearBlueDot: false, shouldClearPinList: true)
+
+        let validPins = pins.filter { $0.errorData == nil }
+        let shouldUpdatePinList = indoorNavigationService.navigationSessionState?.navigationStatus != .inProgress
+        let currentPinList = shouldUpdatePinList ? PinList(pins: validPins) : nil
+
+        indoorNavigationService.updateNavigationState(
+            currentLocation: nil,
+            pinWaypoint: nil,
+            renderRequest: nil,
+            pinListUpdate: currentPinList
         )
-    }
 
-    private func zoomOnPinsIfNeeded(
-        pins: [Pin]?,
-        topLeft: Point?,
-        bottomRight: Point?
-    ) {
-        guard let pins, !pins.isEmpty else { return }
-        guard viewModel.isStaticPathVisible == false else { return }
+        viewModel.mapViewDelegate?.handleNavigationInterruption(
+            for: 1,
+            status: viewModel.navigationSessionState?.navigationStatus
+        )
+
+        if !validPins.isEmpty {
+            let pointList = validPins.map { Point(x: $0.x, y: $0.y) }
+            viewModel.updateNavigationRoute(
+                with: pointList,
+                at: 1,
+                using: currentPinList,
+                renderPinsRequest: nil
+            )
+        } else {
+            indoorNavigationService.resetNavigationSessionState()
+        }
+
+        refreshNavigationState(withDrawPins: pins)
         viewModel.zoomOnLocation(topLeft: topLeft, bottomRight: bottomRight)
+    }
+
+    private func refreshNavigationState(withPins pins: [Pin]) {
+        let validPins = pins.filter { $0.errorData == nil }
+        let hasPinsOnMap = !validPins.isEmpty
+        viewModel.indoorNavigationService.navigationSessionState?.hasPinsOnMap = hasPinsOnMap
+        viewModel.mapViewDelegate?.refreshNavigationButtonState(hasPinsOnMap)
+    }
+
+    private func refreshNavigationState(withDrawPins drawPins: [DrawPin]) {
+        let validPins = drawPins.filter { $0.errorData == nil }
+        let hasPinsOnMap = !validPins.isEmpty
+        viewModel.indoorNavigationService.navigationSessionState?.hasPinsOnMap = hasPinsOnMap
+        viewModel.mapViewDelegate?.refreshNavigationButtonState(hasPinsOnMap)
+    }
+
+    private func startAutomaticNavigationIfNeeded() {
+        guard let navigationConfig = viewModel.indoorNavigationService.navigationConfig,
+              navigationConfig.isAutomaticNavigation else {
+            return
+        }
+
+        viewModel.indoorNavigationService.navigationSessionState?.navigationStatus = .inProgress
+        viewModel.setPathfindingEnabled(true, duration: 0.2, force: true)
     }
 }
