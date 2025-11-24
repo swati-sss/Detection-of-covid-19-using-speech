@@ -1,426 +1,460 @@
-import CoreGraphics
-import Foundation
+import WebKit
+import Combine
+import LivingDesign
+import UIKit
 
-extension StoreMapLoaderViewModel {
-    var navigationSessionState: NavigationSessionState? {
-        indoorNavigationService.navigationSessionState
+typealias StoreMapsCompletion = () -> Void
+
+enum ZoomActionType {
+    case zoomIn
+    case zoomOut
+}
+
+enum FloorLevelType: String {
+    case floorOne = "1"
+    case floorTwo = "2"
+}
+
+enum StoreMapError: Error {
+    case invalidStatusCode(Int)
+    case invalidResponse
+    case failedToLoadContent(Error)
+    case mapLoadTimedOut
+    case noInternetConnection(Error)
+}
+
+internal enum MapButtonColor {
+    static let blue = UIColor(red: 0, green: 0.44, blue: 0.86, alpha: 1)
+    static let black = UIColor.black
+    static let gray = UIColor(red: 0.73, green: 0.73, blue: 0.75, alpha: 1)
+}
+
+protocol StoreMapsViewDelegate: AnyObject {
+    var webView: WKWebView { get }
+    var isWebViewLoaded: Bool { get set}
+    var isCenterButtonClicked: Bool { get set}
+    var isLocationStatusVisible: Bool { get set }
+
+    func zoomOnRegion(with rect: CGRect, zoomAnimationDelay: TimeInterval, completion: StoreMapsCompletion?)
+    func toggleLoadingView(_ shouldShow: Bool)
+    func reloadWebView()
+    func zoomOut(with zoomScale: CGFloat?, _ completion: @escaping (() -> Void))
+    func zoom(to rect: CGRect, isAnimated: Bool)
+    func setZoomScale(to zoomScale: CGFloat, zoomType: ZoomActionType, _ completion: StoreMapsCompletion?)
+    func handleNavigationInterruption(for index: Int, status: NavigationStatus?)
+    func refreshNavigationButtonState(_ isVisible: Bool?)
+    func previewSetUp(isStaticPathVisible: Bool)
+    func updateZoomInteraction(enabled: Bool)
+    func displayPinErrorBanner(_ enabled: Bool)
+    func mapLoadingDidStart()
+    func mapLoadingDidFinish()
+    func didUpdateFloorCount(_ count: Int)
+}
+
+extension StoreMapsViewDelegate {
+    func zoomOut(with zoomScale: CGFloat? = nil, _ completion: @escaping (() -> Void) = {}) {
+        zoomOut(with: zoomScale, completion)
     }
 
-    var isNavigationActiveOrStopped: Bool {
-        guard let status = navigationSessionState?.navigationStatus else { return false }
-        return status == .inProgress || status == .stopped
+    func mapLoadingDidStart() {}
+    func mapLoadingDidFinish() {}
+    func didUpdateFloorCount(_ count: Int) {}
+}
+
+class StoreMapView: UIView, StoreMapsViewDelegate, UIGestureRecognizerDelegate {
+    struct Options {
+        let dynamicMapEnabled: Bool
+        let zoomControlEnabled: Bool
+        let errorScreensEnabled: Bool
+        let spinnerEnabled: Bool
+        let dynamicMapRotationEnabled: Bool
+        let navigationConfig: NavigationConfig
+        let mapUiConfig: MapUiConfig
+        let pinsConfig: PinsConfig
     }
 
-    var shouldSkipZoomOnLocation: Bool {
-        isNavigationActiveOrStopped &&
-        (mapViewDelegate?.isCenterButtonClicked == false)
+    internal var options: Options
+    internal var isCenterButtonClicked: Bool
+    internal var isNavigationButtonClicked: Bool
+    weak var webViewLoaderViewModel: StoreMapViewInteracting?
+    let webView: WKWebView
+    internal var currentIsPositionLocked: Bool?
+    internal var lastNavigationButtonVisibility: Bool?
+    private var snackbar: LivingDesign.LDSnackbar?
+    var mapCenterButton: LivingDesign.LDIconButton = {
+        let button = LivingDesign.LDIconButton(
+            dataModel: LivingDesign.LDIconButton.Model(
+                size: .large,
+                image: Asset.Image.mapCenter.image,
+                color: .white,
+                shape: .round
+            )
+        )
+        button.translatesAutoresizingMaskIntoConstraints = false
+        return button
+    }()
+
+    internal let navigationButton: LivingDesign.LDIconButton = {
+        let button = LivingDesign.LDIconButton(
+            dataModel: LivingDesign.LDIconButton.Model(
+                size: .large,
+                image: Asset.Image.routePreviewStart.image,
+                color: .default,
+                shape: .round
+            )
+        )
+        button.translatesAutoresizingMaskIntoConstraints = false
+        return button
+    }()
+
+    internal let buttonStackView: UIStackView = {
+        let stackView = UIStackView()
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        stackView.axis = .vertical
+        stackView.spacing = LDSpacing.space8
+        stackView.alignment = .center
+        return stackView
+    }()
+
+    var isLocationStatusVisible: Bool = false {
+        didSet {
+            locationStatusLabel.isHidden = !isLocationStatusVisible
+            locationStatusContainer.isHidden = !isLocationStatusVisible
+            Log.debug("Location status visibility set to: \(isLocationStatusVisible)")
+        }
     }
 
-    var isNavigationInProgress: Bool {
-        navigationSessionState?.navigationStatus == .inProgress
+    internal let locationStatusLabel: UILabel = {
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.text = LocalizedKey.findingLocation.localized
+        label.textAlignment = .left
+        label.font = UIFont.bogle(ofSize: LDSpacing.space12, weight: .bold)
+        label.numberOfLines = 0
+        label.textColor = .white
+        return label
+    }()
+
+    internal let locationActivityIndicator: LivingDesign.LDSpinner = {
+        let locationActivityIndicator = LDSpinner(style: .inverse, size: .large)
+        locationActivityIndicator.translatesAutoresizingMaskIntoConstraints = false
+        return locationActivityIndicator
+    }()
+
+    internal let locationStatusContainer: UIStackView = {
+        let stack = UIStackView()
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.axis = .horizontal
+        stack.spacing = 8
+        stack.alignment = .center
+        stack.distribution = .fill
+        stack.isHidden = true
+        stack.backgroundColor = UIColor(red: 0, green: 0.176, blue: 0.345, alpha: 1)
+        stack.layer.cornerRadius = 12
+        stack.layer.masksToBounds = true
+        stack.layoutMargins = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+        stack.isLayoutMarginsRelativeArrangement = true
+        return stack
+    }()
+
+    internal var zoomControlStackView: UIStackView = {
+        let stackView = UIStackView(axis: .vertical)
+        stackView.alignment = .center
+        stackView.distribution = .fill
+        stackView.backgroundColor = .white
+        stackView.layer.cornerRadius = 5
+        stackView.layer.shadowColor = UIColor.black.cgColor
+        stackView.layer.shadowOpacity = 0.3
+        stackView.layer.shadowOffset = CGSize(width: 1, height: 1)
+        stackView.layer.shadowRadius = 5
+        stackView.layer.masksToBounds = false
+        return stackView
+    }()
+
+    internal var floorControlStackView: UIStackView = {
+        let stackView = UIStackView(axis: .vertical)
+        stackView.distribution = .equalSpacing
+        stackView.backgroundColor = .white
+        stackView.layer.cornerRadius = 5
+        stackView.layer.shadowColor = UIColor.black.cgColor
+        stackView.layer.shadowOpacity = 0.3
+        stackView.layer.shadowOffset = CGSize(width: 1, height: 1)
+        stackView.layer.shadowRadius = 5
+        stackView.layer.masksToBounds = false
+        return stackView
+    }()
+
+    internal let pinErrorBanner: LDAlert = {
+        return LDAlert(dataModel: LDAlert.Model(message: NSAttributedString(string: ""), messageType: .warning))
+    }()
+
+    var floorOneButton: CustomButton?
+    var floorTwoButton: CustomButton?
+    internal let divider = LDDivider()
+    var isWebViewLoaded = false
+    @Published var mapState: StoreMapState?
+
+    public init(webViewLoaderViewModel: StoreMapViewInteracting, options: Options) {
+        self.webViewLoaderViewModel = webViewLoaderViewModel
+        let configuration = WKWebViewConfiguration()
+        let controller = WKUserContentController()
+        controller.add(webViewLoaderViewModel.messageParser, name: "deviceBridge")
+        configuration.userContentController = controller
+        configuration.allowsInlineMediaPlayback = false
+        configuration.allowsAirPlayForMediaPlayback = false
+        configuration.allowsPictureInPictureMediaPlayback = false
+        configuration.preferences.isFraudulentWebsiteWarningEnabled = false
+        configuration.dataDetectorTypes = []
+
+        let wkWebView = WKWebView(frame: .zero, configuration: configuration)
+        wkWebView.scrollView.isDirectionalLockEnabled = false
+        wkWebView.scrollView.showsHorizontalScrollIndicator = false
+        wkWebView.scrollView.showsVerticalScrollIndicator = false
+        wkWebView.scrollView.contentInset = .zero
+        wkWebView.scrollView.contentOffset = .zero
+        wkWebView.scrollView.minimumZoomScale = StoreMapZoomLevel.first.minimumZoomScale
+        wkWebView.scrollView.maximumZoomScale = StoreMapZoomLevel.fourth.maximumZoomScale
+        wkWebView.scrollView.scrollsToTop = false
+        wkWebView.isOpaque = true
+        wkWebView.accessibilityElementsHidden = false
+        self.options = options
+        self.isCenterButtonClicked = options.dynamicMapEnabled
+        self.isNavigationButtonClicked = false
+        webView = wkWebView
+        super.init(frame: .zero)
+        webViewLoaderViewModel.mapViewDelegate = self
+        constructView()
     }
 
-    var shouldUpdateNavigationRoute: Bool {
-        guard let navigationSessionState = navigationSessionState else { return false }
-        let isCurrentLocationWaypointNil = navigationSessionState.currentLocationWaypoint == nil
-        let isNewRouteNeeded = isCurrentLocationWaypointNil ||
-        indoorNavigationService.areNavigationRequiredPointsAvailable()
-        let isInProgress = isCurrentLocationWaypointNil || navigationSessionState.navigationStatus == .inProgress
-        return navigationEnabled == true && isNewRouteNeeded && isInProgress
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
     }
 
-    func setNavigation(enabled: inout Bool) -> Bool {
-        return indoorNavigationService.toggleNavigation(enabled: &enabled)
+    deinit {
+        webView.uiDelegate = nil
+        webView.navigationDelegate = nil
+        webView.scrollView.delegate = nil
     }
 
-    func canDisplayNavigationButton() -> Bool {
-        return indoorNavigationService.navigationSessionState?.hasPinsOnMap ?? false
+    func constructView() {
+        mapCenterButton.isHidden = true
+        mapCenterButton.addTarget(self, action: #selector(mapCenterButtonTapped), for: .touchUpInside)
+        applyIconButtonStyle(
+            mapCenterButton,
+            image: Asset.Image.mapCenter.image,
+            iconColor: MapButtonColor.gray,
+            backgroundColor: .white
+        )
+        navigationButton.isHidden = true
+        navigationButton.addTarget(self, action: #selector(navigationButtonTapped), for: .touchUpInside)
+        applyIconButtonStyle(
+            navigationButton,
+            image: Asset.Image.routePreviewStart.image,
+            iconColor: .white,
+            backgroundColor: MapButtonColor.blue
+        )
+        backgroundColor = .white
+        translatesAutoresizingMaskIntoConstraints = false
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.navigationDelegate = self
+        webView.scrollView.delegate = self
+        addAutoLayoutSubview(webView)
+        addAutoLayoutSubview(buttonStackView)
+        buttonStackView.addArrangedSubview(mapCenterButton)
+        buttonStackView.addArrangedSubview(navigationButton)
+        addAutoLayoutSubview(zoomControlStackView)
+        addAutoLayoutSubview(floorControlStackView)
+        if options.mapUiConfig.pinLocationUnavailableBannerEnabled == true {
+            configurePinErrorBanner()
+            addAutoLayoutSubview(pinErrorBanner)
+        }
+        if options.mapUiConfig.bannerEnabled == true {
+            addAutoLayoutSubview(locationStatusContainer)
+            locationStatusContainer.addArrangedSubview(locationActivityIndicator)
+            locationStatusContainer.addArrangedSubview(locationStatusLabel)
+        }
+        let zoomInButton = createZoomButton(actionType: .zoomIn)
+        zoomControlStackView.addArrangedSubview(divider)
+        let zoomOutButton = createZoomButton(actionType: .zoomOut)
+        floorOneButton = createFloorButton(with: getFloorButtonModel(for: ButtonModel.ActionType.floorOne))
+        floorTwoButton = createFloorButton(with: getFloorButtonModel(for: ButtonModel.ActionType.floorTwo))
+        floorOneButton?.isSelected = true
+        floorTwoButton?.isSelected = false
+        constructZoomControlConstraints(zoomInButton: zoomInButton, zoomOutButton: zoomOutButton)
+        constructFloorControlConstraints()
+        constructPinErrorBannerConstraints()
+        constructButtonStackViewConstraints()
+        constructWebViewConstraints()
+
+        // check zoomControlEnabled feature flag
+        zoomControlStackView.isHidden = !options.zoomControlEnabled
     }
 
-    func setupNavigationPaths() {
-        routeCancellable?.cancel()
-        routeCancellable = indoorNavigationService.handleRouteUpdate(
-            assetService: assetService,
-            indoorPositioningService: indoorPositioningService,
-            setPathfindingEnabled: { [weak self] enabled in
-                guard let self, !isStaticPathVisible else { return }
-                self.setPathfindingEnabled(enabled, duration: 0.2)
-            },
-            updateCustomRoute: { [weak self] coords, distance in
-                guard let self, !isStaticPathVisible else { return }
-                self.updateCustomRoute(coords: coords, distance: distance)
+    func reloadWebView() {
+        Analytics.telemetry(payload: TelemetryAnalytics(event: DisplayMap.DISPLAY_MAP_REQUESTED.rawValue))
+#if DEBUG
+        if let localURL = CompassDebugOverrides.localMapURL {
+            if FileManager.default.fileExists(atPath: localURL.path) {
+                Log.info("Loading map from local HTML: \(localURL)")
+                webView.loadFileURL(localURL, allowingReadAccessTo: localURL.deletingLastPathComponent())
+                return
+            } else {
+                Log.warning("Local map HTML not found at path: \(localURL.path). Falling back to backend map.")
+                CompassDebugOverrides.localMapURL = nil
             }
-        )
-    }
-
-    func updateNavigationRoute(
-        with coordinates: [Point]?, at index: Int, using pinList: PinList?,
-        renderPinsRequest: RenderPinsRequest?
-    ) {
-        Log.debug("[Navigation] enabled: \(String(describing: navigationEnabled)).")
-        guard let navigationEnabled,
-              navigationEnabled,
-              let coordinates = coordinates,
-              !coordinates.isEmpty,
-              let converter = indoorPositioningService.floorCoordinatesConverter else {
-            Log.debug("[Navigation] No coordinates found to add navigation route.")
+        }
+#endif
+        guard let request = APIPath.customStoreMapRequest ?? webViewLoaderViewModel?.getMapURLRequest() else {
+            Analytics.telemetry(payload: TelemetryAnalytics(
+                isError: true,
+                event: DisplayMap.DISPLAY_MAP_ERROR_INVALID_CONTAINER.rawValue
+            ))
             return
         }
+        setMapState(.loading(true))
+        webView.load(request)
 
-        Log.debug("""
-        [Navigation] Adding route coordinates (store map units): \(coordinates)
-          - Index: \(index)
-          - Floor selected: \(floorSelected)
-          - Converting to Oriient units and requesting route API.
-        """)
+        disableTextSelection()
 
-        self.indoorNavigationService.updateNavigationState(
-            currentLocation: nil, pinWaypoint: nil,
-            renderRequest: renderPinsRequest, pinListUpdate: pinList
-        )
+        // Extract headers from the request
+        let headers = request.allHTTPHeaderFields ?? [:]
+        let isCustom = (APIPath.customStoreMapRequest != nil)
 
-        coordinates.forEach {
-            let transformedPoint = CGPoint(x: $0.x, y: $0.y)
-                .storeMapToWasp(offset: assetService.storeConfigOffset)
-                .convertToOriient(using: converter)
-                .asCGPoint()
-
-            let roundedPoint = CGPoint(
-                x: transformedPoint.x.rounded(toDecimalPlaces: 1),
-                y: transformedPoint.y.rounded(toDecimalPlaces: 1)
-            )
-            self.indoorNavigationService.addWaypoint(
-                at: index, coordinate: roundedPoint, floorSelected: floorSelected
-            )
-        }
+        Log.info("""
+                 - Request Info -
+                 URL Type: \(isCustom ? "Custom" : "Default")
+                 URL: \(String(describing: request.url))
+                 Method: \(request.httpMethod ?? "GET")
+                 Body: \(String(data: request.httpBody ?? Data(), encoding: .utf8) ?? "nil")
+                 Headers:
+                 \(headers.map { "\($0.key): \($0.value)" }.joined(separator: "\n"))
+                 """)
     }
 
-    func updateStaticPathRoute(with coordinates: [Point]?) {
-        guard let coordinates = coordinates,
-              !coordinates.isEmpty,
-              let converter = indoorPositioningService.floorCoordinatesConverter else {
-            Log.debug("[DisplayStaticPath] No coordinates found to add navigation route.")
-            return
-        }
-
-        Log.debug(
-                """
-                [DisplayStaticPath] Adding route coordinates (store map units): \(coordinates)
-                  - Floor selected: \(floorSelected)
-                  - Converting to Oriient units and requesting route API.
-                """
-        )
-
-        coordinates.enumerated().forEach {
-            let transformedPoint = CGPoint(x: $1.x, y: $1.y)
-                .storeMapToWasp(offset: assetService.storeConfigOffset)
-                .convertToOriient(using: converter)
-                .asCGPoint()
-
-            let roundedPoint = CGPoint(
-                x: transformedPoint.x.rounded(toDecimalPlaces: 1),
-                y: transformedPoint.y.rounded(toDecimalPlaces: 1)
-            )
-            self.staticPathPreviewService.addWaypoint(
-                coordinate: roundedPoint,
-                floorSelected: floorSelected,
-                shouldFetchRoute: coordinates.count == $0+1
-            )
-        }
+    func updateZoomInteraction(enabled: Bool) {
+        webView.scrollView.isUserInteractionEnabled = enabled
     }
 
-    func setPathfindingEnabled(_ enabled: Bool, duration: TimeInterval = 0.0, force: Bool = false) {
-        let performRequest = {
-            self.request(.setPathfindingEnabled(SetPathFindingRequest(pathfinderEnabled: enabled)))
-        }
-
-        if force {
-            DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: performRequest)
-            return
-        }
-
-        if isStaticPathVisible {
-            DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: performRequest)
-            return
-        }
-
-        guard lastPathfindingEnabled != enabled,
-              let navigationEnabled,
-              navigationEnabled else {
-            return
-        }
-
-        lastPathfindingEnabled = enabled
-        Log.info("[Navigation or DisplayStaticPath] Set pathfinding enabled: \(enabled).")
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: performRequest)
+    func constructPinErrorBannerConstraints() {
+        guard options.mapUiConfig.pinLocationUnavailableBannerEnabled == true else { return }
+        NSLayoutConstraint.activate([
+            pinErrorBanner.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: LDSpacing.space16),
+            pinErrorBanner.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor,
+                                                    constant: LDSpacing.space16),
+            pinErrorBanner.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor,
+                                                     constant: -LDSpacing.space16)
+        ])
     }
 
-    func setPinSelectionEnabled(_ enabled: Bool) {
-        Log.info("Set pinSelection enabled: \(enabled).")
-        self.request(.setPinSelectionEnabled(SetPinSelectionRequest(pinSelectionEnabled: enabled)))
-    }
+    func updateButtons(isPositionLocked: Bool = true) {
+        guard isPositionLocked != currentIsPositionLocked else { return }
 
-    func updateCustomRoute(coords: [Coord], distance: Double) {
-        let shouldRequest = distance.isNaN || (navigationEnabled ?? false)
-
-        guard shouldRequest else { return }
-
-        Log.info("[Navigation or DisplayStaticPath] Update custom route with coord: \(coords), distance: \(distance).")
-        request(.customRoute(CustomRouteRequest(coords: coords, distance: distance, useBluedot: !isStaticPathVisible)))
-    }
-
-    func displayStaticPath(
-        using renderPinsRequest: RenderPinsRequest,
-        startFromNearbyEntrance: Bool,
-        disableZoomGestures: Bool
-    ) {
-        staticPathPreviewService.previewWaypoints = []
-        showMapZoomedOut()
-        isStaticPathVisible = true
-        staticPathPreviewService.startFromNearbyEntrance = startFromNearbyEntrance
-        setPinSelectionEnabled(false)
-        mapViewDelegate?.displayPinErrorBanner(false)
-
-        request(.renderPins(renderPinsRequest))
-        mapViewDelegate?.previewSetUp(isStaticPathVisible: true)
-        self.mapViewDelegate?.updateZoomInteraction(enabled: !disableZoomGestures)
-
-        staticPathPreviewCancellable?.cancel()
-        staticPathPreviewCancellable = staticPathPreviewService.handleRouteUpdate(
-            assetService: assetService,
-            indoorPositioningService: indoorPositioningService) { [weak self] enabled in
-                self?.setPathfindingEnabled(enabled)
-        } updateCustomRoute: { [weak self] coords in
-            self?.updateCustomRoute(coords: coords, distance: .nan)
-        }
-    }
-
-    func updateStaticPathIfNeeded(for pinRenderedMessage: PinRenderedMessage) {
-        guard let pins = pinRenderedMessage.pins,
-              !pins.isEmpty,
-              isStaticPathVisible else {
-            return
-        }
-
-        let validPins = pins.filter { $0.errorData == nil }
-
-        guard validPins == pins else {
-            mapViewDelegate?.displayPinErrorBanner(true)
-            setPathfindingEnabled(false, force: true)
-            return
-        }
-
-        var pointList: [Point] = []
-        if staticPathPreviewService.startFromNearbyEntrance,
-           let entrance = mapLoadedData?.entrances.first {
-            pointList.append(Point(x: entrance.x, y: entrance.y))
-        }
-
-        pointList += validPins.compactMap { $0.location.map { Point(x: $0.x, y: $0.y) } }
-
-        if !validPins.isEmpty {
-            updateStaticPathRoute(with: pointList)
-        }
-    }
-
-    func updateUserPosition(x: Double, y: Double, accuracy: CGFloat?) {
-        request(.showUserLocation(UserPosition(x: x, y: y, ringRadius: accuracy)))
-
-        guard shouldUpdateNavigationRoute else { return }
-
-        let pointList = [Point(x: x, y: y)]
-        updateNavigationRoute(with: pointList, at: 0, using: nil, renderPinsRequest: nil)
-    }
-
-    func updateUserRotation(angle: CGFloat, rotateMap: Bool) {
-        guard !isStaticPathVisible else { return }
-        request(.rotateUser(UserRotation(angle: angle, rotateMap: rotateMap)))
-    }
-
-    func updateUserLoading(percentage: Int) {
-        request(.showUserLoading(UserLoading(
-            percentage: (percentage == 0) ? 1 : percentage))
-        )
-    }
-
-    func clearRenderedPin(mapConfig: MapConfig) {
-        Log.debug("Clear pins")
-        clearStaticPath()
-
-        request(.renderXYLocationPinRequested(PinList(pins: [])))
-        request(.renderPins(RenderPinsRequest(pins: [], pinGroupingEnabled: pinsConfig.groupPinsEnabled)))
-        indoorNavigationService.resetWaypoints(shouldClearBlueDot: false, shouldClearPinList: true)
-        indoorNavigationService.resetNavigationSessionState()
-        mapViewDelegate?.handleNavigationInterruption(for: 1, status: navigationSessionState?.navigationStatus)
-
-        if mapConfig.resetZoom {
-            Log.debug("Reset Zoom level")
-            showMapZoomedOut()
-        }
-    }
-
-    func clearStaticPath() {
-        isStaticPathVisible = false
-        mapViewDelegate?.displayPinErrorBanner(false)
-        setPinSelectionEnabled(true)
-        mapViewDelegate?.previewSetUp(isStaticPathVisible: false)
-        self.mapViewDelegate?.updateZoomInteraction(enabled: true)
-        setPathfindingEnabled(false, force: true)
+        currentIsPositionLocked = isPositionLocked
+        updateMapCenterButton()
+        updateNavigationButton()
     }
 }
 
-// MARK: - IndoorNavigationServiceDelegate
-extension StoreMapLoaderViewModel: IndoorNavigationServiceDelegate {
-    func requestRenderPins(_ pins: [Pin]?, pinList: PinList?, navigationEvent: NavigationAnalytics.Event?) {
-        if let pins = pins {
-            request(.renderPins(.init(pins: pins, pinGroupingEnabled: pinsConfig.groupPinsEnabled)))
-
-            guard let position = indoorPositioningService.lastPosition.value,
-                  position.isLocked else {
-                Log.info("[Navigation] The value of lastLockedPosition is nil")
-                return
-            }
-
-            guard let converter = indoorPositioningService.floorCoordinatesConverter else {
-                Log.info("[Navigation] The value of floorCoordinatesConverter is nil")
-                return
-            }
-
-            let compassPosition = position.convertToCompass(using: converter).asCGPoint()
-
-            let payload = NavigationAnalytics(
-                event: navigationEvent,
-                location: NavigationAnalytics.Location(x: compassPosition.x, y: compassPosition.y)
-            )
-
-            Analytics.mapNavigation(payload: payload)
-        } else if let pinList = pinList {
-            request(.renderXYLocationPinRequested(pinList))
+extension StoreMapView {
+    func previewSetUp(isStaticPathVisible: Bool) {
+        buttonStackView.isHidden = isStaticPathVisible
+        if options.zoomControlEnabled {
+            zoomControlStackView.isHidden = isStaticPathVisible
         }
-    }
 
-    func refreshNavigationButtonState(_ isVisible: Bool?) {
-        mapViewDelegate?.refreshNavigationButtonState(isVisible)
+        if let isPositionLocked = currentIsPositionLocked, !isPositionLocked {
+            isLocationStatusVisible = !isStaticPathVisible
+        }
     }
 }
 
-final class NavigationCoordinator {
-    private unowned let viewModel: StoreMapLoaderViewModel
+internal extension StoreMapView {
+    func applyIconButtonStyle(
+        _ button: LivingDesign.LDIconButton,
+        image: UIImage,
+        iconColor: UIColor,
+        backgroundColor: UIColor,
+        inset: CGFloat = 12,
+        size: LivingDesign.LDIconButton.Size = .medium,
+        shape: LivingDesign.LDIconButton.Shape = .round,
+        cornerRadius: CGFloat? = nil,
+        applyShadow: Bool = true,
+        highlightedBackgroundColor: UIColor? = nil
+    ) {
+        let highlightedBackground = highlightedBackgroundColor ?? backgroundColor.withAlphaComponent(0.95)
+        let disabledBackground = backgroundColor.withAlphaComponent(0.5)
+        let highlightedIconColor = iconColor
+        let disabledIconColor = iconColor.withAlphaComponent(0.5)
 
-    init(viewModel: StoreMapLoaderViewModel) {
-        self.viewModel = viewModel
-    }
-
-    func handleAislePinNavigation(_ pinRenderedMessage: PinRenderedMessage) {
-        guard !viewModel.isStaticPathVisible,
-              let pins = pinRenderedMessage.pins,
-              !pins.isEmpty,
-              viewModel.navigationEnabled == true else {
-            viewModel.mapViewDelegate?.refreshNavigationButtonState(false)
-            return
-        }
-
-        let indoorNavigationService = viewModel.indoorNavigationService
-        indoorNavigationService.resetWaypoints(shouldClearBlueDot: false, shouldClearPinList: true)
-
-        let validPins = pins.filter { $0.selected && $0.errorData == nil }
-        let pointList = validPins.compactMap { $0.location.map { Point(x: $0.x, y: $0.y) } }
-        let shouldUpdatePinList = indoorNavigationService.navigationSessionState?.navigationStatus != .inProgress
-
-        let renderPinsRequest: RenderPinsRequest? = shouldUpdatePinList ? .init(
-            pins: pins,
-            pinGroupingEnabled: viewModel.pinsConfig.groupPinsEnabled
-        ) : nil
-
-        indoorNavigationService.updateNavigationState(
-            currentLocation: nil,
-            pinWaypoint: nil,
-            renderRequest: renderPinsRequest,
-            pinListUpdate: nil
+        let normalColors = LivingDesign.LDIconButton.Appearance.ButtonColors(
+            iconColor: iconColor,
+            backgroundColor: backgroundColor
+        )
+        let highlightedColors = LivingDesign.LDIconButton.Appearance.ButtonColors(
+            iconColor: highlightedIconColor,
+            backgroundColor: highlightedBackground
+        )
+        let disabledColors = LivingDesign.LDIconButton.Appearance.ButtonColors(
+            iconColor: disabledIconColor,
+            backgroundColor: disabledBackground
         )
 
-        viewModel.mapViewDelegate?.handleNavigationInterruption(
-            for: 1,
-            status: viewModel.navigationSessionState?.navigationStatus
+        let variant = LivingDesign.LDIconButton.Appearance.ButtonVariant(
+            normal: normalColors,
+            highlighted: highlightedColors,
+            disabled: disabledColors
         )
 
-        if !validPins.isEmpty {
-            startAutomaticNavigationIfNeeded()
-            viewModel.updateNavigationRoute(
-                with: pointList,
-                at: 1,
-                using: nil,
-                renderPinsRequest: renderPinsRequest
-            )
+        button.appearance = LivingDesign.LDIconButton.Appearance(normal: variant, white: variant)
+        button.dataModel = LivingDesign.LDIconButton.Model(
+            size: size,
+            image: image,
+            color: .default,
+            shape: shape
+        )
+        button.contentEdgeInsets = UIEdgeInsets(top: inset, left: inset, bottom: inset, right: inset)
+        if let cornerRadius {
+            button.layer.cornerRadius = cornerRadius
+            button.clipsToBounds = true
         } else {
-            indoorNavigationService.resetNavigationSessionState()
+            button.clipsToBounds = false
         }
-
-        refreshNavigationState(withPins: pins)
-    }
-
-    func handleXYPinNavigation(pins: [DrawPin], topLeft: Point?, bottomRight: Point?) {
-        guard !pins.isEmpty else {
-            viewModel.mapViewDelegate?.refreshNavigationButtonState(false)
-            return
-        }
-
-        let indoorNavigationService = viewModel.indoorNavigationService
-        indoorNavigationService.resetWaypoints(shouldClearBlueDot: false, shouldClearPinList: true)
-
-        let validPins = pins.filter { $0.errorData == nil }
-        let shouldUpdatePinList = indoorNavigationService.navigationSessionState?.navigationStatus != .inProgress
-        let currentPinList = shouldUpdatePinList ? PinList(pins: validPins) : nil
-
-        indoorNavigationService.updateNavigationState(
-            currentLocation: nil,
-            pinWaypoint: nil,
-            renderRequest: nil,
-            pinListUpdate: currentPinList
-        )
-
-        viewModel.mapViewDelegate?.handleNavigationInterruption(
-            for: 1,
-            status: viewModel.navigationSessionState?.navigationStatus
-        )
-
-        if !validPins.isEmpty {
-            let pointList = validPins.map { Point(x: $0.x, y: $0.y) }
-            viewModel.updateNavigationRoute(
-                with: pointList,
-                at: 1,
-                using: currentPinList,
-                renderPinsRequest: nil
-            )
+        if applyShadow {
+            applyFloatingShadow(to: button)
         } else {
-            indoorNavigationService.resetNavigationSessionState()
+            button.layer.shadowOpacity = 0
         }
-
-        refreshNavigationState(withDrawPins: pins)
-        viewModel.zoomOnLocation(topLeft: topLeft, bottomRight: bottomRight)
     }
 
-    private func refreshNavigationState(withPins pins: [Pin]) {
-        let validPins = pins.filter { $0.errorData == nil }
-        let hasPinsOnMap = !validPins.isEmpty
-        viewModel.indoorNavigationService.navigationSessionState?.hasPinsOnMap = hasPinsOnMap
-        viewModel.mapViewDelegate?.refreshNavigationButtonState(hasPinsOnMap)
+    func applyFloatingShadow(to button: UIView) {
+        button.layer.shadowColor = UIColor.black.cgColor
+        button.layer.shadowOpacity = 0.5
+        button.layer.shadowOffset = CGSize(width: 0, height: 2)
+        button.layer.shadowRadius = 4
+        button.layer.masksToBounds = false
     }
 
-    private func refreshNavigationState(withDrawPins drawPins: [DrawPin]) {
-        let validPins = drawPins.filter { $0.errorData == nil }
-        let hasPinsOnMap = !validPins.isEmpty
-        viewModel.indoorNavigationService.navigationSessionState?.hasPinsOnMap = hasPinsOnMap
-        viewModel.mapViewDelegate?.refreshNavigationButtonState(hasPinsOnMap)
-    }
+    func setupLocationStatusConstraints(constraints: inout [NSLayoutConstraint]) {
+        guard options.mapUiConfig.bannerEnabled else { return }
 
-    private func startAutomaticNavigationIfNeeded() {
-        guard let navigationConfig = viewModel.indoorNavigationService.navigationConfig,
-              navigationConfig.isAutomaticNavigation else {
-            return
-        }
+        constraints += [
+            locationStatusContainer.topAnchor.constraint(
+                equalTo: safeAreaLayoutGuide.topAnchor, constant: LDSpacing.space8),
+            locationStatusContainer.leadingAnchor.constraint(
+                greaterThanOrEqualTo: safeAreaLayoutGuide.leadingAnchor, constant: 60),
+            locationStatusContainer.trailingAnchor.constraint(
+                lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -60),
+            locationStatusContainer.centerXAnchor.constraint(equalTo: centerXAnchor)
+        ]
 
-        viewModel.indoorNavigationService.navigationSessionState?.navigationStatus = .inProgress
-        viewModel.setPathfindingEnabled(true, duration: 0.2, force: true)
+        NSLayoutConstraint.activate([
+            locationActivityIndicator.widthAnchor.constraint(equalToConstant: LDSpacing.space48),
+            locationActivityIndicator.heightAnchor.constraint(equalToConstant: LDSpacing.space48)
+        ])
+
+        locationStatusContainer.setContentHuggingPriority(.required, for: .horizontal)
+        locationStatusContainer.setContentCompressionResistancePriority(.required, for: .horizontal)
+        locationStatusContainer.setContentHuggingPriority(.required, for: .vertical)
+        locationStatusContainer.setContentCompressionResistancePriority(.required, for: .vertical)
     }
 }
