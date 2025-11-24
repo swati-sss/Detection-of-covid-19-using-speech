@@ -1,137 +1,46 @@
-import CoreGraphics
 import Foundation
 
-extension StoreMapLoaderViewModel {
-    func zoomOnLocation(topLeft: Point?, bottomRight: Point?, target: ZoomTarget = .pinAnnotation) {
-        if isStaticPathVisible { return }
-        if shouldSkipZoomOnLocation { return }
+typealias PinLocationFetchCompletionHandler = (PinRenderedMessage) -> Void
 
-        guard target == .pinAnnotation ? config.shouldZoomOnPins : mapViewDelegate?.isCenterButtonClicked == true,
-              let topLeft = topLeft,
-              let bottomRight = bottomRight else {
-            Log.debug("Zooming on area failed for target \(target), shouldZoom: \(config.shouldZoomOnPins)")
-            return
-        }
+protocol StoreMapLifecycleHandling: AnyObject, MessageParserDelegate {
+    var mapViewDelegate: StoreMapsViewDelegate? { get set }
+    var messageParser: MessageParsing { get }
 
-        var scale =
-        (
-            (
-                target == .pinAnnotation && config.shouldZoomOnPins && mapViewDelegate?.isCenterButtonClicked == true
-            ) ||
-            mapViewDelegate?.isCenterButtonClicked == true
-        ) ?
-        StoreMapZoomLevel.third.zoomValue : StoreMapZoomLevel.third.minimumZoomScale
-
-        if DeviceInformation.getCompassSDKClientType().lowercased().contains("gif") {
-            scale = StoreMapZoomLevel.third.zoomValue
-        }
-
-        let topLeftPoint = applyScaledContentOffset(to: topLeft.cgPoint)
-        let bottomRightPoint = applyScaledContentOffset(to: bottomRight.cgPoint)
-        let zoomRect = makeZoomRect(
-            topLeft: topLeftPoint,
-            bottomRight: bottomRightPoint,
-            scale: scale
-        )
-        if target == .pinAnnotation {
-            renderedPinsZoomRect = zoomRect
-        }
-        zoomOnRegion(with: zoomRect, target: target)
-        Log.debug(
-                 """
-                 zoomOnLocation on target \(target),
-                 shouldZoom: \(config.shouldZoomOnPins),
-                 isCenterButtonClicked \(String(describing: mapViewDelegate?.isCenterButtonClicked))
-                 """
-        )
-    }
-
-    func zoomToMapCenter() {
-        Log.debug("zoom To MapCenter")
-        hasMapViewZoomed = true
-        mapViewDelegate?.setLoadingVisible(false)
-        DispatchQueue.main.asyncAfter(deadline: .now() + StoreMapConfig.zoomPinAnimationDelay) { [weak self] in
-            guard let self = self else { return }
-            self.mapViewDelegate?.zoomOut(with: self.preferredZoomScale)
-        }
-    }
-
-    func zoomToPinsIfNeeded() {
-        guard mapData != nil, mapViewDelegate?.isWebViewLoaded == true, !hasMapViewZoomed else {
-            return
-        }
-        zoomToPins()
-    }
-
-    func zoomToPins() {
-        guard (mapLoadedData?.floors.count ?? 1) > 1 && configuration.pin != nil else { return }
-        Log.debug("zoom To Pins")
-        hasMapViewZoomed = true
-        mapViewDelegate?.setLoadingVisible(false)
-        guard let renderedPinsZoomRect = renderedPinsZoomRect else {
-            zoomToMapCenter()
-            return
-        }
-
-        zoomOnRegion(with: renderedPinsZoomRect)
-    }
-
-    func zoomOnRegion(with zoomRect: CGRect, target: ZoomTarget = .pinAnnotation) {
-        let delay = target == .pinAnnotation ? StoreMapConfig.zoomPinAnimationDelay : 0.0
-        mapViewDelegate?.zoomOnRegion(with: zoomRect, zoomAnimationDelay: delay) { [weak self] in
-            if target == .pinAnnotation { self?.renderedPinsZoomRect = nil }
-        }
-    }
-
-    func getUpdateScale(_ currentScale: CGFloat, _ zoomType: ZoomActionType) -> CGFloat {
-        switch zoomType {
-        case .zoomIn:
-            if currentScale + StoreMapConfig.zoomFactor < StoreMapZoomLevel.fourth.maximumZoomScale {
-                return currentScale + StoreMapConfig.zoomFactor
-            } else {
-                return StoreMapZoomLevel.fourth.maximumZoomScale
-            }
-        case .zoomOut:
-            if currentScale - StoreMapConfig.zoomFactor > StoreMapZoomLevel.first.minimumZoomScale {
-                return currentScale - StoreMapConfig.zoomFactor
-            } else {
-                return StoreMapZoomLevel.first.minimumZoomScale
-            }
-        }
-    }
-
-    func updateZoomLevel(with scale: CGFloat) {
-        guard let zoomLevel = StoreMapZoomLevel.makeZoomLevel(from: scale),
-              let currentZoomLevel = StoreMapZoomLevel.makeZoomLevel(from: currentZoomScale),
-              zoomLevel != currentZoomLevel
-        else { return }
-        Log.debug("updateZoomLevel with scale: \(scale)")
-        request(.zoomLevelChange(ZoomLevelChangeRequest(zoom: zoomLevel.zoomValue)))
-        zoomAnalyticsLogger?.updateAnalyticsValues(analyticsEventState: .zoomPinch, scale: scale)
-        guard currentZoomScale != scale else { return }
-        currentZoomScale = scale
-        Log.debug("updateZoomViewIfNeed with zoomScale: \(scale)")
-    }
-
-    func zoomOut() {
-        Log.debug("""
-                  ZoomOut should only happen when map Center Button is not clicked.
-                  isCenterButtonClicked: \(String(describing: mapViewDelegate?.isCenterButtonClicked))
-                  """
-                 )
-        guard let mapViewDelegate, !mapViewDelegate.isCenterButtonClicked else {
-            return
-        }
-
-        request(.zoomLevelChange(ZoomLevelChangeRequest(zoom: 0)))
-        showMapZoomedOut()
-    }
-
-    func onStoreMapZoomChange(zoomType: ZoomActionType, _ completion: (() -> Void)?) {
-        guard let webView = mapViewDelegate?.webView else { return }
-        let currentScale = webView.scrollView.zoomScale
-        let zoomScale = getUpdateScale(currentScale, zoomType)
-        zoomAnalyticsLogger?.updateAnalyticsValues(analyticsEventState: .zoomButton, scale: zoomScale)
-        mapViewDelegate?.setZoomScale(to: zoomScale, zoomType: zoomType, completion)
-    }
+    func viewDidAppear()
+    func viewWillDisappear()
+    func didConstructView()
+    func didLoadWebView()
+    func handleError()
+    func getMapURLRequest() -> URLRequest?
 }
+
+protocol StoreMapMapHandling: AnyObject {
+    func updateZoomLevel(with scale: CGFloat)
+    func clearRenderedPin(mapConfig: MapConfig)
+    func renderPins(from points: [CGPoint], config: DisplayPinConfig?)
+    func renderPins(_ pins: [Pin], config: DisplayPinConfig?)
+    func renderPins(_ request: RenderPinsRequest, config: DisplayPinConfig?)
+    func zoomOut()
+    func onStoreMapZoomChange(zoomType: ZoomActionType, _ completion: (() -> Void)?)
+    func onStoreMapFloorChange(levelType: FloorLevelType, _ completion: (() -> Void)?)
+}
+
+protocol StoreMapNavigationHandling: AnyObject {
+    func displayStaticPath(
+        using renderPinsRequest: RenderPinsRequest,
+        startFromNearbyEntrance: Bool,
+        disableZoomGestures: Bool
+    )
+    func getUserDistance(_ request: GetPinLocationRequest, completion: PinLocationFetchCompletionHandler?)
+    func updateUserPosition(x: Double, y: Double, accuracy: CGFloat?)
+    func updateUserRotation(angle: CGFloat, rotateMap: Bool)
+    func updateUserLoading(percentage: Int)
+    func setPathfindingEnabled(_ enabled: Bool, duration: TimeInterval, force: Bool)
+    func setPinSelectionEnabled(_ enabled: Bool)
+    func setNavigation(enabled: inout Bool) -> Bool
+    func canDisplayNavigationButton() -> Bool
+}
+
+typealias StoreMapViewInteracting = StoreMapLifecycleHandling & StoreMapMapHandling & StoreMapNavigationHandling
+
+protocol StoreMapViewActionable: StoreMapViewInteracting {}
