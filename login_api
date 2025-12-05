@@ -1,327 +1,532 @@
 import Combine
 import CoreData
+import Foundation
 import UIKit
-import os.log
-import SwiftUI
+import WebKit
+
 import IPSFramework
 
-private class BundleLocator {}
-internal let sdkBundle: Bundle = Bundle(for: BundleLocator.self)
-internal let oriientBundle: Bundle = Bundle(for: IPSCore.self)
+protocol CompassViewModelType {
+    var rootViewController: UIViewController? { get set }
+    var isFinishedInitializePublisher: CurrentValueSubject<Bool?, Never> { get }
+    var isFinishedSettingMapPublisher: CurrentValueSubject<Bool, Never> { get }
+    var isBlueDotEnabledPublisher: CurrentValueSubject<Bool?, Never> { get }
+    var currentStore: Int? { get }
+    var canCompleteInitialization: (() -> Bool)? { get set }
 
-#if DEBUG
-enum CompassDebugOverrides {
-    static var localMapURL: URL?
+    func initialize(authParameter: AuthParameter,
+                    configuration: Configuration,
+                    capabilities: [CompassCapability],
+                    customMapRequest: URLRequest?)
+    func setWebViewMessageDelegate(_ delegate: WebViewMessageDelegate?)
+    func evaluateJSOnWebView(_ string: String)
+    func updateAuthParams(token: String, tokenType: String, consumerID: String, accountID: String)
+    func getAccessToken(authParameter: AuthParameter) -> AnyPublisher<AccessTokenResponse?, Never>
+    func toggleMockUser(_ option: Bool)
+    func updateStoreConfiguration(_ storeConfig: StoreConfig?)
+    func getAisle(id: String)
+    func isMapViewReady() -> AnyPublisher<Bool, Never>
+    func displayMap()
+    func clearMap(mapConfig: MapConfig)
+    func updateEvent(compassEvent: CompassEvent)
+    func updateEventList(namespace: String, eventType: String, eventValue: String, metaData: HashMap?)
+    func displayPin(uuidList: [String], idType: PinDropMethod, config: DisplayPinConfig?)
+    func displayPin(pins: [CompassPin]?, config: DisplayPinConfig?, isZoomOutRequired: Bool)
+    func displayStaticPath(pins: [CompassPin], startFromNearbyEntrance: Bool, disableZoomGestures: Bool)
+    func startPositionSession()
+    func stopPositioning()
+    func resetPositionStatusEvent()
+    func killSwitch()
+    func removeUserPositionIndicator()
+    func getUserDistance(pins: [AislePin], completion: UserDistanceCompleteHandler?)
 }
-#endif
 
-public class Compass: UIViewController {
-    internal var viewModel: CompassViewModelType!
-    internal let serviceLocator: ServiceLocatorType!
-    private var cancellables = Set<AnyCancellable>()
-    private var isMapInitialized: Bool? {
-        didSet {
-            guard isMapInitialized == true else {
-                Analytics.mapInitialization(
-                    payload: BaseAnalytics(success: isMapInitialized,
-                                           errorCode: EventType.errorCode.rawValue,
-                                           errorMessage: EventType.errorMessage.rawValue)
-                )
-                return
-            }
-            Analytics.mapInitialization(
-                payload: BaseAnalytics(success: isMapInitialized)
-            )
-        }
+final class CompassViewModel: CompassViewModelType {
+    internal var mapHostViewModel: MapHostViewModelType?
+    internal var isPositioningEnabled: Bool = false
+    private var capabilities: [CompassCapability] = []
+    private var includeLocationInHeatbeat: Bool = false
+    private var includeUserInHeatbeat: Bool = false
+    private var positioningSessioinTimeout: Int = 2
+    internal var positionSessionTimer: Timer?
+    internal var positionRefreshTime: Double = 1.0
+    internal var sessionRefreshTime: Int = SessionTime.positionRefreshTime
+    internal var assetService: AssetService
+    let serviceLocator: ServiceLocatorType
+    private var cancellable: Set<AnyCancellable> = []
+    private var shouldClearBlueDot: Bool = false
+    private let defaultsStore: UserDefaultsStore
+    private let finishedInitializeSubject = CurrentValueSubject<Bool?, Never>(nil)
+    private let finishedSettingMapSubject = CurrentValueSubject<Bool, Never>(false)
+    private let blueDotEnabledSubject = CurrentValueSubject<Bool?, Never>(nil)
+    private(set) var currentStore: Int?
+    var canCompleteInitialization: (() -> Bool)?
+
+    var isFinishedInitializePublisher: CurrentValueSubject<Bool?, Never> {
+        finishedInitializeSubject
     }
 
-    public var isFinishedInitialize = CurrentValueSubject<Bool?, Never>(nil)
-    public var isFinishedSettingMap = CurrentValueSubject<Bool, Never>(false)
-    public var currentStore: Int?
-    public let isBlueDotEnabled = CurrentValueSubject<Bool?, Never>(nil)
-
-    /// Initialize the Compass class.
-    /// This is use to create view model.
-    public init() {
-        self.serviceLocator = ServiceLocator.shared
-        self.viewModel = CompassViewModel(serviceLocator: serviceLocator)
-        super.init(nibName: nil, bundle: nil)
-        configureViewModel()
+    var isFinishedSettingMapPublisher: CurrentValueSubject<Bool, Never> {
+        finishedSettingMapSubject
     }
 
-    internal init(serviceLocator: ServiceLocatorType, viewModel: CompassViewModelType) {
+    var isBlueDotEnabledPublisher: CurrentValueSubject<Bool?, Never> {
+        blueDotEnabledSubject
+    }
+
+    weak var rootViewController: UIViewController?
+
+    init(serviceLocator: ServiceLocatorType, defaultsStore: UserDefaultsStore = UserDefaultsStore()) {
         self.serviceLocator = serviceLocator
-        self.viewModel = viewModel
-        super.init(nibName: nil, bundle: nil)
-        configureViewModel()
+        self.assetService = serviceLocator.getAssetService()
+        self.defaultsStore = defaultsStore
+        Analytics.logDefault = serviceLocator.getLogDefaultImpl()
+        bindAppLifecycleObservation()
     }
 
-    required init?(coder aDecoder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    private func configureViewModel() {
-        viewModel.canCompleteInitialization = { [weak self] in
-            self?.children.isEmpty ?? false
-        }
-        bindToViewModelOutputs()
-    }
-
-    private func bindToViewModelOutputs() {
-        viewModel.isFinishedInitializePublisher
-            .sink { [weak self] value in
-                self?.isFinishedInitialize.value = value
-                if value == false {
-                    self?.isMapInitialized = false
-                }
-            }
-            .store(in: &cancellables)
-
-        viewModel.isFinishedSettingMapPublisher
-            .sink { [weak self] value in
-                self?.isFinishedSettingMap.value = value
-                if value {
-                    self?.isMapInitialized = true
-                }
-            }
-            .store(in: &cancellables)
-
-        viewModel.isBlueDotEnabledPublisher
-            .sink { [weak self] value in
-                self?.isBlueDotEnabled.value = value
-            }
-            .store(in: &cancellables)
-    }
-
-    /// Handle the events for background URL session.
-    /// - Parameters:
-    ///   - identifier: The identifier for the background url session.
-    ///   - application: The current application instance.
-    public static func handleEventsForBackgroundURLSession(identifier: String, application: UIApplication) {
-        _ = IPSCore.application(application,
-                            handleEventsForBackgroundURLSession: identifier,
-                            completionHandler: {})
-    }
-
-    /// Called when the view has appeared. Starts the position session.
-    /// - Parameter animated: Wether the appearance is animated.
-    public override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        viewModel.startPositionSession()
-    }
-
-    /// Initialize the Compass with authentication and configuration paramaters.
-    /// - Parameters:
-    ///   - authParameter: The authentication parameter to use.
-    ///   - configuration: The configuration settings to apply.
-    ///   - rootViewController: The root view controller to use
-    public func initialize(authParameter: AuthParameter,
-                           configuration: Configuration,
-                           capabilities: [CompassCapability],
-                           rootViewController: UIViewController,
-                           customMapRequest: URLRequest? = nil) {
-        viewModel.rootViewController = rootViewController
-        rootViewController.add(childVC: self)
-#if DEBUG
-        let previousStore = currentStore
-        resetOverrideTracking()
-        if previousStore != configuration.site {
-            UserDefaults.standard.removeObject(forKey: "FeatureFlagOverrides_\(configuration.site)")
-        }
-#endif
-        viewModel.initialize(authParameter: authParameter,
-                             configuration: configuration,
-                             capabilities: capabilities,
-                             customMapRequest: customMapRequest)
-        currentStore = viewModel.currentStore
-    }
-
-    /// Display the map with specific workflow.
-    ///
-    /// - Parameters:
-    ///   - workflow: The workflow to use for displaying the map.
-    public func displayMap(workflow: Workflow?) {
-        Log.info("Start displayMap API")
-        Analytics.workflow = workflow
-        DispatchQueue.main.async {
-            self.viewModel.displayMap()
-        }
-    }
-
-    /// Update the event with a given compass event.
-    ///
-    /// - Parameters:
-    ///   - compassEvent: The compass event to update.
-    public func updateEvent(compassEvent: CompassEvent) {
-        Log.info("Start updateEvent API with compassEvent: \(compassEvent)")
-        viewModel.updateEvent(compassEvent: compassEvent)
-    }
-
-    public func updateEventList(namespace: String, eventType: String, eventValue: String, metaData: HashMap? = nil) {
+    func initialize(authParameter: AuthParameter,
+                    configuration: Configuration,
+                    capabilities: [CompassCapability],
+                    customMapRequest: URLRequest?) {
+        cancellable.removeAll()
+        var mutableAuthParameter = authParameter
+        mutableAuthParameter.tokenType = mutableAuthParameter.tokenType.lowercased()
+        currentStore = configuration.site
+        self.capabilities = capabilities
+        APIPath.customStoreMapRequest = customMapRequest
+        Analytics.initialization(state: .start)
+        Analytics.anonymizedUserID = configuration.anonymizedUserID
+        toggleMockUser(configuration.mockUser)
         Log.info("""
-                  Start updateEventList API with namespace: \(namespace)
-                  eventType: \(eventType)
-                  eventValue: \(eventValue)
-                  metaData:\(String(describing: metaData))
-                  """)
+                Start initialize API with authParameter: \(mutableAuthParameter)
+                configuration: \(configuration)
+                rootViewController: \(String(describing: rootViewController))
+                compassVersion: \(DeviceInformation.getCompassSDKVersion())
+                oriientVersion: \(DeviceInformation.getOriientSDKVersion())
+                """)
+        beginInitialization(authParameter: mutableAuthParameter, configuration: configuration)
+    }
 
-        viewModel.updateEventList(
-            namespace: namespace,
-            eventType: eventType,
-            eventValue: eventValue,
-            metaData: metaData
+    func setWebViewMessageDelegate(_ delegate: WebViewMessageDelegate?) {
+        Log.info("Start setWebViewMessageDelegate API")
+        if let parser = serviceLocator.getWebViewMessageParser() as? MessageParser {
+            parser.webviewParserDelegate = delegate
+            Log.debug("setWebViewMessageDelegate: delegate set")
+        } else {
+            Log.debug("setWebViewMessageDelegate: message parser is not MessageParser concrete type")
+        }
+    }
+
+    func evaluateJSOnWebView(_ string: String) {
+        Log.info("Start evaluateJSOnWebView API with script length: \(string.count)")
+        guard let webView = findStoreMapWebView() else {
+            return
+        }
+        DispatchQueue.dispatchToMainIfNeeded {
+            webView.evaluateJavaScript(string, completionHandler: nil)
+        }
+    }
+
+    func updateAuthParams(token: String, tokenType: String, consumerID: String, accountID: String) {
+        Log.info("Updating auth parameters for consumerID: \(consumerID)")
+        let normalizedTokenType = tokenType.lowercased()
+        guard normalizedTokenType == TokenType.User.rawValue || normalizedTokenType == TokenType.Pingfed.rawValue else {
+            return
+        }
+
+        let authParameter = AuthParameter(authToken: token,
+                                          tokenType: normalizedTokenType,
+                                          accountID: accountID,
+                                          consumerID: consumerID)
+        try? serviceLocator.getKeychainService().saveToken(authParameter)
+    }
+
+    /// Initialize the CompassViewModel class.
+    /// This is use to assign accessTokenService and configurationService.
+
+    /// This is used to retrieve access token based on clientId and consumerId.
+    /// Will also store access token data in core data model .
+    func getAccessToken(authParameter: AuthParameter) -> AnyPublisher<AccessTokenResponse?, Never> {
+        return Just(authParameter.authToken.isEmptyOrWhitespace() ? nil : authParameter)
+            .flatMap { [weak self] authParameter -> AnyPublisher<AccessTokenResponse?, Never> in
+                guard let self = self, let authParameter else {
+                    self?.logAndHandleEmptyAuthParameter()
+                    return Just(nil).eraseToAnyPublisher()
+                }
+                return self.handleTokenType(for: authParameter)
+            }
+            .eraseToAnyPublisher()
+    }
+
+    func toggleMockUser(_ option: Bool) {
+        Log.info("Set up Mock User: \(option)")
+        if option {
+            IPSPositioning.testLockThreshold = 0
+        }
+    }
+
+    func updateStoreConfiguration(_ storeConfig: StoreConfig?) {
+        #if DEBUG
+        if let assetService = serviceLocator.getAssetService() as? AssetServiceImpl {
+            assetService.lastStoreConfig = storeConfig
+        }
+        #endif
+        positionRefreshTime = storeConfig?.positioningSessionTimeout ?? 1
+        sessionRefreshTime = storeConfig?.sessionRefreshTime ?? sessionRefreshTime
+        setStore(using: storeConfig)
+        setSupportedEventList(using: storeConfig)
+        setMapType(using: storeConfig)
+        setStoreConfigOffset(using: storeConfig)
+        setupLogIntervalsData(storeConfig: storeConfig)
+        defaultsStore.saveSessionId()
+    }
+
+    func getAisle(id: String) {
+        mapHostViewModel?.getAisle(id: id)
+    }
+
+    func isMapViewReady() -> AnyPublisher<Bool, Never> {
+        serviceLocator.getMapFocusManager().isMapViewPresent.eraseToAnyPublisher()
+    }
+
+    func displayMap() {
+        Log.debug("API Called: displayMap")
+        Analytics.telemetry(payload: TelemetryAnalytics(event: DisplayMap.DISPLAY_MAP_REQUESTED.rawValue))
+        startPositionSession()
+        mapHostViewModel?.displayMap()
+    }
+
+    func clearMap(mapConfig: MapConfig) {
+        Log.debug("API Called: clearMap with config: \(mapConfig)")
+        mapHostViewModel?.clearMap(mapConfig: mapConfig)
+    }
+
+    func updateEvent(compassEvent: CompassEvent) {
+        Log.debug("API Called: updateEvent for event: \(compassEvent)")
+
+        startPositionSession()
+
+        guard let position = serviceLocator.getIndoorPositioningService().lastLockedPosition else {
+            Log.info("The value of lastLockedPosition is nil")
+            emitUpdateEventError()
+            Analytics.telemetry(payload: TelemetryAnalytics(
+                isError: true,
+                event: UpdateEvent.UPDATE_EVENT_ERROR_NOT_LOCKED.rawValue
+            ))
+            return
+        }
+
+        guard let converter = serviceLocator.getIndoorPositioningService().floorCoordinatesConverter else {
+            Log.info("The value of floorCoordinatesConverter is nil")
+            Analytics.telemetry(payload: TelemetryAnalytics(
+                isError: true,
+                event: UpdateEvent.UPDATE_EVENT_ERROR_NOT_LOCKED.rawValue
+            ))
+            emitUpdateEventError()
+            return
+        }
+
+        serviceLocator.getEventService()
+            .cacheAndBootstrapAsset(
+                compassEvent, position: position.convertToCompass(using: converter).asCGPoint()
+            ) { [ weak self] bootstrapStatus in
+                if bootstrapStatus == .notBootstrapped {
+                    self?.emitUpdateEventError()
+                    Analytics.telemetry(payload: TelemetryAnalytics(
+                        isError: true,
+                        event: UpdateEvent.UPDATE_EVENT_ERROR_QUADTREE_CALC.rawValue
+                    ))
+                }
+            }
+    }
+
+    func updateEventList(namespace: String, eventType: String, eventValue: String, metaData: HashMap?) {
+        guard isPositioningEnabled else {
+            Log.info("Blue dot is disabled")
+            return
+        }
+
+        startPositionSession()
+        let supportedEventList = assetService.supportedEventList.components(
+            separatedBy: "},"
+        )
+        let eventKey = "\(namespace)/\(eventType)"
+        let isSupportedEvent = supportedEventList.filter {
+            $0.lowercased().contains(eventKey.lowercased()) &&
+            ($0.lowercased().contains("\"enabled\": true") || $0.lowercased().contains("\"enabled\":true"))
+        }
+
+        guard !isSupportedEvent.isEmpty else {
+            Log.info("The event list is not supported.")
+            emitUpdateEventListError()
+            Analytics.telemetry(payload: TelemetryAnalytics(
+                isError: true,
+                event: UpdateEvent.UPDATE_EVENT_ERROR_INVALID_INPUT.rawValue
+            ))
+            return
+        }
+
+        let position = serviceLocator.getIndoorPositioningService().lastLockedPosition
+        let converter = serviceLocator.getIndoorPositioningService().floorCoordinatesConverter
+
+        let compassPosition: CGPoint?
+        if let converter {
+            compassPosition = position?.convertToCompass(using: converter).asCGPoint()
+        } else {
+            compassPosition = nil
+        }
+
+        let eventAnalytics: EventAnalytics.EventLocation?
+        if let compassPosition {
+            eventAnalytics = EventAnalytics.EventLocation(
+                roc: EventAnalytics.EventLocationRoc(x: compassPosition.x, y: compassPosition.y)
+            )
+        } else {
+            eventAnalytics = nil
+        }
+
+        let event = EventAnalytics.Event(
+            id: RequestIdentifier.id1.rawValue,
+            type: eventType,
+            value: eventValue,
+            properties: metaData?.toCodableValueDictionary()
+        )
+
+        Log.info("""
+                 [COVERAGE] updateEventList block executed for namespace: \(namespace),
+                 eventType: \(eventType), eventValue: \(eventValue)
+            """)
+        let payload = EventAnalytics(namespace: namespace,
+                                     location: eventAnalytics,
+                                     event: event,
+                                     isPositionLocked: position?.isLocked ?? false)
+
+        Analytics.updateEvent(payload: payload)
+        Log.info("Update Event List: \(payload)")
+        self.serviceLocator.getStatusService().emitUpdateEventList(description: "Compass UpdateEventList success")
+    }
+
+    func resetPositionStatusEvent() {
+        self.serviceLocator.getStatusService().resetCompassPositionType()
+
+        guard !isPositioningEnabled else { return }
+        self.serviceLocator.getStatusService().emitPositionStatusEvent(
+            calibrationProgress: 0,
+            isCalibrationGestureNeeded: false,
+            positioningProgress: 0,
+            isPositionLocked: true
         )
     }
 
-    /// Displays pins on the map with the given UUID list and configuration.
-    ///
-    /// - Parameters:
-    ///   - uuidList: The list of UUIDs representing the assets or generic IDs
-    ///   - idType: The type of ID used for the UUIDs.
-    ///   - config: The configuration to apply for displaying the pins.
-    public func displayPin(uuidList: [String], idType: PinDropMethod, config: HashMap? = nil) {
-        Log.info("Start displayPin: \(uuidList) type: \(idType) config: \(String(describing: config))")
-        viewModel.displayPin(uuidList: uuidList, idType: idType, config: DisplayPinConfig(hashMap: config))
+    func displayPin(uuidList: [String], idType: PinDropMethod, config: DisplayPinConfig?) {
+        Log.debug("displayPin called: \(uuidList), idType:\(idType.rawValue), config: \(String(describing: config))")
+        startPositionSession()
+        mapHostViewModel?.displayPin(uuidList: uuidList, idType: idType, config: config)
     }
 
-    /// Displays pins on the store map.
-    ///
-    /// - Parameters:
-    ///   - pins: An array of `CompassPin` values (e.g. `.aisle`, `.campaign`).
-    ///   - config: Optional display configuration. Keys:
-    ///     - `enableManualPinDrop`: Bool — when `false`, disables manual pin placement and interactions.
-    ///     - `resetZoom`: Bool — when `true`, map may reset/zoom out before rendering.
-    ///     - `shouldZoomOnPins`: Bool — when `true`, map attempts to zoom/center on pins after rendering.
-    ///
-    /// This API is a concise, type-safe entry point for showing pins. The SDK
-    /// handles conversion and transport internally; callers only need to pass
-    /// the desired `CompassPin` values and an optional `config`.
-    ///
-    public func displayPin(pins: [CompassPin], config: HashMap? = nil, isZoomOutRequired: Bool = false) {
-        Log.info("""
-        Start displayPin API with
-        pins: \(pins),
-        config: \(config != nil ? "provided" : "nil"),
-        isZoomOutRequired: \(isZoomOutRequired)
-        """)
-        viewModel.displayPin(pins: pins,
-                             config: DisplayPinConfig(hashMap: config),
-                             isZoomOutRequired: isZoomOutRequired)
+    func displayPin(pins: [CompassPin]?, config: DisplayPinConfig?, isZoomOutRequired: Bool) {
+        startPositionSession()
+        mapHostViewModel?.displayPin(pins: pins, config: config, isZoomOutRequired: isZoomOutRequired)
     }
 
-    public func displayStaticPath(pins: [CompassPin], startFromNearbyEntrance: Bool, disableZoomGestures: Bool) {
-        Log.info(
+    func displayStaticPath(pins: [CompassPin], startFromNearbyEntrance: Bool, disableZoomGestures: Bool) {
+        Log.debug(
             """
-            Start displayStaticPath API with aisle pins: \(pins),
-            startFromNearbyEntrance: \(startFromNearbyEntrance),
+            API Called: displayStaticPath for: \(pins),
+            startFromNearbyEntrance:\(startFromNearbyEntrance),
             disableZoomGestures: \(disableZoomGestures)
             """
         )
-        viewModel.displayStaticPath(pins: pins,
-                                    startFromNearbyEntrance: startFromNearbyEntrance,
-                                    disableZoomGestures: disableZoomGestures)
+        startPositionSession()
+        mapHostViewModel?.displayStaticPath(pins: pins,
+                                            startFromNearbyEntrance: startFromNearbyEntrance,
+                                            disableZoomGestures: disableZoomGestures)
     }
 
-    /// Get user disctance on the map from user locatio with the given pins.
-    ///
-    /// - Parameters:
-    ///   - pins: The list of pins representing the AislePins which contain type, id and location.
-    public func getUserDistance(pins: [AislePin], completion: UserDistanceCompleteHandler? = nil) {
-        Log.info("Start getUserDistance API with aisle pins: \(pins)")
-        viewModel.getUserDistance(pins: pins, completion: completion)
+    // If multiple getUserDistance calls are made in quick succession (example: by different UI actions or async flows)
+    // the requestId helps us match each response to its original request.
+    func getUserDistance(pins: [AislePin], completion: UserDistanceCompleteHandler?) {
+        Log.debug("API Called: getUserDistance for pins: \(pins)")
+        startPositionSession()
+        mapHostViewModel?.getUserDistance(pins: pins, completion: completion)
     }
 
-    /// Clear the map with given configuration parmater.
-    ///
-    /// - Parameters:
-    ///   - configuration: The configration to apply for clearing the map.
-    public func clearMap(configuration: HashMap? = nil) {
-        Log.info("Start clearMap API with config:\(String(describing: configuration))")
-        viewModel.clearMap(mapConfig: MapConfig(hashMap: configuration))
+    func killSwitch() {
+        stopPositioning()
+        serviceLocator.getUserPositionManager().logout()
+        cancellable.removeAll()
     }
 
-    /// Register a delegate to receive raw messages posted from the embedded web page.
-    ///
-    /// Usage notes:
-    /// - The delegate receives the web page's posted payloads as raw `String` values.
-    /// - Call this after the map view is available (for example, after calling
-    ///   `displayMap(...)`) so the delegate can receive messages immediately.
-    ///
-    /// - Parameter delegate: An object conforming to `WebViewMessageDelegate`.
-    public func setWebViewMessageDelegate(_ delegate: WebViewMessageDelegate?) {
-        viewModel.setWebViewMessageDelegate(delegate)
-    }
-
-    /// Evaluate JavaScript on the embedded StoreMap `WKWebView`.
-    ///
-    /// Usage notes:
-    /// - The provided string is executed exactly as given. To post a message to the
-    ///   web page using the web page helper, call `evaluateJSOnWebView("sendMessage('<payload>')")`.
-    /// - This method dispatches to the main thread before evaluating the script.
-    /// - It does not return the evaluation result. If you need the JS evaluation
-    ///   result, use the overload `evaluateJSOnWebView(_:completion:)`.
-    /// - To receive message responses posted back from the web page (for example,
-    ///   when the web page posts a reply to a `sendMessage(...)` call), register a
-    ///   delegate via `setWebViewMessageDelegate(_:)`. The registered delegate will
-    ///   receive posted string messages from the web page.
-    public func evaluateJSOnWebView(_ string: String) {
-        viewModel.evaluateJSOnWebView(string)
-    }
-
-    /// Get aisle location on map with given ID.
-    ///
-    /// - Parameters:
-    ///   - id: The id to get aisle location.
-    public func getAisle(id: String) {
-        Log.info("Start getAisle API with id:\(id)")
-        viewModel.getAisle(id: id)
-    }
-
-    /// Get status of the compass service.
-    /// - Returns: A StatusService indicating the status of the compass service.
-    public func getStatusService() -> StatusService {
-        serviceLocator.getStatusService()
-    }
-
-    /// Set Environment to NetworkManager.
-    /// - Parameter environment: The environment to apply for NetworkManager.
-    public func setEnvironment(_ environment: CompassEnvironment) {
-        Log.info("Setting environment to: \(environment.rawValue)")
-        NetworkManager.environment = environment
-    }
-
-    /// Update Authentication with given token, consumer and account paramaters.
-    ///
-    /// - Parameters:
-    ///   - token: The Authentication token to be used for API cals..
-    ///   - tokenType: The type of the token, typically indicating user or IAM from client application.
-    ///   - consumerID: The Id representing the consumer of the API, often used for identifying the client application.
-    ///   - accountID: The ID of the account associate with the current user or seesion.
-    public func updateAuthParams(token: String, tokenType: String, consumerID: String, accountID: String) {
-        viewModel.updateAuthParams(token: token, tokenType: tokenType, consumerID: consumerID, accountID: accountID)
-    }
-
-    ///  Use this function to refresh the compass position or reset it when needed.
-    public func resetPositionStatusEvent() {
-        viewModel.resetPositionStatusEvent()
-    }
-
-    ///  Use this function to remove all the compass reference.i
-    public func killSwitch() {
-        viewModel.killSwitch()
-    }
-
-    ///  Manually start positioning session
-    public func startPositioning() {
-        viewModel.startPositionSession()
-    }
-
-    /// Manually stop positioning session
-    public func stopPositioning() {
-        viewModel.stopPositioning()
+    func removeUserPositionIndicator() {
+        guard let mapHostViewModel = mapHostViewModel else {
+            Log.warning("Cannot remove user position indicator: mapHostViewModel is nil")
+            return
+        }
+        mapHostViewModel.removeUserPositionIndicator()
     }
 
     deinit {
-        Log.info("Releasing compass instance.")
+        positionSessionTimer?.invalidate()
+        positionSessionTimer = nil
+        Log.info("Released CompassViewModel")
+    }
+}
+
+private extension CompassViewModel {
+    func beginInitialization(authParameter: AuthParameter, configuration: Configuration) {
+        guard validateConfiguration(configuration) else { return }
+
+        getAccessToken(authParameter: authParameter)
+            .flatMap { [weak self] accessTokenResponse -> AnyPublisher<StoreConfig?, Never> in
+                guard let self else { return Empty().eraseToAnyPublisher() }
+                Log.info("AccessTokenResponse: \(String(describing: accessTokenResponse))")
+                if accessTokenResponse == nil {
+                    Analytics.telemetry(
+                        payload: TelemetryAnalytics(
+                            isError: true,
+                            event: CommonErrors.ERROR_INVALID_AUTH.rawValue,
+                            context: CommonErrors.ErrorContext.CONTEXT_INIT.rawValue
+                        )
+                    )
+                }
+                return self.fetchConfigurationDetails(configuration: configuration)
+            }
+            .filter { [weak self] config in
+                self?.validateAndUpdateStoreConfig(config) ?? false
+            }
+            .flatMap { [weak self] _ -> AnyPublisher<Bool, Never> in
+                guard let self else { return Empty().eraseToAnyPublisher() }
+                if self.capabilities.contains(.storeMap) {
+                    Log.info("Deleting EventStoreService Event")
+                    return self.deleteAllEvents()
+                        .flatMap { [weak self] _ -> AnyPublisher<Bool, Never> in
+                            guard let self else { return Empty().eraseToAnyPublisher() }
+                            return self.completeInitialization()
+                        }
+                        .eraseToAnyPublisher()
+                }
+
+                if self.capabilities.contains(.productEnrollment) {
+                    self.serviceLocator.getImageUploader().startUploads()
+                    self.finishedInitializeSubject.send(true)
+                }
+
+                return Just(true).eraseToAnyPublisher()
+            }
+            .sink { [weak self] isFinishedInitialize in
+                guard let self else { return }
+                guard isFinishedInitialize else {
+                    return
+                }
+
+                Log.info("Finished fetching map. Map is ready to load.")
+                self.finishedSettingMapSubject.send(true)
+            }
+            .store(in: &cancellable)
+    }
+
+    func validateConfiguration(_ configuration: Configuration) -> Bool {
+        guard configuration.site != 0 else {
+            Log.warning("Configuration is not valid")
+            Analytics.telemetry(
+                payload: TelemetryAnalytics(
+                    isError: true,
+                    event: CommonErrors.ERROR_CONFIG_NOT_INITIALIZED.rawValue,
+                    context: CommonErrors.ErrorContext.CONTEXT_INIT.rawValue
+                )
+            )
+            finishedInitializeSubject.send(false)
+            return false
+        }
+        return true
+    }
+
+    func fetchConfigurationDetails(configuration: Configuration) -> AnyPublisher<StoreConfig?, Never> {
+        return fetchConfiguration(for: String(configuration.site))
+            .flatMap { [weak self] configResponse -> AnyPublisher<StoreConfig?, Never> in
+                guard let self else {
+                    Analytics.telemetry(payload: TelemetryAnalytics(
+                        isError: true,
+                        event: Init.INIT_ERROR_CONFIG_AUTH.rawValue
+                    ))
+                    return Empty(completeImmediately: true).eraseToAnyPublisher()
+                }
+                Analytics.telemetry(payload: TelemetryAnalytics(event: Init.INIT_CONFIG_FETCHED.rawValue))
+                return self.saveConfiguration(configuration)
+                    .flatMap { _ in
+                        Just(configResponse?.storeConfig).eraseToAnyPublisher()
+                    }.eraseToAnyPublisher()
+            }.eraseToAnyPublisher()
+    }
+
+    func validateAndUpdateStoreConfig(_ storeConfig: StoreConfig?) -> Bool {
+        guard let storeConfig, let valid = storeConfig.valid, valid else {
+            Log.warning("Payload storeConfig is not valid")
+            Analytics.telemetry(
+                payload: TelemetryAnalytics(
+                    isError: true,
+                    event: CommonErrors.ERROR_NOT_INITIALIZED.rawValue,
+                    context: CommonErrors.ErrorContext.CONTEXT_INIT.rawValue
+                )
+            )
+            finishedInitializeSubject.send(false)
+            return false
+        }
+
+        Log.info("StoreConfig: \(storeConfig)")
+        blueDotEnabledSubject.send(storeConfig.bluedotEnabled)
+        updateStoreConfiguration(storeConfig)
+        return true
+    }
+
+    func completeInitialization() -> AnyPublisher<Bool, Never> {
+        if let canCompleteInitialization, canCompleteInitialization() == false {
+            return Empty().eraseToAnyPublisher()
+        }
+
+        Log.info("Finished initializing API, now  fetching map.")
+        Analytics.initialization(state: .finish)
+        finishedInitializeSubject.send(true)
+        return isMapViewReady()
+    }
+
+    func fetchConfiguration(for storeId: String) -> AnyPublisher<ConfigurationPayload?, Never> {
+        serviceLocator.getConfigurationService()
+            .getConfigData(for: storeId)
+            .retry()
+            .catch { [weak self] error -> AnyPublisher<ConfigurationPayload?, Error> in
+                Log.error(error)
+                guard let error = error as? ErrorResponse else {
+                    return Fail(error: error).eraseToAnyPublisher()
+                }
+
+                self?.serviceLocator.getStatusService()
+                    .emitErrorStatusEvent(for: error, isInitError: true)
+                return Fail(error: error).eraseToAnyPublisher()
+            }
+            .replaceError(with: nil)
+            .receive(on: DispatchQueue.main)
+            .eraseToAnyPublisher()
+    }
+
+    func saveConfiguration(_ configuration: Configuration) -> AnyPublisher<Configuration, Never> {
+        serviceLocator.getConfigurationStoreService().setConfiguration(configuration)
+        return Just(configuration).eraseToAnyPublisher()
+    }
+
+    func deleteAllEvents() -> AnyPublisher<Void, Never> {
+        serviceLocator.getEventStoreService().deleteAllEvents()
+            .retry()
+            .catch { error -> AnyPublisher<Void, Error> in
+                Log.error("Fail to delete EventStoreService Event from Core Database \(error.localizedDescription)")
+                return Just.void()
+            }
+            .replaceError(with: ())
+            .receive(on: DispatchQueue.main)
+            .eraseToAnyPublisher()
+    }
+
+    func findStoreMapWebView() -> WKWebView? {
+        serviceLocator.getRegisteredStoreMapsViewController()?.mapView.webView
     }
 }
