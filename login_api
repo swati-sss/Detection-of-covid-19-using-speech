@@ -1,182 +1,163 @@
-import Combine
-import CoreData
-import Foundation
+import XCTest
 @testable import compass_sdk_ios
-import IPSFramework
 
-final class MockCompassViewModel: CompassViewModelType {
-    var rootViewController: UIViewController?
-    var isFinishedInitializePublisher = CurrentValueSubject<Bool?, Never>(nil)
-    var isFinishedSettingMapPublisher = CurrentValueSubject<Bool, Never>(false)
-    var isBlueDotEnabledPublisher = CurrentValueSubject<Bool?, Never>(nil)
-    var currentStore: Int?
-    var canCompleteInitialization: (() -> Bool)?
+@_implementationOnly import IPSFramework
+
+final class CompassTests: XCTestCase {
+    private var compass: Compass!
+    private var serviceLocator: MockServiceLocator!
+    private var viewModel: MockCompassViewModel!
     
-    let serviceLocator = MockServiceLocator()
-    var _getAccessTokenCalled = false
-    var _displayMapCalled = false
-    var _displayPinCalled = false
-    var _getAisleCalled = false
-    var _clearMapCalled = false
-    var _startPositionSessionCalled = false
-    var _stopPositioningCalled = false
-    var _isPositioningEnabled: Bool = false
-    var _positionSessionTimer: Timer?
-    var _isPositioningPaused = false
-    var _updateEventCalled = false
-    var _updateEventListCalled = false
-    var _updateStoreConfigurationCalled = false
-    var _isMapViewReady: Bool = false
-    var _killSWitchCalled = false
-    var _resetPositionStatusEventCalled = false
-    var _removeUserPositionIndicatorCalled = false
-    var _initializeCalled = false
-
-    func initialize(authParameter: AuthParameter,
-                    configuration: Configuration,
-                    capabilities: [CompassCapability],
-                    customMapRequest: URLRequest?) {
-        _initializeCalled = true
-        currentStore = configuration.site
-        APIPath.customStoreMapRequest = customMapRequest
-        toggleMockUser(configuration.mockUser)
-    }
-
-    func getAccessToken(authParameter: AuthParameter) -> AnyPublisher<AccessTokenResponse?, Never> {
-        _getAccessTokenCalled = true
-        if authParameter.tokenType != TokenType.User.rawValue {
-            return Just(TestData.accessTokenResponse).eraseToAnyPublisher()
-        } else {
-            let response = AccessTokenResponse(accessToken: authParameter.authToken,
-                                               tokenType: authParameter.tokenType,
-                                               expiresIn: 0)
-            return Just(response).eraseToAnyPublisher()
-        }
+    override func setUpWithError() throws {
+        serviceLocator = MockServiceLocator()
+        viewModel = MockCompassViewModel()
+        compass = Compass(serviceLocator: serviceLocator, viewModel: viewModel)
     }
     
-    func toggleMockUser(_ option: Bool) {
-        Log.info("Set up Mock User: \(option)")
-        if option {
-            IPSPositioning.testLockThreshold = 0
-        }
+    override func tearDownWithError() throws {
+        serviceLocator = nil
+        viewModel = nil
+        compass = nil
     }
     
-    func updateStoreConfiguration(_ storeConfig: StoreConfig?) -> AnyPublisher<Void, Never> {
-        _updateStoreConfigurationCalled = true
+    func testViewDidAppear() {
+        compass.viewDidAppear(false)
         
-        return Just(()).eraseToAnyPublisher()
+        XCTAssert(viewModel._startPositionSessionCalled)
     }
     
-    func getAisle(id: String) {
-        _getAisleCalled = true
-    }
-    
-    func isMapViewReady() -> AnyPublisher<Bool, Never>  {
-        return Just(_isMapViewReady).eraseToAnyPublisher()
-    }
-    
-    func displayMap() {
-        _displayMapCalled = true
-    }
-    
-    func clearMap(mapConfig: compass_sdk_ios.MapConfig) {
-        _clearMapCalled = true
-    }
-    
-    func updateEvent(compassEvent: CompassEvent) {
-        _updateEventCalled = true
-        Log.debug("API Called: updateEvent for event: \(compassEvent)")
+    func testInitialize() throws {
+        let authParameter = TestData.authParameter
+        let configuration = TestData.configuration
+        let rootViewController = UIViewController()
 
-        startPositionSession()
-        guard let position = serviceLocator.getIndoorPositioningService().lastLockedPosition,
-        let converter = serviceLocator.getIndoorPositioningService().floorCoordinatesConverter else {
+        compass.initialize(authParameter: authParameter, configuration: configuration, capabilities: [.storeMap], rootViewController: rootViewController)
+
+        XCTAssertEqual(rootViewController.children, [compass.self])
+        XCTAssert(viewModel._initializeCalled)
+    }
+    
+    func testDisplayMap() throws {
+        let workflow = Workflow(id: nil, type: "display map", value: "")
+        
+        compass.displayMap(workflow: workflow)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(15)) {
+            XCTAssertEqual(Analytics.workflow?.id, workflow.id)
+            XCTAssertEqual(Analytics.workflow?.type, workflow.type)
+            XCTAssertEqual(Analytics.workflow?.value, workflow.value)
+        }
+    }
+    
+    func testUpdateEvent() throws {
+        guard let assetId = ["1645190", "575207", "575208"].shuffled().first else { return }
+        let compassEvent = CompassEvent(eventType: "asset_scan", eventValue: assetId, eventMetadata: [:])
+        
+        compass?.updateEvent(compassEvent: compassEvent)
+        
+        XCTAssert(viewModel._updateEventCalled)
+    }
+    
+    func testUpdateEventList() throws {
+        compass?.updateEventList(
+            namespace: "modflex",
+            eventType: "feature_scan",
+            eventValue: "BK4-12",
+            metaData: [
+                "keyA": "va",
+                "keyB": "vb",
+                "keyC": "vc",
+                "keyD": "vd",
+                "keyE": "ve",
+                "keyF": "vf"
+            ]
+        )
+        
+        XCTAssert(viewModel._updateEventListCalled)
+    }
+    
+    func testDisplayPinForGeneric() throws {
+        let config = ["enableManualPinDrop": true]
+        
+        compass?.displayPin(uuidList: ["YzAvWy12SixmWF0vMQ=="], idType: .generic, config: config)
+        
+        XCTAssert(viewModel._displayPinCalled)
+    }
+    
+    func testDisplayPinForAssets() throws {
+        let config = ["enableManualPinDrop": true]
+        
+        compass?.displayPin(uuidList: ["12345", "123"], idType: .assets, config: config)
+        
+        XCTAssert(viewModel._displayPinCalled)
+    }
+    
+    func testKillSwitch() throws {
+        compass?.killSwitch()
+        XCTAssert(viewModel._killSWitchCalled)
+    }
+    
+    func testResetPositionStatusEvents() throws {
+        compass?.resetPositionStatusEvent()
+        XCTAssert(viewModel._resetPositionStatusEventCalled)
+    }
+    
+    func testdisplayPin() throws {
+        let aislePin1 = AislePin(type: "item", id: "1", location: AisleLocation(zone: "A", aisle: "3", section: "3", selected: true))
+        let aislePin2 = AislePin(type: "item", id: "2", location: AisleLocation(zone: "A", aisle: "8", section: "3", selected: false))
+        let displayPinConfig: HashMap = ["enableManualPinDrop": false, "resetZoom": true]
+        
+        let compassPins: [CompassPin] = [aislePin1, aislePin2].map { CompassPin.aisle($0) }
+        compass?.displayPin(pins: compassPins, config: displayPinConfig)
+        
+        XCTAssert(viewModel._displayPinCalled)
+    }
+    
+    func testClearMap() throws {
+        compass.clearMap()
+        
+        XCTAssert(viewModel._clearMapCalled)
+    }
+    
+    func testGetAisle() throws {
+        compass.getAisle(id: "")
+        
+        XCTAssert(viewModel._getAisleCalled)
+    }
+    
+    func testGetStatusService() throws {
+        _ = compass?.getStatusService()
+        
+        XCTAssert(serviceLocator!._getStatusServiceCalled)
+    }
+    
+    func testSetupEnvironment() throws {
+        compass?.setEnvironment(.staging)
+        
+        XCTAssertEqual(NetworkManager.environment, .staging)
+    }
+    
+    func testUpdateAuthParams() throws {
+        compass?.updateAuthParams(token: "", tokenType: TestData.accessTokenResponse.tokenType, consumerID: "", accountID: "")
+        
+        XCTAssertNotNil(serviceLocator.keychainService?._saveTokenCalled)
+    }
+    
+    func test_handleEventsForBackgroundURLSession_shouldFailInitialization() throws {
+        Compass.handleEventsForBackgroundURLSession(identifier: "SessionId", application: UIApplication.shared)
+        guard let isFinishedInitialize = compass.isFinishedInitialize.value else {
             return
         }
-        serviceLocator.getEventService()
-            .cacheAndBootstrapAsset(compassEvent, position: position.convertToCompass(using: converter).asCGPoint(), onCompletion: { _ in })
-
-    }
-
-    func updateEventList(namespace: String, eventType: String, eventValue: String, metaData: compass_sdk_ios.HashMap?) {
-        _updateEventListCalled = true
-        Log.debug("""
-                  API Called: updateEventList for namespace: \(namespace)
-                  eventType: \(eventType)
-                  eventValue: \(eventValue)
-                  metaData:\(String(describing: metaData))
-                  """)
-
-        startPositionSession()
-
-        guard let position = serviceLocator.getIndoorPositioningService().lastLockedPosition,
-        let converter = serviceLocator.getIndoorPositioningService().floorCoordinatesConverter else {
-            return
-        }
-
-        let compassPosition = position.convertToCompass(using: converter).asCGPoint()
-
-        let event = EventAnalytics.Event(
-            id: RequestIdentifier.id1.rawValue,
-            type: eventType,
-            value: eventValue,
-            properties: metaData?.toCodableValueDictionary()
-        )
-
-        let eventAnalytics = EventAnalytics.EventLocation(
-            roc: EventAnalytics.EventLocationRoc(x: compassPosition.x, y: compassPosition.y)
-        )
-
-        let authParam: AuthParameter? = serviceLocator.getKeychainService().getToken()
-
-        Analytics.updateEvent(
-            payload: EventAnalytics(userId: "988sdd-erer-43434",
-                                    namespace: namespace,
-                                    clientId: authParam?.accountID ?? "",
-                                    location: eventAnalytics,
-                                    event: event,
-                                    isPositionLocked: false)
-        )
-    }
-
-    func displayPin(uuidList: [String], idType: PinDropMethod, config: DisplayPinConfig?) {
-        _displayPinCalled = true
-    }
-
-    func displayPin(pins: [CompassPin]?, config: DisplayPinConfig?, isZoomOutRequired: Bool) {
-        _displayPinCalled = true
+        XCTAssert(isFinishedInitialize)
     }
     
-    func startPositionSession() {
-        _startPositionSessionCalled = true
+    func testDefaultInit() {
+        let compass = Compass()
+        XCTAssertNotNil(compass)
     }
     
-    func stopPositioning() {
-        _stopPositioningCalled = true
-    }
-
-    func killSwitch() {
-        _killSWitchCalled = true
-    }
-
-    func resetPositionStatusEvent() {
-        _resetPositionStatusEventCalled = true
-    }
-
-    func removeUserPositionIndicator() {
-        _removeUserPositionIndicatorCalled = true
-    }
-
-    func displayStaticPath(pins: [CompassPin], startFromNearbyEntrance: Bool, disableZoomGestures: Bool) {
-        // no-op for tests
-    }
-
-    func getUserDistance(pins: [AislePin], completion: UserDistanceCompleteHandler?) {
-        let result = pins.compactMap {
-            UserDistanceResponse(
-                location: Salesfloor(aisle: $0.location.aisle, section: $0.location.section, zone: $0.location.zone),
-                userDistanceInInches: 24.0,
-                error: nil)
-        }
-        completion?(result)
-    }
+//    func testInitWithCoderTriggersFatalError() {
+//        // This will crash the test, but will include the line in coverage
+//        // You may want to comment this out after running coverage if you don't want a crash in CI
+//        XCTAssertThrowsError(try { _ = Compass(coder: NSCoder()) }())
+//    }
 }
