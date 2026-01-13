@@ -7,6 +7,7 @@ import WalmartPlatform
 public class CompassPluginAPI: CompassAPI {
     private var compass: Compass?
     private var hasInitializeCalled = false
+    private var webViewDelegateAdapter: WebViewMessageDelegateAdapter?
 
     public init() {}
 
@@ -183,12 +184,11 @@ public class CompassPluginAPI: CompassAPI {
             return compass_sdk_ios.AislePin(type: aislePin.type, id: aislePin.id, location: location)
         }
 
-        compass?.getUserDistance(pins: sdkPins, completion: { _ in
-            // Mapping response is tricky without knowing exact structure of UserDistanceResponse
-            // For now, we will pass empty array or try to map if possible.
-            // Assuming we can't easily map back without more info, we'll pass empty for now to satisfy compiler
-            // In real implementation, we would map properties.
-            completion?([])
+        compass?.getUserDistance(pins: sdkPins, completion: { responses in
+            let mapped = responses.map { response in
+                PluginAPIs.CompassUserDistanceResponse(data: response.toDictionary())
+            }
+            completion?(mapped)
         })
     }
 
@@ -224,12 +224,7 @@ public class CompassPluginAPI: CompassAPI {
                 if value {
                     return .initializationComplete
                 }
-                let error = NSError(
-                    domain: "CompassPluginAPI",
-                    code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: "Initialization failed"]
-                )
-                return .initializationFailed(error)
+                return .initializationFailed("Initialization failed")
             }
 
         let mapLoaded = compass.isFinishedSettingMap
@@ -248,16 +243,21 @@ public class CompassPluginAPI: CompassAPI {
     }
 
     public func getStatusService() -> CompassStatusService? {
-        // Wrapper for StatusService would go here.
-        // Since we defined CompassStatusService as a protocol, we need a concrete wrapper.
-        // For now, returning nil as we haven't implemented the wrapper class.
-        return nil
+        guard let statusService = compass?.getStatusService() else {
+            return nil
+        }
+        return StatusServiceAdapter(statusService: statusService)
     }
 
     public func setWebViewMessageDelegate(_ delegate: CompassWebViewMessageDelegate?) {
-        // We need a wrapper that conforms to compass_sdk_ios.WebViewMessageDelegate
-        // and forwards to CompassWebViewMessageDelegate
-        // Skipping implementation for brevity, but this is where it would go.
+        if let delegate {
+            let adapter = WebViewMessageDelegateAdapter(delegate: delegate)
+            webViewDelegateAdapter = adapter
+            compass?.setWebViewMessageDelegate(adapter)
+        } else {
+            webViewDelegateAdapter = nil
+            compass?.setWebViewMessageDelegate(nil)
+        }
     }
 
     public func evaluateJSOnWebView(_ string: String) {
@@ -282,5 +282,33 @@ public class CompassPluginAPI: CompassAPI {
 
             handler(genericEvent)
         }
+    }
+}
+
+private final class WebViewMessageDelegateAdapter: compass_sdk_ios.WebViewMessageDelegate {
+    private weak var delegate: PluginAPIs.CompassWebViewMessageDelegate?
+
+    init(delegate: PluginAPIs.CompassWebViewMessageDelegate) {
+        self.delegate = delegate
+    }
+
+    func didReceiveWebViewMessage(_ message: String) {
+        delegate?.didReceiveWebViewMessage(message)
+    }
+}
+
+private final class StatusServiceAdapter: CompassStatusService {
+    private let statusService: compass_sdk_ios.StatusService
+
+    init(statusService: compass_sdk_ios.StatusService) {
+        self.statusService = statusService
+    }
+
+    func emitMapStatusEvent(isSuccess: Bool) {
+        statusService.emitMapStatusEvent(isSuccess: isSuccess)
+    }
+
+    func emitLocationEvent(assetLocation: String) {
+        statusService.emitLocationEvent(assetLocation: assetLocation)
     }
 }
