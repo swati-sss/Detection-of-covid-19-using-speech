@@ -1,16 +1,70 @@
-    public func setEnvironment(_ environment: PluginAPIs.CompassEnvironment) {
-        let sdkEnv: compass_sdk_ios.CompassEnvironment
-        switch environment {
-        case .staging:
-            sdkEnv = .staging
-        case .production:
-            sdkEnv = .production
-        case .perf:
-            sdkEnv = .perf
-        case .preProd:
-            sdkEnv = .preProd
-        case .stageGKE:
-            sdkEnv = .stageGKE
+import Foundation
+import Compression
+import WebKit
+import zlib
+
+class EmbeddingsAPIService {
+    static func fetchAndLoadMapData(urlRequest: URLRequest) async throws -> String {
+        var urlRequest = urlRequest
+        urlRequest.setValue("gzip, deflate", forHTTPHeaderField: "Accept-Encoding")
+
+        let (compressedData, _) = try await URLSession.shared.data(for: urlRequest)
+        let dataSizeBytes = compressedData.count
+        let dataSizeMB = Double(dataSizeBytes) / (1024.0 * 1024.0)
+        print(String(format: "Map CompressedData Size: %.2f MB", dataSizeMB))
+        print("WebView Loaded in \(Date())")
+
+        // Decompress the data
+        guard let decompressedData = self.decompressGzip(data: compressedData) else {
+            throw NSError(domain: "DecompressionError",
+                          code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to decompress data"])
         }
-        compass?.setEnvironment(sdkEnv)
+
+        // Convert decompressed data to HTML string
+        guard let htmlString = String(data: decompressedData, encoding: .utf8) else {
+            throw NSError(domain: "DataConversionError",
+                          code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to convert data to HTML string"])
+        }
+
+        return htmlString
     }
+
+    static func decompressGzip(data: Data) -> Data? {
+        var stream = z_stream()
+        var status: Int32
+
+        // Use 16 + MAX_WBITS to enable Gzip decoding
+        status = inflateInit2_(&stream, 16 + MAX_WBITS, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size))
+        guard status == Z_OK else { return nil }
+        defer { inflateEnd(&stream) }
+
+        var output = Data(capacity: data.count * 2)
+        data.withUnsafeBytes { (inputPtr: UnsafeRawBufferPointer) in
+            guard let inputBase = inputPtr.bindMemory(to: Bytef.self).baseAddress else { return }
+
+            stream.next_in = UnsafeMutablePointer<Bytef>(mutating: inputBase)
+            stream.avail_in = uint(data.count)
+
+            let bufferSize: Int = 64 * 1024
+            let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+            defer { buffer.deallocate() }
+
+            repeat {
+                stream.next_out = buffer
+                stream.avail_out = uInt(bufferSize)
+
+                status = inflate(&stream, Z_NO_FLUSH)
+                if status != Z_OK && status != Z_STREAM_END {
+                    break
+                }
+
+                let outputSize = bufferSize - Int(stream.avail_out)
+                output.append(buffer, count: outputSize)
+            } while status != Z_STREAM_END
+        }
+
+        return status == Z_STREAM_END ? output : nil
+    }
+}
