@@ -1,171 +1,580 @@
-import Combine
-import CoreData
+import CoreGraphics
 import Foundation
+import Combine
 @testable import compass_sdk_ios
-import IPSFramework
 
-final class MockCompassViewModel: CompassViewModelType {
-    var rootViewController: UIViewController?
+class MockStoreMapLoaderViewModel {
+    weak var mapViewDelegate: StoreMapsViewDelegate?
+
+    private var config = DisplayPinConfig(enableManualPinDrop: true, resetZoom: false, shouldZoomOnPins: true)
+    internal var configuration = StoreMapView.Configuration(isPinSelectionEnabled: false, pin: nil, preferredFloor: "1")
+    private var renderedPins: [Pin] = []
+    private var mapData: MapData?
+    private var mapLoadedData: MapLoaded?
+    private var renderedPinsZoomRect: CGRect?
+    private var hasMapViewZoomed = false
+    private let blueDotMode: BlueDotMode
+    private var hasLoadedMapView = false
+    private var messageSender: MessageSending
+    private var currentZoomScale: CGFloat = 0
+    private let preferredZoomScale: CGFloat = StoreMapZoomLevel.third.minimumZoomScale
+    private var mapDataReadyRequestTimer: Timer?
+    private var assetService: AssetService
+    private var statusService: StatusService
+    private var indoorPositioningService: IndoorPositioningService
+    private var mapFocusManager: MapFocusManager
+    private var eventService: EventService
+    var messageParser: any MessageParsing = MockMessageParser()
+    private var pinList: (current: PinList?, last: PinList?)
+
+    var _renderPinsCalled = false
+    var _zoomOutCalled = false
+    var _clearRenderedPinCalled = false
+    var _showMapZoomedOutCalled = false
+    var _getUserDistanceCalled = false
+    var floorSelected = 0
+
+    init(blueDotMode: BlueDotMode, serviceLocator: ServiceLocatorType) {
+        self.messageSender = serviceLocator.getWebViewMessageSender()
+        self.blueDotMode = blueDotMode
+        self.assetService = serviceLocator.getAssetService()
+        self.statusService = serviceLocator.getStatusService()
+        self.indoorPositioningService = serviceLocator.getIndoorPositioningService()
+        self.mapFocusManager = serviceLocator.getMapFocusManager()
+        self.eventService = serviceLocator.getEventService()
+    }
     
-    let serviceLocator = MockServiceLocator()
-    var _getAccessTokenCalled = false
-    var _displayMapCalled = false
-    var _displayPinCalled = false
-    var _getAisleCalled = false
-    var _clearMapCalled = false
-    var _startPositionSessionCalled = false
-    var _stopPositioningCalled = false
-    var _isPositioningEnabled: Bool = false
-    var _positionSessionTimer: Timer?
-    var _isPositioningPaused = false
-    var _updateEventCalled = false
-    var _updateEventListCalled = false
-    var _updateStoreConfigurationCalled = false
-    var _isMapViewReady: Bool = false
-    var _killSWitchCalled = false
-    var _resetPositionStatusEventCalled = false
-    var _removeUserPositionIndicatorCalled = false
-    var _displayStaticPathCalled: Bool = false
+    func _resetMock() {
+        _renderPinsCalled = false
+        _zoomOutCalled = false
+        _clearRenderedPinCalled = false
+        _showMapZoomedOutCalled = false
+        _getUserDistanceCalled = false
+    }
 
-    func getAccessToken(authParameter: compass_sdk_ios.AuthParameter) -> AnyPublisher<compass_sdk_ios.AccessTokenResponse?, any Error> {        _getAccessTokenCalled = true
-        if authParameter.tokenType != TokenType.User.rawValue {
-            return Just(TestData.accessTokenResponse).setFailureType(to: Error.self).eraseToAnyPublisher()
-        } else {
-            let response = AccessTokenResponse(accessToken: authParameter.authToken,
-                                               tokenType: authParameter.tokenType,
-                                               expiresIn: 0)
-            return Just(response).setFailureType(to: Error.self).eraseToAnyPublisher()
+    func messageParser(_ messageParser: MessageParsing, didParseMessageResponse message: MessageResponse) {
+        Log.debug("Webview message received: \(message)")
+        handle(message)
+    }
+
+    func messageParser(_ messageParser: MessageParsing, didFailWithError error: StoreMapDecodingError) {
+        Log.error("Error occurred while parsing message: \(error)")
+        guard let defaultValue = error.defaultValue else { return }
+        handle(defaultValue)
+    }
+
+    func onStoreMapZoomChange(zoomType: ZoomActionType, _ completion: (() -> Void)?) {
+        guard let webView = mapViewDelegate?.webView else { return }
+        let currentScale = webView.scrollView.zoomScale
+        let zoomScale = getUpdateScale(currentScale, zoomType)
+        mapViewDelegate?.setZoomScale(to: zoomScale, zoomType: zoomType, completion)
+    }
+
+    func onStoreMapFloorChange(levelType: FloorLevelType, _ completion: (() -> Void)?) {
+        guard let webView = mapViewDelegate?.webView else { return }
+        // Ensure offset calculation logic from MAP_LOADED response is preserved
+        request(.floorLevelChange((.init(floor: levelType.rawValue))))
+        // If your commit added any offset calculation or additional logic, ensure it's here
+        // Example: update offset or floor state if needed
+        // self.offset = ... (if applicable)
+        // self.floorSelected = ... (if applicable)
+    }
+
+    /// Check min and max zoom scale crossed or not
+    /// If yes, don't update zoom scale
+    /// If no, update zoom scale and check if greying out is required or not,
+    /// i.e. new value of zoom +/- will go beyond max limit
+    func getUpdateScale(_ currentScale: CGFloat, _ zoomType: ZoomActionType) -> CGFloat {
+        switch zoomType {
+        case .zoomIn:
+            if currentScale + StoreMapConfig.zoomFactor < StoreMapZoomLevel.fourth.maximumZoomScale {
+                return currentScale + StoreMapConfig.zoomFactor
+            } else {
+                return StoreMapZoomLevel.fourth.maximumZoomScale
+            }
+        case .zoomOut:
+            if currentScale - StoreMapConfig.zoomFactor > StoreMapZoomLevel.first.minimumZoomScale {
+                return currentScale - StoreMapConfig.zoomFactor
+            } else {
+                return StoreMapZoomLevel.first.minimumZoomScale
+            }
         }
     }
-    
-    func toggleMockUser(_ option: Bool) {
-        Log.info("Set up Mock User: \(option)")
-        if option {
-            IPSPositioning.testLockThreshold = 0
-        }
-    }
-    
-    func updateStoreConfiguration(_ storeConfig: compass_sdk_ios.StoreConfig?) {
-        _updateStoreConfigurationCalled = true
-    }
-    
-    func getAisle(id: String) {
-        _getAisleCalled = true
-    }
-    
-    func isMapViewReady() -> AnyPublisher<Bool, Never>  {
-        return Just(_isMapViewReady).eraseToAnyPublisher()
-    }
-    
-    func displayMap() {
-        _displayMapCalled = true
-    }
-    
-    func clearMap(mapConfig: compass_sdk_ios.MapConfig) {
-        _clearMapCalled = true
-    }
-    
-    func updateEvent(compassEvent: CompassEvent) {
-        _updateEventCalled = true
-        Log.debug("API Called: updateEvent for event: \(compassEvent)")
 
-        startPositionSession()
-        guard let position = serviceLocator.getIndoorPositioningService().lastLockedPosition,
-        let converter = serviceLocator.getIndoorPositioningService().floorCoordinatesConverter else {
+    func request(_ message: MessageRequest, timeInterval: TimeInterval = StoreMapConfig.zoomPinAnimationDelay) {
+        guard let webView = self.mapViewDelegate?.webView else {
             return
         }
-        Task {
-            _ = await serviceLocator.getEventService()
-                .cacheAndBootstrapAsset(compassEvent,
-                                        position: position.convertToCompass(using: converter).asCGPoint())
-        }
 
+        self.messageSender.send(message, in: webView)
+    }
+}
+
+extension MockStoreMapLoaderViewModel: StoreMapViewActionable {
+    func displayStaticPath(
+        using renderPinsRequest: compass_sdk_ios.RenderPinsRequest,
+        startFromNearbyEntrance: Bool,
+        disableZoomGestures: Bool
+    ) {
+        
     }
 
-    func updateEventList(namespace: String, eventType: String, eventValue: String, metaData: compass_sdk_ios.HashMap?) {
-        _updateEventListCalled = true
-        Log.debug("""
-                  API Called: updateEventList for namespace: \(namespace)
-                  eventType: \(eventType)
-                  eventValue: \(eventValue)
-                  metaData:\(String(describing: metaData))
-                  """)
+    func renderPins(_ pins: [Pin], config: DisplayPinConfig?) {
+        _renderPinsCalled = true
+    }
 
-        startPositionSession()
+    func getUserDistance(_ request: GetPinLocationRequest, completion: PinLocationFetchCompletionHandler?) {
+        _getUserDistanceCalled = true
+        completion?(PinRenderedMessage(pins: [Pin(type:.aisleSection)], topLeft: nil, bottomRight: nil))
+    }
 
-        guard let position = serviceLocator.getIndoorPositioningService().lastLockedPosition,
-        let converter = serviceLocator.getIndoorPositioningService().floorCoordinatesConverter else {
+    func setNavigation(enabled: inout Bool) -> Bool {
+        // Mock implementation: toggle the value and return it
+        enabled.toggle()
+        return enabled
+    }
+
+    func canDisplayNavigationButton() -> Bool {
+        // Mock implementation: return true for testing
+        return true
+    }
+
+    func getMapURLRequest() -> URLRequest? {
+        URLRequest(url: URL(string: "www.walmart.com")!)
+    }
+    
+    func viewDidAppear() {
+        guard blueDotMode != .none, hasLoadedMapView else { return }
+        mapFocusManager.isMapViewPresent.value = true
+        indoorPositioningService.registerApplicationEvent(.mapPresented)
+    }
+
+    func viewWillDisappear() {
+        guard blueDotMode != .none else { return }
+        mapFocusManager.isMapViewPresent.value = false
+        indoorPositioningService.registerApplicationEvent(.mapHidden)
+    }
+
+    func didConstructView() {
+        refreshWebView()
+    }
+
+    func didLoadWebView() {
+        guard mapViewDelegate?.isWebViewLoaded == true else {
             return
         }
 
-        let compassPosition = position.convertToCompass(using: converter).asCGPoint()
-
-        let event = EventAnalytics.Event(
-            id: RequestIdentifier.id1.rawValue,
-            type: eventType,
-            value: eventValue,
-            properties: metaData?.toCodableValueDictionary()
-        )
-
-        let eventAnalytics = EventAnalytics.EventLocation(
-            roc: EventAnalytics.EventLocationRoc(x: compassPosition.x, y: compassPosition.y)
-        )
-
-        let authParam: AuthParameter? = StaticStorage.authParameter
-
-        Analytics.updateEvent(
-            payload: EventAnalytics(namespace: namespace,
-                                    clientId: authParam?.accountID ?? "",
-                                    location: eventAnalytics,
-                                    event: event,
-                                    isPositionLocked: false)
-        )
-    }
-
-    func displayPin(uuidList: [String], idType: PinDropMethod, config: DisplayPinConfig?) {
-        _displayPinCalled = true
-    }
-
-    func displayPin(pins: [CompassPin]?, config: DisplayPinConfig?) {
-        _displayPinCalled = true
-    }
-
-    func startPositionSession() {
-        _startPositionSessionCalled = true
-    }
-    
-    func stopPositioning() {
-        _stopPositioningCalled = true
-    }
-
-    func killSwitch() {
-        _killSWitchCalled = true
-    }
-
-    func resetPositionStatusEvent() {
-        _resetPositionStatusEventCalled = true
-    }
-
-    func removeUserPositionIndicator() {
-        _removeUserPositionIndicatorCalled = true
-    }
-
-    func displayStaticPath(pins: [CompassPin], startFromNearbyEntrance: Bool, disableZoomGestures: Bool) {
-        // no-op for tests
-    }
-
-    func getUserDistance(pins: [AislePin], completion: UserDistanceCompleteHandler?) {
-        let result = pins.compactMap {
-            UserDistanceResponse(
-                location: Salesfloor(aisle: $0.location.aisle, section: $0.location.section, zone: $0.location.zone),
-                userDistanceInInches: 24.0,
-                error: nil)
+        Log.debug("WebView is Loaded")
+        DispatchQueue.main.asyncAfter(deadline: .now() + StoreMapConfig.zoomPinAnimationDelay) { [weak self] in
+            self?.zoomToPinsIfNeeded()
         }
-        completion?(result)
     }
 
-    func displayStaticPath(pins: [compass_sdk_ios.AislePin], startFromNearbyEntrance: Bool, disableZoomGestures: Bool) {
-        _displayStaticPathCalled = true
+    func updateZoomLevel(with scale: CGFloat) {
+        guard let zoomLevel = StoreMapZoomLevel.makeZoomLevel(from: scale),
+              let currentZoomLevel = StoreMapZoomLevel.makeZoomLevel(from: currentZoomScale),
+              zoomLevel != currentZoomLevel
+        else { return }
+        Log.debug("updateZoomLevel with scale: \(scale)")
+        request(.zoomLevelChange(.init(zoom: zoomLevel.zoomValue)))
+    }
+
+    func clearRenderedPin(mapConfig: MapConfig) {
+        _clearRenderedPinCalled = true
+//        Log.debug("Clear pins")
+//        request(.renderXYLocationPinRequested(PinList(pins: [])))
+//        request(.renderPins(RenderPinsRequest([])))
+        if mapConfig.resetZoom {
+            Log.debug("Reset Zoom level")
+            showMapZoomedOut()
+        }
+    }
+
+    func refreshWebView() {
+        renderedPins = []
+        renderedPinsZoomRect = nil
+        hasLoadedMapView = false
+        mapViewDelegate?.reloadWebView()
+        Log.debug("Refresh WebView")
+    }
+
+    func handleError() {
+        statusService.emitMapStatusEvent(isSuccess: false)
+    }
+
+    func zoomOut() {
+        _zoomOutCalled = true
+//        request(.zoomLevelChange(.init(zoom: 0)))
+//        showMapZoomedOut()
+    }
+
+    func renderPins(_ renderPinsRequest: RenderPinsRequest, config: DisplayPinConfig?) {
+        _renderPinsCalled = true
+    }
+
+    func renderPins(from points: [CGPoint], config: DisplayPinConfig? = nil) {
+        if let config {
+            self.config = config
+        }
+        var pinsToDraw: [DrawPin] = []
+        points.forEach { point in
+            let mapPoint = point.waspToStoreMap(offset: assetService.storeConfigOffset)
+            let drawPin = DrawPin.init(type: PinIdentifier.xyPinLocation.rawValue, x: mapPoint.x, y: mapPoint.y, location: Point(x: mapPoint.x, y: mapPoint.y), errorData: nil)
+            pinsToDraw.append(drawPin)
+        }
+
+        // Update the pin list especially when its set from auto pin drop.
+        pinList.last = PinList(pins: pinsToDraw)
+
+        if let lastPinList = pinList.last {
+            request(.renderXYLocationPinRequested(lastPinList))
+        }
+        Log.info("Show Pin with pinList: \(pinsToDraw)")
+    }
+
+    func updateUserPosition(x: Double, y: Double, accuracy: CGFloat?) {
+        request(.showUserLocation(UserPosition(x: x, y: y, ringRadius: accuracy)))
+    }
+
+    func setPathfindingEnabled(_ enabled: Bool, duration: TimeInterval = 0.0, force: Bool = false) {
+        request(.setPathfindingEnabled(SetPathFindingRequest(pathfinderEnabled: enabled)))
+    }
+
+    func setPinSelectionEnabled(_ enabled: Bool) {
+        self.request(.setPinSelectionEnabled(SetPinSelectionRequest(pinSelectionEnabled: enabled)))
+    }
+
+    func updateUserRotation(angle: CGFloat, rotateMap: Bool) {
+        request(.rotateUser(UserRotation(angle: angle, rotateMap: rotateMap)))
+    }
+
+    func updateUserLoading(percentage: Int) {
+        request(.showUserLoading(UserLoading(percentage: percentage)))
+    }
+}
+
+private extension MockStoreMapLoaderViewModel {
+    func handle(_ message: MessageResponse) {
+        switch message {
+        case .mapData(let mapData):
+            mapDataReadyRequestTimer?.invalidate()
+            mapDataReadyRequestTimer = nil
+            self.mapData = mapData
+        case .mapLoaded(let mapLoaded):
+            mapLoadedData = mapLoaded
+            updateStoreConfigueOffset()
+            mapViewDelegate?.toggleLoadingView(true)
+            // Loading this particular map version is needed for POI_CLICKED click event or it wont work
+            request(.version(.init(version: StoreMapConfig.webAppVersion)))
+            startTimerForMapDataReadyRequest()
+            request(.mapData)
+            renderPinsIfNeeded(floorCount: mapLoaded.floors.count)
+            request(.coordinateSpaceDiscoveryTapRequested(CoordinateSpaceDiscoveryTapRequest(enabled: true)))
+            Log.debug("Coordinate Space Discovery Tap Requested is enabled")
+            statusService.emitMapStatusEvent(isSuccess: true)
+        case .coordinateSpaceDiscoveryTap(let coordinateSpaceDiscoveryTap):
+            Log.debug("onMapLongPressed is called with coordinateSpaceDiscoveryTap: \(coordinateSpaceDiscoveryTap)")
+            onMapLongPressed(coordPayLoad: coordinateSpaceDiscoveryTap)
+        case .pinRenderedMessage(let pinRenderedMessage):
+            Log.debug("pinRenderedMessage with pinRenderedMessage: \(pinRenderedMessage)")
+            reportPinAisleStatusEvent(for: pinRenderedMessage.pins ?? [])
+            zoomOnLocation(topLeft: pinRenderedMessage.topLeft, bottomRight: pinRenderedMessage.bottomRight)
+        case let .pinXYRenderedMessage(message):
+            Log.debug("pinXYRenderedMessage with message: \(message)")
+            zoomOnLocation(topLeft: message.topLeft, bottomRight: message.bottomRight)
+        case let .pinsActionAlleyRenderedResponse(message):
+            Log.debug("pinsActionAlleyRenderedResponse with message: \(message)")
+            zoomOnLocation(topLeft: message.topLeft, bottomRight: message.bottomRight)
+        default:
+            Log.warning("Unhandled message type: \(message)")
+        }
+    }
+
+    func startTimerForMapDataReadyRequest() {
+        mapDataReadyRequestTimer = .scheduledTimer(withTimeInterval: StoreMapConfig.apiTimeoutLimit,
+                                                   repeats: false) { [weak self] _ in
+            self?.mapDataReadyRequestTimer?.invalidate()
+            self?.mapDataReadyRequestTimer = nil
+            Log.error(StoreMapError.mapLoadTimedOut)
+        }
+    }
+
+    func renderPinsIfNeeded(floorCount: Int) {
+        defer {
+            hasLoadedMapView = true
+            mapFocusManager.isMapViewPresent.value = true
+            indoorPositioningService.registerApplicationEvent(.mapPresented)
+        }
+        guard !hasLoadedMapView else { return }
+        if !renderedPins.isEmpty, floorCount > 1 {
+            request(.aisleData)
+        }
+
+        if let pin = configuration.pin, floorCount == 1 {
+            var pinsToBeRendered = renderedPins
+            pinsToBeRendered.append(pin)
+            render(pinsToBeRendered)
+        }
+    }
+
+    func reportPinAisleStatusEvent(for pins: [Pin]) {
+        let pinAisleEvents: [PinAisleEvent] = pins.map { pin in
+            let id = pin.id?.asString() ?? ""
+            let aisle = pin.aisle?.asString() ?? ""
+            let zone = pin.zone?.asString() ?? ""
+            let section = pin.section?.asString() ?? ""
+            let location = ["aisle": aisle, "zone": zone, "section": section]
+            return PinAisleEvent(id: id, location: location, success: true)
+        }
+
+        statusService.emitAislesPinDropEvent(pinDropType: .autoPinDropAisleLocList,
+                                           mapType: MapIdentifier.WalmartMap,
+                                           pins: pinAisleEvents)
+    }
+
+    // Provide a minimal stub matching the production API so tests can call it.
+    func onMapLongPressed(coordPayLoad: CoordinateSpaceDiscoveryTap) {
+        // no-op for mock
+        Log.debug("Mock onMapLongPressed called")
+    }
+
+    func handleAsset(waspPosition: CGPoint) {
+        Log.debug("Manual pin drop is asset type")
+        let defaults = UserDefaults.standard
+        guard let assetId = (defaults.object(forKey: UserDefaultsKey.uuidList.rawValue) as? [String])?.first else {
+            Log.info("No uuids in UserDefaults")
+            return
+        }
+
+        Log.debug("Found assetId: \(assetId) in UserDefaults")
+        Log.debug("Subscribing to compass event status updates")
+        statusService.eventEmitterHandler = { [weak self] eventEmitter  in
+            guard let eventEmitterDescription = eventEmitter as? EventEmitterDescription, eventEmitterDescription.eventType == .bootstrapEventEmitter else {
+                return
+            }
+
+            Log.debug("Successfully bootstrapped pin")
+
+            // Store the successfully bootstrapped pin
+            self?.pinList.last = self?.pinList.current
+            self?.evaluateAisle(for: assetId, waspPosition: waspPosition, idType: .assets)
+        }
+
+        let eventType = EventConstant.Category.assetScan.rawValue
+        let event = CompassEvent(eventType: eventType, eventValue: assetId, eventMetadata: [:])
+
+        Task { [weak self] in
+            guard let self else { return }
+            let bootstrapStatus = await eventService.cacheAndBootstrapAsset(event, position: waspPosition)
+
+            // Handle the case where pin bootstrapped event API fails, showing the last successfully bootstrapped pin
+            guard bootstrapStatus == .notBootstrapped,
+                  let lastPinList = self.pinList.last else {
+
+                Log.debug("Pin bootstrapped event API succeeded.")
+                return
+            }
+
+            Log.debug("""
+            Pin bootstrapped event API failed, showing the last successfully bootstrapped pin list: \(lastPinList)
+            """)
+
+            self.request(.renderXYLocationPinRequested(lastPinList))
+            return
+        }
+        Log.debug("Map Long Pressed for asset pin")
+    }
+
+    func encodeGeneric(waspPosition: CGPoint) {
+        Log.debug("Manual pin drop is generic type")
+        let coord = waspPosition.asCompassCoordinate()
+        let locationComData = LocationComData(store: assetService.storeId, coordinates: [coord], version: 1)
+        guard let encodedLocationString = LocationConverter.encodeMessage(data: locationComData) else {
+            Log.debug("Could not encode location: \(locationComData)")
+            return
+        }
+
+        Log.debug("assetId: \(encodedLocationString)")
+        evaluateAisle(for: encodedLocationString, waspPosition: waspPosition, idType: .generic)
+        Log.debug("Map Long Pressed for generic pin")
+    }
+
+    func evaluateAisle(for assetId: String, waspPosition: CGPoint, idType: PinDropMethod) {
+        assetService.idList.removeAll()
+        assetService.assetEvents.removeAll()
+        assetService.idList = [assetId]
+
+        Log.debug("AssetEvents is \(String(describing: assetService.assetEvents))")
+        Log.debug("idList is \(String(describing: assetService.idList))")
+
+        assetService.evaluateAisles(using: assetId,
+                                    pinDropType: .manualPinDropAisleLocList,
+                                    position: waspPosition) { [weak self] points in
+            self?.renderPins(from: points)
+        }
+
+        Analytics.displayPin(
+            payload: DisplayPinAnalytics(pinType: idType.analyticsStringValue,
+                                         pinValue: assetId,
+                                         pinCategory: "manual",
+                                         pinLocation: "\(waspPosition.x),\(waspPosition.y)",
+                                         success: true)
+        )
+    }
+
+    func render(_ pins: [Pin], replacingExisting: Bool = false) {
+        Log.debug("Requesting to render pins: \(pins), replacingExistingPins: \(replacingExisting)")
+        renderedPins = pins + (replacingExisting ? [] : renderedPins)
+        request(.renderPins(RenderPinsRequest(pins: renderedPins, pinGroupingEnabled: true)))
+    }
+
+    func zoomOnLocation(topLeft: Point?, bottomRight: Point?, target: ZoomTarget = .pinAnnotation) {
+        guard target == .pinAnnotation ? config.shouldZoomOnPins : mapViewDelegate?.isCenterButtonClicked == true,
+              let topLeft = topLeft,
+              let bottomRight = bottomRight else {
+            Log.debug("Zooming on area failed for target \(target), shouldZoom: \(config.shouldZoomOnPins)")
+            return
+        }
+
+        let topLeftPoint = applyScaledContentOffset(to: topLeft.cgPoint)
+        let bottomRightPoint = applyScaledContentOffset(to: bottomRight.cgPoint)
+        let zoomRect = makeZoomRect(topLeft: topLeftPoint, bottomRight: bottomRightPoint, scale: preferredZoomScale)
+        if target == .pinAnnotation { renderedPinsZoomRect = zoomRect }
+        zoomOnRegion(with: zoomRect, target: target)
+        Log.debug("call zoomOnRegion with zoomRect: \(zoomRect)")
+    }
+
+    func zoomToMapCenter() {
+        Log.debug("zoom To MapCenter")
+        hasMapViewZoomed = true
+        mapViewDelegate?.toggleLoadingView(false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + StoreMapConfig.zoomPinAnimationDelay) { [weak self] in
+            guard let self = self else { return }
+            self.mapViewDelegate?.zoomOut(with: self.preferredZoomScale)
+        }
+    }
+
+    func zoomToPinsIfNeeded() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + StoreMapConfig.zoomPinAnimationDelay) {
+            guard self.mapData != nil, self.mapViewDelegate?.isWebViewLoaded == true, !self.hasMapViewZoomed else {
+                return
+            }
+            if self.configuration.pin != nil {
+                self.zoomToPins()
+            }
+        }
+    }
+
+    func zoomToPins() {
+        guard (mapLoadedData?.floors.count ?? 1) > 1 && configuration.pin != nil else { return }
+        Log.debug("zoom To Pins")
+        hasMapViewZoomed = true
+        mapViewDelegate?.toggleLoadingView(false)
+        guard let renderedPinsZoomRect = renderedPinsZoomRect else {
+            zoomToMapCenter()
+            return
+        }
+
+        zoomOnRegion(with: renderedPinsZoomRect)
+    }
+
+    func zoomOnRegion(with zoomRect: CGRect, target: ZoomTarget = .pinAnnotation) {
+        DispatchQueue.main.async { [weak self] in
+            let delay = StoreMapConfig.zoomPinAnimationDelay
+            self?.mapViewDelegate?.zoomOnRegion(with: zoomRect, zoomAnimationDelay: delay) { [weak self] in
+                self?.renderedPinsZoomRect = nil
+            }
+        }
+    }
+}
+
+private extension MockStoreMapLoaderViewModel {
+    func makeZoomRect(topLeft: CGPoint, bottomRight: CGPoint, scale: CGFloat) -> CGRect {
+        guard let webView = mapViewDelegate?.webView else { return .zero }
+
+        let padding: CGFloat = 32
+
+        let paddedBottomRightPoint = bottomRight.applying(CGAffineTransform(translationX: padding, y: padding))
+        let paddedTopLeftPoint = topLeft.applying(CGAffineTransform(translationX: -padding, y: -padding))
+
+        let width = paddedBottomRightPoint.x - paddedTopLeftPoint.x
+        let height = paddedBottomRightPoint.y - paddedTopLeftPoint.y
+
+        var zoomRect = CGRect(x: paddedTopLeftPoint.x, y: paddedTopLeftPoint.y, width: width, height: height)
+
+        let minimumZoomWidth = webView.bounds.size.width / scale
+        let minimumZoomHeight = webView.bounds.size.height / scale
+
+        if zoomRect.width < minimumZoomWidth {
+            zoomRect.size.width = minimumZoomWidth
+
+            // re-center zoomRect with pins along x-axis
+            zoomRect.origin.x -= (minimumZoomWidth - width) / 2.0
+        }
+
+        if zoomRect.height < minimumZoomHeight {
+            zoomRect.size.height = minimumZoomHeight
+            // re-center zoomRect with pins along y-axis
+            zoomRect.origin.y -= (minimumZoomHeight - height) / 2.0
+        }
+
+        if zoomRect.origin.x < 0 {
+            let absDifference = abs(zoomRect.origin.x)
+            zoomRect.origin.x = 0
+            zoomRect.size.width -= absDifference
+        }
+        if zoomRect.origin.y < 0 {
+            let absDifference = abs(zoomRect.origin.y)
+            zoomRect.origin.y = 0
+            zoomRect.size.height -= absDifference
+        }
+
+        // Ensure width and height are at least the minimums after clamping
+        if zoomRect.size.width < minimumZoomWidth {
+            zoomRect.size.width = minimumZoomWidth
+        }
+        if zoomRect.size.height < minimumZoomHeight {
+            zoomRect.size.height = minimumZoomHeight
+        }
+
+        return zoomRect
+    }
+
+    // A few things to note:
+    //  1. The `webView` sends x-y coordinates in screen points where the origin is the top left corner of the
+    //     screen. Therefore, the `webView.scrollView.contentOffset` needs to be applied whem zooming.
+    //  2. The points received from the `webView` are in the coordinate space of `webView` when
+    //     `webView.scrollView.zoomScale == 1.0`.
+    //  3. `zoomToRect:animated:` also works on the assumption that `rect` is in the coordinate space of `webView`
+    //      when `webView.scrollView.zoomScale == 1.0`.
+    func applyScaledContentOffset(to point: CGPoint) -> CGPoint {
+        guard let view = mapViewDelegate?.webView.scrollView else { return .zero }
+        return CGPoint(x: point.x + view.contentOffset.x / view.zoomScale,
+                       y: point.y + view.contentOffset.y / view.zoomScale)
+    }
+
+    func showMapZoomedOut() {
+        _showMapZoomedOutCalled = true
+//        Log.debug("Show map zoomed out")
+//        DispatchQueue.main.asyncAfter(deadline: .now() + StoreMapConfig.zoomOutAnimationDelay) { [weak self] in
+//            guard let self = self else { return }
+//            self.mapViewDelegate?.zoomOut(with: StoreMapConfig.zoomFactor)
+//        }
+    }
+
+    func updateStoreConfigueOffset() {
+        guard let mapFloorOffset = self.mapLoadedData?.offsets,
+              !mapFloorOffset.isEmpty else {
+            return
+        }
+
+        guard mapFloorOffset.indices.contains(floorSelected) else {
+            Log.warning("Floor index \(floorSelected) out of range for available offsets")
+            return
+        }
+
+        let storeOffset = mapFloorOffset[floorSelected]
+        self.assetService.storeConfigOffset = storeOffset
     }
 
 }
