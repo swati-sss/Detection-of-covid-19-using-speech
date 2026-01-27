@@ -1,26 +1,171 @@
+import Combine
+import CoreData
 import Foundation
 @testable import compass_sdk_ios
 import IPSFramework
 
-class MockEventService: EventService, TestMockable {
-    var _cacheEventExecuted = false
-    var _cacheAndBootstrapAssetExecuted = false
-    var _shouldFail = false
+final class MockCompassViewModel: CompassViewModelType {
+    var rootViewController: UIViewController?
+    
+    let serviceLocator = MockServiceLocator()
+    var _getAccessTokenCalled = false
+    var _displayMapCalled = false
+    var _displayPinCalled = false
+    var _getAisleCalled = false
+    var _clearMapCalled = false
+    var _startPositionSessionCalled = false
+    var _stopPositioningCalled = false
+    var _isPositioningEnabled: Bool = false
+    var _positionSessionTimer: Timer?
+    var _isPositioningPaused = false
+    var _updateEventCalled = false
+    var _updateEventListCalled = false
+    var _updateStoreConfigurationCalled = false
+    var _isMapViewReady: Bool = false
+    var _killSWitchCalled = false
+    var _resetPositionStatusEventCalled = false
+    var _removeUserPositionIndicatorCalled = false
+    var _displayStaticPathCalled: Bool = false
 
-    func cacheEvent(_ event: CompassEvent,
-                    position: CGPoint,
-                    aisle: String,
-                    allAisles: [String]?) {
-        _cacheEventExecuted = true
+    func getAccessToken(authParameter: compass_sdk_ios.AuthParameter) -> AnyPublisher<compass_sdk_ios.AccessTokenResponse?, any Error> {        _getAccessTokenCalled = true
+        if authParameter.tokenType != TokenType.User.rawValue {
+            return Just(TestData.accessTokenResponse).setFailureType(to: Error.self).eraseToAnyPublisher()
+        } else {
+            let response = AccessTokenResponse(accessToken: authParameter.authToken,
+                                               tokenType: authParameter.tokenType,
+                                               expiresIn: 0)
+            return Just(response).setFailureType(to: Error.self).eraseToAnyPublisher()
+        }
+    }
+    
+    func toggleMockUser(_ option: Bool) {
+        Log.info("Set up Mock User: \(option)")
+        if option {
+            IPSPositioning.testLockThreshold = 0
+        }
+    }
+    
+    func updateStoreConfiguration(_ storeConfig: compass_sdk_ios.StoreConfig?) {
+        _updateStoreConfigurationCalled = true
+    }
+    
+    func getAisle(id: String) {
+        _getAisleCalled = true
+    }
+    
+    func isMapViewReady() -> AnyPublisher<Bool, Never>  {
+        return Just(_isMapViewReady).eraseToAnyPublisher()
+    }
+    
+    func displayMap() {
+        _displayMapCalled = true
+    }
+    
+    func clearMap(mapConfig: compass_sdk_ios.MapConfig) {
+        _clearMapCalled = true
+    }
+    
+    func updateEvent(compassEvent: CompassEvent) {
+        _updateEventCalled = true
+        Log.debug("API Called: updateEvent for event: \(compassEvent)")
+
+        startPositionSession()
+        guard let position = serviceLocator.getIndoorPositioningService().lastLockedPosition,
+        let converter = serviceLocator.getIndoorPositioningService().floorCoordinatesConverter else {
+            return
+        }
+        Task {
+            _ = await serviceLocator.getEventService()
+                .cacheAndBootstrapAsset(compassEvent,
+                                        position: position.convertToCompass(using: converter).asCGPoint())
+        }
+
     }
 
-    func cacheAndBootstrapAsset(_ event: CompassEvent, position: CGPoint) async -> BootstrapStatus {
-        _cacheAndBootstrapAssetExecuted = true
-        return _shouldFail ? .notBootstrapped : .bootstrapped
+    func updateEventList(namespace: String, eventType: String, eventValue: String, metaData: compass_sdk_ios.HashMap?) {
+        _updateEventListCalled = true
+        Log.debug("""
+                  API Called: updateEventList for namespace: \(namespace)
+                  eventType: \(eventType)
+                  eventValue: \(eventValue)
+                  metaData:\(String(describing: metaData))
+                  """)
+
+        startPositionSession()
+
+        guard let position = serviceLocator.getIndoorPositioningService().lastLockedPosition,
+        let converter = serviceLocator.getIndoorPositioningService().floorCoordinatesConverter else {
+            return
+        }
+
+        let compassPosition = position.convertToCompass(using: converter).asCGPoint()
+
+        let event = EventAnalytics.Event(
+            id: RequestIdentifier.id1.rawValue,
+            type: eventType,
+            value: eventValue,
+            properties: metaData?.toCodableValueDictionary()
+        )
+
+        let eventAnalytics = EventAnalytics.EventLocation(
+            roc: EventAnalytics.EventLocationRoc(x: compassPosition.x, y: compassPosition.y)
+        )
+
+        let authParam: AuthParameter? = StaticStorage.authParameter
+
+        Analytics.updateEvent(
+            payload: EventAnalytics(namespace: namespace,
+                                    clientId: authParam?.accountID ?? "",
+                                    location: eventAnalytics,
+                                    event: event,
+                                    isPositionLocked: false)
+        )
     }
 
-    func _resetMock() {
-        _cacheEventExecuted = false
-        _cacheAndBootstrapAssetExecuted = false
+    func displayPin(uuidList: [String], idType: PinDropMethod, config: DisplayPinConfig?) {
+        _displayPinCalled = true
     }
+
+    func displayPin(pins: [CompassPin]?, config: DisplayPinConfig?) {
+        _displayPinCalled = true
+    }
+
+    func startPositionSession() {
+        _startPositionSessionCalled = true
+    }
+    
+    func stopPositioning() {
+        _stopPositioningCalled = true
+    }
+
+    func killSwitch() {
+        _killSWitchCalled = true
+    }
+
+    func resetPositionStatusEvent() {
+        _resetPositionStatusEventCalled = true
+    }
+
+    func removeUserPositionIndicator() {
+        _removeUserPositionIndicatorCalled = true
+    }
+
+    func displayStaticPath(pins: [CompassPin], startFromNearbyEntrance: Bool, disableZoomGestures: Bool) {
+        // no-op for tests
+    }
+
+    func getUserDistance(pins: [AislePin], completion: UserDistanceCompleteHandler?) {
+        let result = pins.compactMap {
+            UserDistanceResponse(
+                location: Salesfloor(aisle: $0.location.aisle, section: $0.location.section, zone: $0.location.zone),
+                userDistanceInInches: 24.0,
+                error: nil)
+        }
+        completion?(result)
+    }
+
+    func displayStaticPath(pins: [compass_sdk_ios.AislePin], startFromNearbyEntrance: Bool, disableZoomGestures: Bool) {
+        _displayStaticPathCalled = true
+    }
+
 }
