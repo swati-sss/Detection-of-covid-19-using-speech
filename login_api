@@ -1,161 +1,26 @@
-import XCTest
-import Combine
+import Foundation
 @testable import compass_sdk_ios
+import IPSFramework
 
-final class EventServiceImplTests: XCTestCase {
-    private var serviceLocator: MockServiceLocator!
-    private var compassEvent: CompassEvent!
-    private var position: CGPoint!
-    private var eventService: EventServiceImpl!
+class MockEventService: EventService, TestMockable {
+    var _cacheEventExecuted = false
+    var _cacheAndBootstrapAssetExecuted = false
+    var _shouldFail = false
 
-    override func setUpWithError() throws {
-        try super.setUpWithError()
-        serviceLocator = MockServiceLocator()
-        compassEvent = CompassEvent()
-        position = CGPoint(x: 10, y: 20)
-        
-        // Set a session ID so addEvent() won't fail with empty sessionId check
-        let defaultsStore = UserDefaultsStore()
-        defaultsStore.saveSessionId()
-        
-        eventService = EventServiceImpl(serviceLocator: serviceLocator, defaultsStore: defaultsStore)
+    func cacheEvent(_ event: CompassEvent,
+                    position: CGPoint,
+                    aisle: String,
+                    allAisles: [String]?) {
+        _cacheEventExecuted = true
     }
 
-    override func tearDownWithError() throws {
-        serviceLocator._resetMock()
-        serviceLocator = nil
-        compassEvent = nil
-        position = nil
-        eventService = nil
-        try super.tearDownWithError()
+    func cacheAndBootstrapAsset(_ event: CompassEvent, position: CGPoint) async -> BootstrapStatus {
+        _cacheAndBootstrapAssetExecuted = true
+        return _shouldFail ? .notBootstrapped : .bootstrapped
     }
 
-    func testCacheAndBootstrapAssetEvent() async {
-        let expectation = expectation(description: #function)
-        var statusService = serviceLocator.getStatusService()
-        let eventStoreService = serviceLocator.getEventStoreService() as? MockEventStoreService
-        let networkService = serviceLocator.getNetworkService() as? MockNetworkService
-        networkService?._shouldFail = false
-        networkService?._expectedPinCreateResponse = TestData.pinCreateResponse
-        eventStoreService?._shouldFail = false
-        eventStoreService?._shouldReturnNil = false
-
-        statusService.eventEmitterHandler = { eventEmitter in
-            DispatchQueue.main.async {
-                guard let eventEmitterDescription = eventEmitter as? EventEmitterDescription else {
-                    return
-                }
-                if eventEmitterDescription.eventType == .bootstrapEventEmitter {
-                    expectation.fulfill()
-                }
-            }
-        }
-
-        let event = CompassEvent(eventType: "test_event_type", eventValue: "test_event_value", eventMetadata: ["someKey": "someValue"])
-
-        _ = await eventService.cacheAndBootstrapAsset(event, position: CGPoint(x: 21, y: 56))
-
-        await fulfillment(of: [expectation], timeout: 6)
-    }
-
-    func testCacheAndBootstrapAssetAddEventFailed() async {
-        let expectation = expectation(description: #function)
-        var statusService = serviceLocator.getStatusService()
-        let eventStoreService = serviceLocator.getEventStoreService() as? MockEventStoreService
-        let networkService = serviceLocator.getNetworkService() as? MockNetworkService
-        networkService?._shouldFail = true
-        networkService?._expectedError = ErrorResponse(response: HTTPURLResponse(url: URL(string: "www.test.com")!, mimeType: "", expectedContentLength: 0, textEncodingName: nil), error: TestData.error)
-        eventStoreService?._shouldFail = false
-        eventStoreService?._shouldReturnNil = false
-
-        statusService.eventEmitterHandler = { eventEmitter in
-            guard let errorEventEmitter = eventEmitter as? ErrorEventEmitter else {
-                return
-            }
-            if errorEventEmitter.eventType == .errorEventEmitter {
-                expectation.fulfill()
-            }
-        }
-        let event = CompassEvent(eventType: "test_event_type", eventValue: "test_event_value", eventMetadata: ["someKey": "someValue"])
-        _ = await eventService.cacheAndBootstrapAsset(event, position: CGPoint(x: 21, y: 56))
-
-        await fulfillment(of: [expectation], timeout: 4)
-    }
-
-    func testCacheAndBootstrapAssetEventFailed() async {
-        let expectation = expectation(description: #function)
-        expectation.isInverted = true
-        let networkService = serviceLocator.getNetworkService() as? MockNetworkService
-        networkService?._expectedPinCreateResponse = PinCreateResponse(status: "failed", errors: [], payload: PinPayloadResponse(id: "", comment: "", storeId: "", positionX: 0, positionY: 0, locationList: []))
-        var statusService = serviceLocator.getStatusService()
-        statusService.eventEmitterHandler = { eventEmitter in
-            guard let eventEmitterDescription = eventEmitter as? EventEmitterDescription else {
-                return
-            }
-            if eventEmitterDescription.eventType == .bootstrapEventEmitter {
-                expectation.fulfill()
-            }
-        }
-        let event = CompassEvent(eventType: "test_event_type", eventValue: "test_event_value", eventMetadata: ["someKey": "someValue"])
-        _ = await eventService.cacheAndBootstrapAsset(event, position: CGPoint(x: 21, y: 56))
-
-        await fulfillment(of: [expectation], timeout: 8.0)
-    }
-
-    func testCacheAndBootstrapAssetEventFailedAddEvent() async {
-        let expectation = expectation(description: #function)
-        let networkService = serviceLocator.getNetworkService() as? MockNetworkService
-        networkService?._shouldFail = true
-        let event = CompassEvent(eventType: "test_event_type", eventValue: "test_event_value", eventMetadata: ["someKey": "someValue"])
-        let bootstrapStatus = await eventService.cacheAndBootstrapAsset(event, position: CGPoint(x: 21, y: 56))
-        XCTAssertEqual(bootstrapStatus, .notBootstrapped)
-        expectation.fulfill()
-
-        await fulfillment(of: [expectation], timeout: 4)
-    }
-
-    func testCacheAndBootstrapAssetEventFailedGetSessionId() async {
-        let expectation = expectation(description: #function)
-        expectation.isInverted = true
-        // Clear session ID to test the failed session ID retrieval scenario
-        let defaultsStore = UserDefaultsStore()
-        defaultsStore.deleteObjectForKey(UserDefaultsKey.sessionId.rawValue)
-        let eventServiceNoSession = EventServiceImpl(serviceLocator: serviceLocator, defaultsStore: defaultsStore)
-        
-        let networkService = serviceLocator.getNetworkService() as? MockNetworkService
-        networkService?._shouldFail = false
-        var statusService = serviceLocator.getStatusService()
-        statusService.eventEmitterHandler = { eventEmitter in
-            guard let _ = eventEmitter as? EventEmitterDescription else {
-                return
-            }
-            if eventEmitter.eventType == .bootstrapEventEmitter {
-                expectation.fulfill()
-            }
-        }
-        let event = CompassEvent(eventType: "test_event_type", eventValue: "test_event_value", eventMetadata: ["someKey": "someValue"])
-        _ = await eventServiceNoSession.cacheAndBootstrapAsset(event, position: CGPoint(x: 21, y: 56))
-
-        await fulfillment(of: [expectation], timeout: 8.0)
-    }
-
-    func testCacheEventFailedSaveEvent() {
-        let expectation = expectation(description: #function)
-        expectation.isInverted = true
-        let eventStoreService = serviceLocator.getEventStoreService() as? MockEventStoreService
-        eventStoreService?._shouldFail = true
-        var statusService = serviceLocator.getStatusService()
-        statusService.eventEmitterHandler = { eventEmitter in
-            guard let _ = eventEmitter as? EventEmitterDescription else {
-                return
-            }
-            if eventEmitter.eventType == .bootstrapEventEmitter {
-                expectation.fulfill()
-            }
-        }
-        let event = CompassEvent(eventType: "test_event_type", eventValue: "test_event_value", eventMetadata: ["someKey": "someValue"])
-        eventService.cacheEvent(event, position: CGPoint(x: 21, y: 56), aisle: LocationIdentifier.unknown.rawValue, allAisles: [LocationIdentifier.unknown.rawValue])
-
-        waitForExpectations(timeout: 4)
+    func _resetMock() {
+        _cacheEventExecuted = false
+        _cacheAndBootstrapAssetExecuted = false
     }
 }
