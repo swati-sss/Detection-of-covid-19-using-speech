@@ -1,383 +1,501 @@
+import CoreGraphics
+import Foundation
 import Combine
-import IPSFramework
 
-typealias AssetFetchBlock = ([CGPoint]) -> Void
-
-protocol AssetService {
-    var supportedEventList: String { get set }
-    var storeId: Int { get set }
-    var mapType: MapIdentifier { get set }
-    var storeConfigOffset: StoreConfigOffset { get set }
-    var idList: [String] { get set }
-    var idType: PinDropMethod { get set }
-    var assetEvents: [String: AssetEvent] { get set }
-
-    func evaluateAssets(using idList: [String],
-                        idType: PinDropMethod,
-                        pinDropType: PinDropType,
-                        onCompletion: @escaping AssetFetchBlock)
-
-    func evaluateAisles(using id: String,
-                        pinDropType: PinDropType,
-                        position: CGPoint,
-                        onCompletion: @escaping AssetFetchBlock)
-
-    func fetchFeatureLocations(
-        forAisleIds aisleIds: [String]
-    ) async -> [(CGPoint, String)]
-}
-
-final class AssetServiceImpl: AssetService {
-    var cancellable = Set<AnyCancellable>()
-    private var featureLocationTask: Task<[(CGPoint, String)], Never>?
-    private var featureLocationRequestId = 0
-    let statusService: StatusService
-    let eventStoreService: EventStoreService
-    let indoorPositioningService: IndoorPositioningService
-    let eventService: EventService
-    let networkService: NetworkServiceType
-
-    var storeId = 0
-    var mapType = MapIdentifier.WalmartMap
-    var storeConfigOffset = StoreConfigOffset(x: 4620.0, y: 3430.0)
-    var idList = [String]()
-    var idType: PinDropMethod = .assets
-    var assetEvents = [String: AssetEvent]()
-    var supportedEventList: String = ""
-
-    init(serviceLocator: ServiceLocatorType) {
-        self.statusService = serviceLocator.getStatusService()
-        self.eventStoreService = serviceLocator.getEventStoreService()
-        self.indoorPositioningService = serviceLocator.getIndoorPositioningService()
-        self.eventService = serviceLocator.getEventService()
-        self.networkService = serviceLocator.getNetworkService()
-    }
-
-    func evaluateAssets(using idList: [String],
-                        idType: PinDropMethod,
-                        pinDropType: PinDropType,
-                        onCompletion: @escaping  AssetFetchBlock) {
-        Log.info("Evaluate assets for \(mapType.rawValue) map.")
-        self.idList = idList
-        self.idType = idType
-        assetEvents.removeAll()
-        Publishers.Sequence(sequence: idList).eraseToAnyPublisher()
-            .flatMap { [weak self] assetId -> AnyPublisher<[AssetPayload], Never> in
-                guard let self else { return Empty(completeImmediately: true).eraseToAnyPublisher() }
-                switch idType {
-                case .assets:
-                    return getCachedAssetOrFetch(assetId: assetId)
-                case .generic:
-                    return decodeGeneric(encodedString: assetId)
-                }
-            }
-            .sink { [weak self] assetPayloads in
-                guard let self else { return }
-                assetPayloads.forEach { payload in
-                    Log.info("AssetPayload: \(String(describing: payload))")
-                    self.emitPinEvent(assetId: payload.id,
-                                      position: payload.cgPoint,
-                                      pinDropType: pinDropType,
-                                      assetPayload: payload,
-                                      onCompletion: onCompletion)
-
-                    let pinLocation = "\(payload.x), \(payload.y)"
-                    Analytics.displayPin(payload: DisplayPinAnalytics(pinType: self.idType.analyticsStringValue,
-                                                                      pinValue: payload.id,
-                                                                      pinCategory: "auto",
-                                                                      pinLocation: pinLocation,
-                                                                      success: true))
-                }
-            }
-            .store(in: &cancellable)
-    }
-
-    func evaluateAisles(using id: String,
-                        pinDropType: PinDropType,
-                        position: CGPoint,
-                        onCompletion: @escaping AssetFetchBlock) {
-        switch idType {
-        case .assets:
-            fetchAisleInfo(for: id, position: position)
-                .sink { [weak self] assetPayload in
-                    Log.info("Handle \(self?.mapType.rawValue ?? "unknown map") asset")
-                    self?.emitPinEvent(assetId: id,
-                                       position: assetPayload.cgPoint,
-                                       pinDropType: pinDropType,
-                                       assetPayload: assetPayload,
-                                       onCompletion: onCompletion)
-                }
-                .store(in: &cancellable)
-        case .generic:
-            // Retrieve aisle location from network call. If the network call fails or returns an error,
-            // return the default payload value using replaceEmpty
-            // Note: Backend is not ready to handle cases where asset Id is nil.
-            fetchAisleInfo(for: id, position: position)
-                .replaceEmpty(with: useDefaultAssetPayload(id: id,
-                                                           coordinate: Coordinate(
-                                                            x: position.x,
-                                                            y: position.y
-                                                           )
-                                                          ))
-                .sink { [weak self] assetPayload in
-                    Log.info("Handle \(self?.mapType.rawValue ?? "unknown map") non asset")
-                    self?.emitPinEvent(assetId: id,
-                                       position: assetPayload.cgPoint,
-                                       pinDropType: pinDropType,
-                                       assetPayload: assetPayload,
-                                       onCompletion: onCompletion)
-                }
-                .store(in: &cancellable)
+extension StoreMapLoaderViewModel {
+    func request(_ message: MessageRequest, timeInterval: TimeInterval = StoreMapConfig.zoomPinAnimationDelay) {
+        guard let webView = self.mapViewDelegate?.webView else {
+            return
         }
+
+        self.messageSender.send(message, in: webView)
     }
 
-    func fetchFeatureLocations(
-        forAisleIds aisleIds: [String]
-    ) async -> [(CGPoint, String)] {
-        featureLocationRequestId += 1
-        let requestId = featureLocationRequestId
-
-        featureLocationTask?.cancel()
-        let task = Task { [weak self] () -> [(CGPoint, String)] in
-            guard let self else { return [] }
-            return await self.fetchFeatureLocationsInternal(forAisleIds: aisleIds)
-        }
-        featureLocationTask = task
-
-        let result = await task.value
-        guard requestId == featureLocationRequestId else { return [] }
-        return result
+    func refreshWebView() {
+        renderedPins = []
+        renderedPinsZoomRect = nil
+        hasLoadedMapView = false
+        mapViewDelegate?.reloadWebView()
+        Log.debug("Refresh WebView")
     }
-}
 
-private extension AssetServiceImpl {
-    func fetchFeatureLocationsInternal(
-        forAisleIds aisleIds: [String]
-    ) async -> [(CGPoint, String)] {
-        do {
-            let response = try await awaitPublisher(
-                networkService.getFeatureLocation(aisleIds: aisleIds, storeId: storeId).retry()
+    func handle(_ message: MessageResponse, completion: ((MessageResponse) -> Void)? = nil) {
+        switch message {
+        case .mapData(let mapData):
+            mapDataReadyRequestTimer?.invalidate()
+            mapDataReadyRequestTimer = nil
+            self.mapData = mapData
+            self.statusService.emitPointOfInterestEvent(PointOfInterest: mapData.pointsOfInterest)
+        case .mapLoaded(let mapLoaded):
+            mapLoadedData = mapLoaded
+            updateStoreConfigueOffset()
+            mapViewDelegate?.toggleLoadingView(true)
+            // Loading this particular map version is needed for POI_CLICKED click event or it wont work
+            request(.version(VersionRequest(version: StoreMapConfig.webAppVersion)))
+            startTimerForMapDataReadyRequest()
+            request(.mapData)
+            renderPinsIfNeeded(floorCount: mapLoaded.floors.count)
+            request(.coordinateSpaceDiscoveryTapRequested(CoordinateSpaceDiscoveryTapRequest(enabled: true)))
+
+            Log.debug("Coordinate Space Discovery Tap Requested is enabled")
+            statusService.emitMapStatusEvent(isSuccess: true)
+            removeUserPositionIndicator()
+            mapViewDelegate?.floorControlStackView.isHidden = !(mapLoaded.floors.count > 1)
+        case .coordinateSpaceDiscoveryTap(let coordinateSpaceDiscoveryTap):
+            Log.debug("onMapLongPressed is called with coordinateSpaceDiscoveryTap: \(coordinateSpaceDiscoveryTap)")
+            onMapLongPressed(coordPayLoad: coordinateSpaceDiscoveryTap)
+        case .pinRenderedMessage(let pinRenderedMessage):
+            self.handlePinRenderedMessage(pinRenderedMessage)
+        case let .pinXYRenderedMessage(message):
+            self.handlePinXYRenderedMessage(message)
+        case let .pinsActionAlleyRenderedResponse(message):
+            Log.debug("pinsActionAlleyRenderedResponse with message: \(message)")
+            zoomOnLocation(topLeft: message.topLeft, bottomRight: message.bottomRight)
+        case let .userLocationRenderedMessage(userLocationRenderedMessage):
+            Log.debug("userLocationRenderedMessage with message: \(userLocationRenderedMessage)")
+            zoomOnLocation(
+                topLeft: userLocationRenderedMessage.topLeft,
+                bottomRight: userLocationRenderedMessage.bottomRight,
+                target: .userLocation
             )
-            return (response?.payload ?? [])
-                .compactMap { item in
-                    guard !item.roc.x.isNaN, !item.roc.y.isNaN, !item.id.isEmpty else { return nil }
-                    return (item.roc.toCGPoint(), item.id)
+        case let .pinClicked(pinClicked):
+            Log.debug("pinClicked with message: \(pinClicked)")
+            statusService.emitPinClickedEvent(
+                zone: pinClicked.data.zone,
+                aisle: pinClicked.data.aisle,
+                section: pinClicked.data.section
+            )
+        case let .customRouteError(customRouteError):
+            Log.debug("customRouteError with message: \(customRouteError)")
+            let selectedPinLocation = currentPins.filter { $0.selected }.map {
+                "\($0.zone ?? "").\($0.aisle ?? 0).\($0.section ?? 0)"
+            }.joined(separator: ",")
+            let unselectedPinLocation = currentPins.filter { !$0.selected && $0.type != .campaign }.map {
+                "\($0.zone ?? "").\($0.aisle ?? 0).\($0.section ?? 0)"
+            }.joined(separator: ",")
+            let outOfBoundsCoords = customRouteError.outOfBoundPath.map { OutOfBoundsCoord(x: Int($0.x), y: Int($0.y)) }
+            let payload = NavigationErrorAnalytics(
+                selectedPinLocation: selectedPinLocation,
+                unselectedPinLocation: unselectedPinLocation,
+                outOfBoundsCoords: outOfBoundsCoords,
+                type: "custom_route",
+                isStaticPath: isStaticPathVisible
+            )
+            Analytics.navigationError(payload: payload)
+        default:
+            Log.warning("Unhandled message type: \(message)")
+        }
+        completion?(message)
+    }
+
+    func renderFeatureLocationPinsIfNeeded(for pinRenderedMessage: PinRenderedMessage) {
+        guard let pins = pinRenderedMessage.pins,
+              !pins.isEmpty,
+              pinsConfig.actionAlleyEnabled else { return }
+
+        let errorPins = pins
+            .filter(\.shouldFetchData)
+            .filter { $0.errorData != nil }
+        let aisleIdList = errorPins.map { "\(($0.zone ?? "").uppercased()).\($0.aisle ?? 0).\($0.section ?? 0)" }
+
+        guard !aisleIdList.isEmpty else {
+            Log.debug("No valid aisle IDs found for feature locations.")
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else { return }
+            let results = await assetService.fetchFeatureLocations(forAisleIds: aisleIdList)
+            guard !results.isEmpty else { return }
+
+            await MainActor.run {
+                let pinsToDraw = DrawPinWithZone.from(
+                    points: results,
+                    type: PinIdentifier.actionAlleyPin.rawValue,
+                    offset: self.assetService.storeConfigOffset
+                )
+
+                if !pinsToDraw.isEmpty {
+                    Log.info(
+                       """
+                       • Fetched feature locations for aisle IDs:
+                       \(aisleIdList)
+                       • Response wasp points with aisle Ids:
+                       \(results)
+                       • Converted store map pins:
+                       \(pinsToDraw)
+                       """
+                    )
+                    request(.renderActionAlleyPinRequested(PinListWithZone(pins: pinsToDraw)))
                 }
-        } catch is CancellationError {
-            return []
-        } catch {
-            Log.error(error)
-            if let error = error as? ErrorResponse {
-                statusService.emitErrorStatusEvent(for: error, isInitError: false)
             }
-            return []
         }
     }
 
-    func awaitPublisher<P: Publisher>(_ publisher: P) async throws -> P.Output where P.Failure == Error {
-        let stream = AsyncThrowingStream<P.Output, Error> { continuation in
-            let cancellable = publisher.sink { completion in
-                switch completion {
-                case .failure(let error):
-                    continuation.finish(throwing: error)
-                case .finished:
-                    continuation.finish()
-                }
-            } receiveValue: { value in
-                continuation.yield(value)
-            }
-            continuation.onTermination = { _ in
-                cancellable.cancel()
-            }
+    func updateNavigationServicesIfNeeded(for pinRenderedMessage: PinRenderedMessage) {
+        // Check if there are pins to process
+        guard !isStaticPathVisible,
+              let pins = pinRenderedMessage.pins,
+              !pins.isEmpty,
+              navigationEnabled == true else {
+            // Hide navigation button if no pins or disabled navigation
+            mapViewDelegate?.refreshNavigationButtonState(false)
+            return
         }
 
-        for try await value in stream {
-            return value
-        }
-        throw CancellationError()
-    }
+        // Reset navigation waypoints
+        indoorNavigationService.resetWaypoints(shouldClearBlueDot: false, shouldClearPinList: true)
 
-    func decodeGeneric(encodedString: String) -> AnyPublisher<[AssetPayload], Never> {
-        guard let location = LocationConverter.decodeMessage(outMsg: encodedString), location.store == storeId else {
-            return Empty(completeImmediately: true).eraseToAnyPublisher()
-        }
+        // Filter pins that are selected and valid
+        let validPins = pins.filter { $0.selected && $0.errorData == nil }
 
-        return Publishers.MergeMany(location.coordinates.map {
-            // Note: Backend is not ready to handle cases where asset Id is nil.
-            fetchAisleInfo(for: encodedString, position: CGPoint(x: $0.x, y: $0.y))
-                .replaceEmpty(with: useDefaultAssetPayload(id: encodedString, coordinate: $0))
-        })
-        .collect()
-        .eraseToAnyPublisher()
-    }
+        // Convert valid pins to Point list
+        let pointList = validPins.compactMap { $0.location.map { Point(x: $0.x, y: $0.y) } }
 
-    func useDefaultAssetPayload(id: String, coordinate: Coordinate) -> AssetPayload {
-        Log.info("Replacing empty value with default asset payload as the backend API response was empty.")
-        return AssetPayload(id: id,
-                            x: coordinate.x,
-                            y: coordinate.y,
-                            z: coordinate.z,
-                            type: idType.rawValue,
-                            aisle: LocationIdentifier.unknown.rawValue,
-                            allAisles: [LocationIdentifier.unknown.rawValue])
-    }
+        // Check if there are any valid pins
+        let hasValidPin = !validPins.isEmpty
 
-    func emitPinEvent(assetId: String,
-                      position: CGPoint,
-                      pinDropType: PinDropType,
-                      assetPayload: AssetPayload,
-                      onCompletion: AssetFetchBlock) {
-        Log.info("""
-                 Set Assets Status Event assetId: \(assetId) pinDropType: \(pinDropType)
-                 mapType:\(self.mapType.rawValue) assetLocations:\(String(describing: assetPayload.allAisles))
-                 """)
+        // Only update if navigation is not in progress
+        let shouldUpdatePinList = indoorNavigationService.navigationSessionState?.navigationStatus != .inProgress
 
-        switch pinDropType {
-        case .pinAisleLoc:
-            statusService.emitLocationEvent(assetLocation: assetPayload.aisle)
-        case .autoPinDropAisleLocList, .manualPinDropAisleLocList:
-            var position = position
-            if mapType == .OriientMap {
-                guard let converter = indoorPositioningService.floorCoordinatesConverter else {
-                    return
-                }
-                position = position.convertToOriient(using: converter).asCGPoint()
+        // Prepare render request if needed
+        let renderPinsRequest: RenderPinsRequest? = shouldUpdatePinList ? .init(
+            pins: pins, pinGroupingEnabled: pinsConfig.groupPinsEnabled) : nil
+
+        // Update navigation state with new pins
+        self.indoorNavigationService.updateNavigationState(
+            currentLocation: nil,
+            pinWaypoint: nil,
+            renderRequest: renderPinsRequest,
+            pinListUpdate: nil
+        )
+
+        mapViewDelegate?.handleNavigationInterruption(for: 1, status: navigationSessionState?.navigationStatus)
+
+        // If there are valid pins
+        if hasValidPin {
+            if let navigationConfig = self.indoorNavigationService.navigationConfig,
+               navigationConfig.isAutomaticNavigation {
+                self.indoorNavigationService.navigationSessionState?.navigationStatus = .inProgress
+                setPathfindingEnabled(true, duration: 0.2, force: true)
             }
-            onCompletion([position])
-            let assetEvent = AssetEvent(assetId: assetId,
-                                        locations: assetPayload.allAisles ?? [],
-                                        coordinate: position.asCompassCoordinate(),
-                                        success: true)
-            assetEvents[assetId] = assetEvent
-            guard !idList.isEmpty, idList.count == assetEvents.count else {
+            // Add navigation route for these pins
+            updateNavigationRoute(
+                with: pointList,
+                at: 1,
+                using: nil,
+                renderPinsRequest: renderPinsRequest
+            )
+
+            if wasUserNavigatingBefore {
+                logNavigationEndEvent() // Log navigation end event for earlier pin
+            }
+
+            if let pin = pinRenderedMessage.pins?.first( where:{ $0.selected && $0.errorData == nil }) {
+                logNavigationStartEvent(pin: pin)
+            }
+        } else {
+            // Reset navigation session state if no valid pins
+            indoorNavigationService.resetNavigationSessionState()
+        }
+
+        // Update navigation button state
+        refreshNavigationState(withPins: pins)
+    }
+
+    func startTimerForMapDataReadyRequest() {
+        mapDataReadyRequestTimer = .scheduledTimer(withTimeInterval: StoreMapConfig.apiTimeoutLimit,
+                                                   repeats: false) { [weak self] _ in
+            self?.mapDataReadyRequestTimer?.invalidate()
+            self?.mapDataReadyRequestTimer = nil
+            Log.error(StoreMapError.mapLoadTimedOut)
+        }
+    }
+
+    func renderPinsIfNeeded(floorCount: Int) {
+        defer {
+            hasLoadedMapView = true
+            mapFocusManager.isMapViewPresent.value = true
+            indoorPositioningService.registerApplicationEvent(.mapPresented)
+        }
+        guard !hasLoadedMapView else { return }
+        if !renderedPins.isEmpty, floorCount > 1 {
+            request(.aisleData)
+        }
+
+        if let pin = configuration.pin, floorCount == 1 {
+            var pinsToBeRendered = renderedPins
+            pinsToBeRendered.append(pin)
+            render(pinsToBeRendered)
+        }
+    }
+
+    func reportPinAisleStatusEvent(for pins: [Pin]) {
+        let pinAisleEvents: [PinAisleEvent] = pins.map { pin in
+            let id = pin.id?.asString() ?? ""
+            let aisle = pin.aisle?.asString() ?? ""
+            let zone = pin.zone?.asString() ?? ""
+            let section = pin.section?.asString() ?? ""
+            let location = ["aisle": aisle, "zone": zone, "section": section]
+            return PinAisleEvent(id: id,
+                                 location: location,
+                                 success: pin.errorData != nil ? false : true)
+        }
+
+        statusService.emitAislesPinDropEvent(pinDropType: .autoPinDropAisleLocList,
+                                             mapType: MapIdentifier.WalmartMap,
+                                             pins: pinAisleEvents)
+    }
+
+    func onMapLongPressed(coordPayLoad: CoordinateSpaceDiscoveryTap) {
+        if isStaticPathVisible { return }
+        if isNavigationInProgress { return }
+
+        Log.debug("Long pressed on map at: \(coordPayLoad)")
+        Analytics.telemetry(payload: TelemetryAnalytics(
+            event: DisplayPin.DISPLAY_PIN_LONG_PRESS_OFF_MAP.rawValue
+        ))
+        guard config.enableManualPinDrop else {
+            Log.debug("Manual pin drop is disabled")
+            return
+        }
+
+        Log.info("AssetService idType is  \(assetService.idType)")
+        guard let svgCoord = coordPayLoad.svgSpace else {
+            Log.debug("svgCoord from \(coordPayLoad) is not valid")
+            Analytics.telemetry(payload: TelemetryAnalytics(
+                isError: true,
+                event: DisplayPin.DISPLAY_PIN_ERROR_POST_LOCATION_ON_PRESS.rawValue
+            ))
+            return
+        }
+
+        // Store the PinList
+        pinList.current = PinList(pins: [
+            DrawPin(
+                type: PinIdentifier.xyPinLocation.rawValue,
+                x: svgCoord.cgPoint.x,
+                y: svgCoord.cgPoint.y,
+                location: Point(x: svgCoord.cgPoint.x, y: svgCoord.cgPoint.y),
+                errorData: nil
+            )
+        ])
+
+        if let currentPinList = pinList.current, !(navigationEnabled ?? false) {
+            request(.renderXYLocationPinRequested(currentPinList))
+        }
+
+        Log.debug("RenderXYLocationPinRequested is called pinList: \(pinList)")
+
+        let waspPosition = svgCoord.cgPoint.storeMapToWasp(offset: assetService.storeConfigOffset)
+
+        switch assetService.idType {
+        case .assets:
+            handleAsset(waspPosition: waspPosition)
+        case .generic:
+            encodeGeneric(waspPosition: waspPosition)
+        }
+    }
+
+    func handleAsset(waspPosition: CGPoint) {
+        Log.debug("Manual pin drop is asset type")
+        let defaults = UserDefaults.standard
+        guard let assetId = (defaults.object(forKey: UserDefaultsKey.uuidList.rawValue) as? [String])?.first else {
+            Log.info("No uuids in UserDefaults")
+            return
+        }
+
+        Log.debug("Found assetId: \(assetId) in UserDefaults")
+        Log.debug("Subscribing to compass event status updates")
+        statusService.bootstrapEventEmitter = { [weak self] eventEmitter  in
+            guard eventEmitter.eventType == .bootstrapEventEmitter else {
                 return
             }
-            Log.info("""
-            Set Assets Status Event - assetId: \(assetId) pinDropType: \(pinDropType) mapType:\(mapType)
-            assetEvents:\(String(describing: assetEvents))
+
+            Log.debug("Successfully bootstrapped pin")
+
+            // Store the successfully bootstrapped pin
+            self?.pinList.last = self?.pinList.current
+            self?.evaluateAisle(for: assetId, waspPosition: waspPosition, idType: .assets)
+        }
+
+        let eventType = EventConstant.Category.assetScan.rawValue
+        let event = CompassEvent(eventType: eventType, eventValue: assetId, eventMetadata: [:])
+
+        Task { [weak self] in
+            guard let self else { return }
+            let bootstrapStatus = await eventService.cacheAndBootstrapAsset(event, position: waspPosition)
+
+            // Handle the case where pin bootstrapped event API fails, showing the last successfully bootstrapped pin
+            guard bootstrapStatus == .notBootstrapped,
+                  let lastPinList = self.pinList.last else {
+
+                Log.debug("Pin bootstrapped event API succeeded.")
+                return
+            }
+            Analytics.telemetry(payload: TelemetryAnalytics(
+                isError: true,
+                event: DisplayPin.DISPLAY_PIN_ERROR_POST_LOCATION_ON_PRESS.rawValue
+            ))
+            Log.debug("""
+            Pin bootstrapped event API failed, showing the last successfully bootstrapped pin list: \(lastPinList)
             """)
-            statusService.emitPinDropEvent(using: assetId,
-                                           storeId: storeId,
-                                           pinDropType: pinDropType,
-                                           mapType: mapType.rawValue,
-                                           assetEvents: assetEvents,
-                                           idType: idType)
-            idList.removeAll()
-            assetEvents.removeAll()
+
+            self.request(.renderXYLocationPinRequested(lastPinList))
+            return
+        }
+
+        Log.debug("Map Long Pressed for asset pin")
+    }
+
+    func encodeGeneric(waspPosition: CGPoint) {
+        Log.debug("Manual pin drop is generic type")
+        let coord = waspPosition.asCompassCoordinate()
+        let locationComData = LocationComData(store: assetService.storeId, coordinates: [coord], version: 1)
+        guard let encodedLocationString = LocationConverter.encodeMessage(data: locationComData) else {
+            Log.debug("Could not encode location: \(locationComData)")
+            return
+        }
+
+        Log.debug("assetId: \(encodedLocationString)")
+        evaluateAisle(for: encodedLocationString, waspPosition: waspPosition, idType: .generic)
+        Log.debug("Map Long Pressed for generic pin")
+    }
+
+    func evaluateAisle(for assetId: String, waspPosition: CGPoint, idType: PinDropMethod) {
+        assetService.idList.removeAll()
+        assetService.assetEvents.removeAll()
+        assetService.idList = [assetId]
+
+        Log.debug("AssetEvents is \(String(describing: assetService.assetEvents))")
+        Log.debug("idList is \(String(describing: assetService.idList))")
+
+        assetService.evaluateAisles(using: assetId,
+                                    pinDropType: .manualPinDropAisleLocList,
+                                    position: waspPosition) { [weak self] points in
+            self?.renderPins(from: points)
+        }
+
+        Analytics.displayPin(
+            payload: DisplayPinAnalytics(pinType: idType.analyticsStringValue,
+                                         pinValue: assetId,
+                                         pinCategory: "manual",
+                                         pinLocation: "\(waspPosition.x),\(waspPosition.y)",
+                                         success: true)
+        )
+    }
+
+    func render(_ pins: [Pin], replacingExisting: Bool = false) {
+        Log.debug("Requesting to render pins: \(pins), replacingExistingPins: \(replacingExisting)")
+        renderedPins = pins + (replacingExisting ? [] : renderedPins)
+        request(.renderPins(RenderPinsRequest(pins: renderedPins, pinGroupingEnabled: pinsConfig.groupPinsEnabled)))
+    }
+
+    func zoomOnLocation(topLeft: Point?, bottomRight: Point?, target: ZoomTarget = .pinAnnotation) {
+        if isStaticPathVisible { return }
+        if shouldSkipZoomOnLocation { return }
+
+        guard target == .pinAnnotation ? config.shouldZoomOnPins : mapViewDelegate?.isCenterButtonClicked == true,
+              let topLeft = topLeft,
+              let bottomRight = bottomRight else {
+            Log.debug("Zooming on area failed for target \(target), shouldZoom: \(config.shouldZoomOnPins)")
+            return
+        }
+
+        // If both the blue dot and pins are present on the map,
+        // use the third zoom value, which is 3.0. If only pins are on the map,
+        // use the minimum third value, which is 1, as the zoom level.
+        var scale =
+        (
+            (
+                target == .pinAnnotation && config.shouldZoomOnPins && mapViewDelegate?.isCenterButtonClicked == true
+            ) ||
+            mapViewDelegate?.isCenterButtonClicked == true
+        ) ?
+        StoreMapZoomLevel.third.zoomValue : StoreMapZoomLevel.third.minimumZoomScale
+
+        // For now, we are using zoom level 3 for GIFs, so this condition has been added.
+        // Once it is clarified that we can apply this for all clients,
+        // please remove this condition
+        if DeviceInformation.getCompassSDKClientType().lowercased().contains("gif") {
+            scale = StoreMapZoomLevel.third.zoomValue
+        }
+
+        let topLeftPoint = applyScaledContentOffset(to: topLeft.cgPoint)
+        let bottomRightPoint = applyScaledContentOffset(to: bottomRight.cgPoint)
+        let zoomRect = makeZoomRect(
+            topLeft: topLeftPoint,
+            bottomRight: bottomRightPoint,
+            scale: scale
+        )
+        if target == .pinAnnotation {
+            renderedPinsZoomRect = zoomRect
+        }
+        zoomOnRegion(with: zoomRect, target: target)
+        Log.debug(
+                 """
+                 zoomOnLocation on target \(target),
+                 shouldZoom: \(config.shouldZoomOnPins),
+                 isCenterButtonClicked \(String(describing: mapViewDelegate?.isCenterButtonClicked))
+                 """
+        )
+    }
+
+    func zoomToMapCenter() {
+        Log.debug("zoom To MapCenter")
+        hasMapViewZoomed = true
+        mapViewDelegate?.toggleLoadingView(false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + StoreMapConfig.zoomPinAnimationDelay) { [weak self] in
+            guard let self = self else { return }
+            self.mapViewDelegate?.zoomOut(with: self.preferredZoomScale)
         }
     }
 
-    func getCachedAssetOrFetch(assetId: String) -> AnyPublisher<[AssetPayload], Never> {
-        Log.info("Get StoreMap asset for assetId \(assetId)")
-        return self.getCachedEvent(using: assetId)
-            .flatMap { [weak self] eventStoreModel -> AnyPublisher<[AssetPayload], Never> in
-                guard let self else {
-                    return Empty(completeImmediately: true).eraseToAnyPublisher()
-                }
-                guard let model = eventStoreModel,
-                      model.aisleLocation != LocationIdentifier.notset.rawValue else {
-                    return self.fetchAsset(for: assetId)
-                        .compactMap { $0?.payload }
-                        .replaceEmpty(with: useDefaultAssetPayload(
-                            id: assetId,
-                            coordinate: Coordinate(x: eventStoreModel?.x ?? 0.0,
-                                                   y: eventStoreModel?.y ?? 0.0)
-                        ))
-                        .flatMap { payload -> AnyPublisher<[AssetPayload], Never> in
-                            let compassEvent = CompassEvent(eventType: EventConstant.Category.assetScan.rawValue,
-                                                            eventValue: assetId)
-                            self.eventService.cacheEvent(
-                                compassEvent,
-                                position: payload.cgPoint,
-                                aisle: payload.aisle,
-                                allAisles: payload.allAisles
-                            )
-                            return Just([payload]).eraseToAnyPublisher()
-                        }
-                        .eraseToAnyPublisher()
-                }
-                let assetPayload = AssetPayload(id: assetId,
-                                                x: model.x,
-                                                y: model.y,
-                                                z: 0,
-                                                type: model.eventType,
-                                                aisle: model.aisleLocation,
-                                                allAisles: model.aisleLocations ?? ["unknown"])
-                return Just([assetPayload]).eraseToAnyPublisher()
-            }
-            .eraseToAnyPublisher()
+    func zoomToPinsIfNeeded() {
+        guard mapData != nil, mapViewDelegate?.isWebViewLoaded == true, !hasMapViewZoomed else {
+            return
+        }
+        zoomToPins()
     }
 
-    func getCachedEvent(using assetId: String) -> AnyPublisher<EventStoreModel?, Never> {
-        eventStoreService.getEvent(for: assetId)
-            .retry()
-            .catch { error -> AnyPublisher<EventStoreModel?, Error> in
-                Log.error(error)
-                return Fail(error: error).eraseToAnyPublisher()
-            }
-            .replaceError(with: nil)
-            .receive(on: DispatchQueue.main)
-            .eraseToAnyPublisher()
+    func zoomToPins() {
+        guard (mapLoadedData?.floors.count ?? 1) > 1 && configuration.pin != nil else { return }
+        Log.debug("zoom To Pins")
+        hasMapViewZoomed = true
+        mapViewDelegate?.toggleLoadingView(false)
+        guard let renderedPinsZoomRect = renderedPinsZoomRect else {
+            zoomToMapCenter()
+            return
+        }
+
+        zoomOnRegion(with: renderedPinsZoomRect)
     }
 
-    func fetchAsset(for assetId: String) -> AnyPublisher<AssetResponse?, Never> {
-        networkService.getAsset(for: assetId, storeId: self.storeId)
-            .retry()
-            .catch { [weak self] error -> AnyPublisher<AssetResponse?, Error> in
-                Log.error(error)
-                Analytics.telemetry(
-                    payload: TelemetryAnalytics(
-                        isError: true,
-                        event: self?.idType == .generic ?
-                        DisplayPin.DISPLAY_PIN_ERROR_ASSET_FETCH_INVALID.rawValue :
-                            DisplayPin.DISPLAY_PIN_ERROR_GENERIC_WRONG_STORE.rawValue
-                    )
-                )
-                guard let error = error as? ErrorResponse else {
-                    return Fail(error: error).eraseToAnyPublisher()
-                }
-
-                self?.statusService.emitErrorStatusEvent(for: error, isInitError: false)
-                return Fail(error: error).eraseToAnyPublisher()
-            }
-            .replaceError(with: nil)
-            .eraseToAnyPublisher()
+    func zoomOnRegion(with zoomRect: CGRect, target: ZoomTarget = .pinAnnotation) {
+        let delay = target == .pinAnnotation ? StoreMapConfig.zoomPinAnimationDelay : 0.0
+        mapViewDelegate?.zoomOnRegion(with: zoomRect, zoomAnimationDelay: delay) { [weak self] in
+            if target == .pinAnnotation { self?.renderedPinsZoomRect = nil }
+        }
     }
 
-    func fetchAisleInfo(for assetId: String?, position: CGPoint) -> AnyPublisher<AssetPayload, Never> {
-        networkService.getAisle(for: assetId, storeId: storeId, position: position)
-            .retry()
-            .catch { [weak self] error -> AnyPublisher<AssetResponse?, Error> in
-                Log.error(error)
-                guard let error = error as? ErrorResponse else {
-                    return Fail(error: error).eraseToAnyPublisher()
-                }
-
-                self?.statusService.emitErrorStatusEvent(for: error, isInitError: false)
-                return Fail(error: error).eraseToAnyPublisher()
+    /// Check min and max zoom scale crossed or not
+    /// If yes, don't update zoom scale
+    /// If no, update zoom scale and check if greying out is required or not,
+    /// i.e. new value of zoom +/- will go beyond max limit
+    func getUpdateScale(_ currentScale: CGFloat, _ zoomType: ZoomActionType) -> CGFloat {
+        switch zoomType {
+        case .zoomIn:
+            if currentScale + StoreMapConfig.zoomFactor < StoreMapZoomLevel.fourth.maximumZoomScale {
+                return currentScale + StoreMapConfig.zoomFactor
+            } else {
+                return StoreMapZoomLevel.fourth.maximumZoomScale
             }
-            .replaceError(with: nil)
-            .compactMap { $0?.payload }
-            .eraseToAnyPublisher()
+        case .zoomOut:
+            if currentScale - StoreMapConfig.zoomFactor > StoreMapZoomLevel.first.minimumZoomScale {
+                return currentScale - StoreMapConfig.zoomFactor
+            } else {
+                return StoreMapZoomLevel.first.minimumZoomScale
+            }
+        }
     }
 }
-
-#if DEBUG
-extension AssetServiceImpl {
-    private enum AssociatedKeys {
-        static var lastStoreConfig = "lastStoreConfig"
-    }
-
-    var lastStoreConfig: StoreConfig? {
-        get {
-            objc_getAssociatedObject(self, AssociatedKeys.lastStoreConfig) as? StoreConfig
-        }
-        set {
-            objc_setAssociatedObject(self,
-                                     AssociatedKeys.lastStoreConfig,
-                                     newValue,
-                                     .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        }
-    }
-}
-#endif
