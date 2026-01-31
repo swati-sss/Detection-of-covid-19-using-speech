@@ -1,138 +1,383 @@
-import XCTest
 import Combine
-@testable import Compass
+import IPSFramework
 
-class IndoorMapViewModelTests: XCTestCase {
-    var viewModel: IndoorMapViewModel!
-    var cancellables: Set<AnyCancellable> = []
-    var mockServiceLocator: MockServiceLocator!
+typealias AssetFetchBlock = ([CGPoint]) -> Void
 
-    override func setUp() {
-        super.setUp()
-        mockServiceLocator = MockServiceLocator()
-        viewModel = IndoorMapViewModel(blueDotMode: .default, serviceLocator: mockServiceLocator)
-    }
+protocol AssetService {
+    var supportedEventList: String { get set }
+    var storeId: Int { get set }
+    var mapType: MapIdentifier { get set }
+    var storeConfigOffset: StoreConfigOffset { get set }
+    var idList: [String] { get set }
+    var idType: PinDropMethod { get set }
+    var assetEvents: [String: AssetEvent] { get set }
 
-    override func tearDown() {
-        viewModel = nil
-        mockServiceLocator = nil
-        cancellables.removeAll()
-        super.tearDown()
-    }
+    func evaluateAssets(using idList: [String],
+                        idType: PinDropMethod,
+                        pinDropType: PinDropType,
+                        onCompletion: @escaping AssetFetchBlock)
 
-    func testViewDidLoadCallsSetupMethods() {
-        // This test will just call viewDidLoad to ensure no crash
-        viewModel.viewDidLoad()
-        // You can add expectations for Combine publishers if needed
-    }
+    func evaluateAisles(using id: String,
+                        pinDropType: PinDropType,
+                        position: CGPoint,
+                        onCompletion: @escaping AssetFetchBlock)
 
-    func testDisplayMapViewPublishesEvent() {
-        let expectation = self.expectation(description: "displayMapViewRequested should emit")
-        var called = false
-        viewModel.displayMapViewRequested
-            .sink { _ in
-                called = true
-                expectation.fulfill()
-            }
-            .store(in: &cancellables)
-        viewModel.displayMapView()
-        waitForExpectations(timeout: 1)
-        XCTAssertTrue(called)
-    }
-
-    func testOnCoordinateLongpressedWithManualPinDropDisabled() {
-        viewModel.enableManualPinDrop = false
-        viewModel.onCoordinateLongpressed(CGPoint(x: 1, y: 1), mapViewController: nil)
-        // Should not add pin or crash
-    }
-
-    func testShowPinAddsPinItem() {
-        // Set up a map id
-        viewModel.map.value = IPSMap(id: "testMapId")
-        viewModel.showPin(CGPoint(x: 2, y: 2))
-        // No assertion here, but you can check internal state if needed
-    }
-
-    func testClearMapRemovesAllItems() {
-        viewModel.clearMap()
-        // No assertion here, but you can check internal state if needed
-    }
-
-    func testSetupFloorTransitionsItems_DirectionDown() {
-        // Setup
-        let mockFloor = MockIPSFloor(order: 2)
-        let floorTransition = IPSRouteFloorTransition(
-            id: "transition1",
-            x: 1.0,
-            y: 2.0,
-            type: .stairs,
-            floorOrder: 3,
-            destinationFloorOrder: 2
-        )
-        let mockUserPositionManager = MockUserPositionManager()
-        mockUserPositionManager.visibleFloor.value = mockFloor
-        let viewModel = IndoorMapViewModel(blueDotMode: .default, serviceLocator: mockServiceLocator)
-        viewModel.userPositionManager = mockUserPositionManager
-        viewModel.routeFloorTransitions.value = [floorTransition]
-        // Act
-        viewModel.setupFloorTransitionsItems()
-        // Assert
-        let items = viewModel.floorTransitionsItems.value
-        XCTAssertEqual(items.count, 1)
-        XCTAssertEqual(items.first?.direction, .down)
-    }
+    func fetchFeatureLocations(
+        forAisleIds aisleIds: [String]
+    ) async -> [(CGPoint, String)]
 }
 
-// MARK: - Mocks
+final class AssetServiceImpl: AssetService {
+    var cancellable = Set<AnyCancellable>()
+    private var featureLocationTask: Task<[(CGPoint, String)], Never>?
+    private var featureLocationRequestId = 0
+    let statusService: StatusService
+    let eventStoreService: EventStoreService
+    let indoorPositioningService: IndoorPositioningService
+    let eventService: EventService
+    let networkService: NetworkServiceType
 
-class MockServiceLocator: ServiceLocatorType {
-    func getIndoorPositioningService() -> IndoorPositioningService { MockIndoorPositioningService() }
-    func getIndoorNavigationService() -> IndoorNavigationService { MockIndoorNavigationService() }
-    func getMapFocusManager() -> MapFocusManager { MockMapFocusManager() }
-    func getStatusService() -> StatusService { MockStatusService() }
-    func getAssetService() -> AssetService { MockAssetService() }
-    func getEventService() -> EventService { MockEventService() }
-    func getUserPositionManager() -> UserPositionManagement { MockUserPositionManager() }
-}
-
-// Add minimal mock implementations for dependencies as needed
-class MockIndoorPositioningService: IndoorPositioningService {
-    var floorCoordinatesConverter: FloorCoordinatesConverter? { nil }
-    func registerApplicationEvent(_ event: IPSApplicationEvent) {}
-    func getMap(_ mapId: String, buildingId: String, floorId: String, onSuccess: @escaping (IPSMap) -> Void, onError: @escaping (Error) -> Void) {}
-}
-class MockIndoorNavigationService: IndoorNavigationService {
-    var route: CurrentValueSubject<IPSRoute?, Never> = .init(nil)
-    func startNavigation() {}
-}
-class MockMapFocusManager: MapFocusManager {
-    var onMapFocusRequired: PassthroughSubject<MapFocus, Never> = .init()
-    var isMapViewPresent: CurrentValueSubject<Bool, Never> = .init(false)
-    func onMapInterServiceStarted() {}
-    func onMapInterServiceEnded() {}
-    func onUserFocusRequested() {}
-}
-class MockStatusService: StatusService {
-    func emitMapStatusEvent(description: String) {}
-    var bootstrapEventEmitter: ((CompassEvent) -> Void)?
-}
-class MockAssetService: AssetService {
+    var storeId = 0
+    var mapType = MapIdentifier.WalmartMap
+    var storeConfigOffset = StoreConfigOffset(x: 4620.0, y: 3430.0)
+    var idList = [String]()
     var idType: PinDropMethod = .assets
-    var idList: [String] = []
-    var assetEvents: [String] = []
-    var storeId: String = "store"
-    func evaluateAisles(using assetId: String, pinDropType: PinDropType, position: CGPoint, onCompletion: @escaping (Bool) -> Void) {}
-}
-class MockEventService: EventService {
-    func cacheEvent(_ event: CompassEvent, position: CGPoint, aisle: String, allAisles: [String]?) {}
+    var assetEvents = [String: AssetEvent]()
+    var supportedEventList: String = ""
 
-    func cacheAndBootstrapAsset(_ event: CompassEvent, position: CGPoint) async -> BootstrapStatus {
-        .notBootstrapped
+    init(serviceLocator: ServiceLocatorType) {
+        self.statusService = serviceLocator.getStatusService()
+        self.eventStoreService = serviceLocator.getEventStoreService()
+        self.indoorPositioningService = serviceLocator.getIndoorPositioningService()
+        self.eventService = serviceLocator.getEventService()
+        self.networkService = serviceLocator.getNetworkService()
+    }
+
+    func evaluateAssets(using idList: [String],
+                        idType: PinDropMethod,
+                        pinDropType: PinDropType,
+                        onCompletion: @escaping  AssetFetchBlock) {
+        Log.info("Evaluate assets for \(mapType.rawValue) map.")
+        self.idList = idList
+        self.idType = idType
+        assetEvents.removeAll()
+        Publishers.Sequence(sequence: idList).eraseToAnyPublisher()
+            .flatMap { [weak self] assetId -> AnyPublisher<[AssetPayload], Never> in
+                guard let self else { return Empty(completeImmediately: true).eraseToAnyPublisher() }
+                switch idType {
+                case .assets:
+                    return getCachedAssetOrFetch(assetId: assetId)
+                case .generic:
+                    return decodeGeneric(encodedString: assetId)
+                }
+            }
+            .sink { [weak self] assetPayloads in
+                guard let self else { return }
+                assetPayloads.forEach { payload in
+                    Log.info("AssetPayload: \(String(describing: payload))")
+                    self.emitPinEvent(assetId: payload.id,
+                                      position: payload.cgPoint,
+                                      pinDropType: pinDropType,
+                                      assetPayload: payload,
+                                      onCompletion: onCompletion)
+
+                    let pinLocation = "\(payload.x), \(payload.y)"
+                    Analytics.displayPin(payload: DisplayPinAnalytics(pinType: self.idType.analyticsStringValue,
+                                                                      pinValue: payload.id,
+                                                                      pinCategory: "auto",
+                                                                      pinLocation: pinLocation,
+                                                                      success: true))
+                }
+            }
+            .store(in: &cancellable)
+    }
+
+    func evaluateAisles(using id: String,
+                        pinDropType: PinDropType,
+                        position: CGPoint,
+                        onCompletion: @escaping AssetFetchBlock) {
+        switch idType {
+        case .assets:
+            fetchAisleInfo(for: id, position: position)
+                .sink { [weak self] assetPayload in
+                    Log.info("Handle \(self?.mapType.rawValue ?? "unknown map") asset")
+                    self?.emitPinEvent(assetId: id,
+                                       position: assetPayload.cgPoint,
+                                       pinDropType: pinDropType,
+                                       assetPayload: assetPayload,
+                                       onCompletion: onCompletion)
+                }
+                .store(in: &cancellable)
+        case .generic:
+            // Retrieve aisle location from network call. If the network call fails or returns an error,
+            // return the default payload value using replaceEmpty
+            // Note: Backend is not ready to handle cases where asset Id is nil.
+            fetchAisleInfo(for: id, position: position)
+                .replaceEmpty(with: useDefaultAssetPayload(id: id,
+                                                           coordinate: Coordinate(
+                                                            x: position.x,
+                                                            y: position.y
+                                                           )
+                                                          ))
+                .sink { [weak self] assetPayload in
+                    Log.info("Handle \(self?.mapType.rawValue ?? "unknown map") non asset")
+                    self?.emitPinEvent(assetId: id,
+                                       position: assetPayload.cgPoint,
+                                       pinDropType: pinDropType,
+                                       assetPayload: assetPayload,
+                                       onCompletion: onCompletion)
+                }
+                .store(in: &cancellable)
+        }
+    }
+
+    func fetchFeatureLocations(
+        forAisleIds aisleIds: [String]
+    ) async -> [(CGPoint, String)] {
+        featureLocationRequestId += 1
+        let requestId = featureLocationRequestId
+
+        featureLocationTask?.cancel()
+        let task = Task { [weak self] () -> [(CGPoint, String)] in
+            guard let self else { return [] }
+            return await self.fetchFeatureLocationsInternal(forAisleIds: aisleIds)
+        }
+        featureLocationTask = task
+
+        let result = await task.value
+        guard requestId == featureLocationRequestId else { return [] }
+        return result
     }
 }
-class MockUserPositionManager: UserPositionManagement {
-    var visibleFloor: CurrentValueSubject<IPSFloor?, Never> = .init(nil)
-    var building: IPSBuilding? = nil
-    func switchFloor(_ floor: IPSFloor) {}
+
+private extension AssetServiceImpl {
+    func fetchFeatureLocationsInternal(
+        forAisleIds aisleIds: [String]
+    ) async -> [(CGPoint, String)] {
+        do {
+            let response = try await awaitPublisher(
+                networkService.getFeatureLocation(aisleIds: aisleIds, storeId: storeId).retry()
+            )
+            return (response?.payload ?? [])
+                .compactMap { item in
+                    guard !item.roc.x.isNaN, !item.roc.y.isNaN, !item.id.isEmpty else { return nil }
+                    return (item.roc.toCGPoint(), item.id)
+                }
+        } catch is CancellationError {
+            return []
+        } catch {
+            Log.error(error)
+            if let error = error as? ErrorResponse {
+                statusService.emitErrorStatusEvent(for: error, isInitError: false)
+            }
+            return []
+        }
+    }
+
+    func awaitPublisher<P: Publisher>(_ publisher: P) async throws -> P.Output where P.Failure == Error {
+        let stream = AsyncThrowingStream<P.Output, Error> { continuation in
+            let cancellable = publisher.sink { completion in
+                switch completion {
+                case .failure(let error):
+                    continuation.finish(throwing: error)
+                case .finished:
+                    continuation.finish()
+                }
+            } receiveValue: { value in
+                continuation.yield(value)
+            }
+            continuation.onTermination = { _ in
+                cancellable.cancel()
+            }
+        }
+
+        for try await value in stream {
+            return value
+        }
+        throw CancellationError()
+    }
+
+    func decodeGeneric(encodedString: String) -> AnyPublisher<[AssetPayload], Never> {
+        guard let location = LocationConverter.decodeMessage(outMsg: encodedString), location.store == storeId else {
+            return Empty(completeImmediately: true).eraseToAnyPublisher()
+        }
+
+        return Publishers.MergeMany(location.coordinates.map {
+            // Note: Backend is not ready to handle cases where asset Id is nil.
+            fetchAisleInfo(for: encodedString, position: CGPoint(x: $0.x, y: $0.y))
+                .replaceEmpty(with: useDefaultAssetPayload(id: encodedString, coordinate: $0))
+        })
+        .collect()
+        .eraseToAnyPublisher()
+    }
+
+    func useDefaultAssetPayload(id: String, coordinate: Coordinate) -> AssetPayload {
+        Log.info("Replacing empty value with default asset payload as the backend API response was empty.")
+        return AssetPayload(id: id,
+                            x: coordinate.x,
+                            y: coordinate.y,
+                            z: coordinate.z,
+                            type: idType.rawValue,
+                            aisle: LocationIdentifier.unknown.rawValue,
+                            allAisles: [LocationIdentifier.unknown.rawValue])
+    }
+
+    func emitPinEvent(assetId: String,
+                      position: CGPoint,
+                      pinDropType: PinDropType,
+                      assetPayload: AssetPayload,
+                      onCompletion: AssetFetchBlock) {
+        Log.info("""
+                 Set Assets Status Event assetId: \(assetId) pinDropType: \(pinDropType)
+                 mapType:\(self.mapType.rawValue) assetLocations:\(String(describing: assetPayload.allAisles))
+                 """)
+
+        switch pinDropType {
+        case .pinAisleLoc:
+            statusService.emitLocationEvent(assetLocation: assetPayload.aisle)
+        case .autoPinDropAisleLocList, .manualPinDropAisleLocList:
+            var position = position
+            if mapType == .OriientMap {
+                guard let converter = indoorPositioningService.floorCoordinatesConverter else {
+                    return
+                }
+                position = position.convertToOriient(using: converter).asCGPoint()
+            }
+            onCompletion([position])
+            let assetEvent = AssetEvent(assetId: assetId,
+                                        locations: assetPayload.allAisles ?? [],
+                                        coordinate: position.asCompassCoordinate(),
+                                        success: true)
+            assetEvents[assetId] = assetEvent
+            guard !idList.isEmpty, idList.count == assetEvents.count else {
+                return
+            }
+            Log.info("""
+            Set Assets Status Event - assetId: \(assetId) pinDropType: \(pinDropType) mapType:\(mapType)
+            assetEvents:\(String(describing: assetEvents))
+            """)
+            statusService.emitPinDropEvent(using: assetId,
+                                           storeId: storeId,
+                                           pinDropType: pinDropType,
+                                           mapType: mapType.rawValue,
+                                           assetEvents: assetEvents,
+                                           idType: idType)
+            idList.removeAll()
+            assetEvents.removeAll()
+        }
+    }
+
+    func getCachedAssetOrFetch(assetId: String) -> AnyPublisher<[AssetPayload], Never> {
+        Log.info("Get StoreMap asset for assetId \(assetId)")
+        return self.getCachedEvent(using: assetId)
+            .flatMap { [weak self] eventStoreModel -> AnyPublisher<[AssetPayload], Never> in
+                guard let self else {
+                    return Empty(completeImmediately: true).eraseToAnyPublisher()
+                }
+                guard let model = eventStoreModel,
+                      model.aisleLocation != LocationIdentifier.notset.rawValue else {
+                    return self.fetchAsset(for: assetId)
+                        .compactMap { $0?.payload }
+                        .replaceEmpty(with: useDefaultAssetPayload(
+                            id: assetId,
+                            coordinate: Coordinate(x: eventStoreModel?.x ?? 0.0,
+                                                   y: eventStoreModel?.y ?? 0.0)
+                        ))
+                        .flatMap { payload -> AnyPublisher<[AssetPayload], Never> in
+                            let compassEvent = CompassEvent(eventType: EventConstant.Category.assetScan.rawValue,
+                                                            eventValue: assetId)
+                            self.eventService.cacheEvent(
+                                compassEvent,
+                                position: payload.cgPoint,
+                                aisle: payload.aisle,
+                                allAisles: payload.allAisles
+                            )
+                            return Just([payload]).eraseToAnyPublisher()
+                        }
+                        .eraseToAnyPublisher()
+                }
+                let assetPayload = AssetPayload(id: assetId,
+                                                x: model.x,
+                                                y: model.y,
+                                                z: 0,
+                                                type: model.eventType,
+                                                aisle: model.aisleLocation,
+                                                allAisles: model.aisleLocations ?? ["unknown"])
+                return Just([assetPayload]).eraseToAnyPublisher()
+            }
+            .eraseToAnyPublisher()
+    }
+
+    func getCachedEvent(using assetId: String) -> AnyPublisher<EventStoreModel?, Never> {
+        eventStoreService.getEvent(for: assetId)
+            .retry()
+            .catch { error -> AnyPublisher<EventStoreModel?, Error> in
+                Log.error(error)
+                return Fail(error: error).eraseToAnyPublisher()
+            }
+            .replaceError(with: nil)
+            .receive(on: DispatchQueue.main)
+            .eraseToAnyPublisher()
+    }
+
+    func fetchAsset(for assetId: String) -> AnyPublisher<AssetResponse?, Never> {
+        networkService.getAsset(for: assetId, storeId: self.storeId)
+            .retry()
+            .catch { [weak self] error -> AnyPublisher<AssetResponse?, Error> in
+                Log.error(error)
+                Analytics.telemetry(
+                    payload: TelemetryAnalytics(
+                        isError: true,
+                        event: self?.idType == .generic ?
+                        DisplayPin.DISPLAY_PIN_ERROR_ASSET_FETCH_INVALID.rawValue :
+                            DisplayPin.DISPLAY_PIN_ERROR_GENERIC_WRONG_STORE.rawValue
+                    )
+                )
+                guard let error = error as? ErrorResponse else {
+                    return Fail(error: error).eraseToAnyPublisher()
+                }
+
+                self?.statusService.emitErrorStatusEvent(for: error, isInitError: false)
+                return Fail(error: error).eraseToAnyPublisher()
+            }
+            .replaceError(with: nil)
+            .eraseToAnyPublisher()
+    }
+
+    func fetchAisleInfo(for assetId: String?, position: CGPoint) -> AnyPublisher<AssetPayload, Never> {
+        networkService.getAisle(for: assetId, storeId: storeId, position: position)
+            .retry()
+            .catch { [weak self] error -> AnyPublisher<AssetResponse?, Error> in
+                Log.error(error)
+                guard let error = error as? ErrorResponse else {
+                    return Fail(error: error).eraseToAnyPublisher()
+                }
+
+                self?.statusService.emitErrorStatusEvent(for: error, isInitError: false)
+                return Fail(error: error).eraseToAnyPublisher()
+            }
+            .replaceError(with: nil)
+            .compactMap { $0?.payload }
+            .eraseToAnyPublisher()
+    }
 }
-// Add minimal stubs for types like IPSMap, IPSRoute, etc., if needed for compilation.
+
+#if DEBUG
+extension AssetServiceImpl {
+    private enum AssociatedKeys {
+        static var lastStoreConfig = "lastStoreConfig"
+    }
+
+    var lastStoreConfig: StoreConfig? {
+        get {
+            objc_getAssociatedObject(self, AssociatedKeys.lastStoreConfig) as? StoreConfig
+        }
+        set {
+            objc_setAssociatedObject(self,
+                                     AssociatedKeys.lastStoreConfig,
+                                     newValue,
+                                     .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        }
+    }
+}
+#endif
